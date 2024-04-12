@@ -492,7 +492,7 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
     if len(files)==0:
         print("there are no csv files in directory "+directory)
         return
-    files = [pd.read_csv(i) for i in files]
+    files = [pd.read_csv(directory+i) for i in files]
     df = pd.concat(files)
     if len(df["mac_address"].value_counts()) != 1:
         print("there is more than one or less than one mac address on directory "+directory)
