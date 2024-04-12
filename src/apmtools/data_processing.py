@@ -508,7 +508,8 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
         '00:04:00'), numeric_columns=numeric, add_binary_counter=False)
     df = keep_interval(df, interval)
     df.index = df.index + timezone_shift
-    return Apm(pur_average(df))
+    pur_average(df)
+    return Apm(df)
 
 def lascar_processing(directory, file, return_dataframe=False,interpolation=1,interval="30 seconds"):
     numeric = ['CO(ppm)']
