@@ -3,6 +3,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
+from .classes import Apm
 
 def in_list(origin, target):
     """
@@ -434,7 +435,7 @@ def upas_processing(directory, file):
     df = interpolate(df, 30, 1, pd.Timedelta(
         '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
     df = keep_interval(df, '30 seconds')
-    return df
+    return Apm(df)
 
 def pur_average(pur: pd.DataFrame):
     a = 0.524
@@ -507,7 +508,7 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
         '00:04:00'), numeric_columns=numeric, add_binary_counter=False)
     df = keep_interval(df, interval)
     df.index = df.index + timezone_shift
-    return pur_average(df)
+    return Apm(pur_average(df))
 
 def lascar_processing(directory, file, return_dataframe=False,interpolation=1,interval="30 seconds"):
     numeric = ['CO(ppm)']
@@ -517,5 +518,5 @@ def lascar_processing(directory, file, return_dataframe=False,interpolation=1,in
     df = interpolate(df, 30, interpolation, pd.Timedelta(
         '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
     df = keep_interval(df, interval)
-    return df
+    return Apm(df)
 
