@@ -498,6 +498,9 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
         return
     df['UTCDateTime'] = df['UTCDateTime'].map(to_datetime)
     df.set_index('UTCDateTime', inplace=True)
+    if df.index.value_counts().max() != 1:
+        print('index duplicates in directory '+ directory)
+        return
     df.sort_index(inplace=True)
     df[numeric] = df[numeric].map(remove_odd_characters)
     df = interpolate(df, 120, interpolation, pd.Timedelta(
