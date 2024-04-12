@@ -1,3 +1,6 @@
+import os as os
+import uuid as uuid
+
 def show(dictionary, number=0):
     """
     return an element of a dictionary
@@ -58,4 +61,16 @@ def set_attrib(dictionary, attribute):
             except:
                 pass
     
-    return return_set 
+    return return_set
+
+
+def scan(directory, function, extension, target_dictionary):
+    for j in os.listdir(directory):
+        if j.split('.')[-1] == extension:
+            processed = function(directory, j)
+            target_dictionary[str(uuid.uuid4())] = processed
+        elif (len(j.split('.'))) == 1:
+            d = directory+j+'/'
+            scan(d, function, extension, target_dictionary)
+        else:
+            pass

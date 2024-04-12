@@ -34,9 +34,9 @@ class DictionaryPlus(dict):
         for i, j in filter_dict.items():
             a = {}
             for key, value in return_dict.items():
-                if hasattr(value, 'metadata') & (type(value.metadata) == type({})) & (i in value.metadata.keys()):
+                if hasattr(value, 'meta') & (type(value.metadata) == type({})) & (i in value.metadata.keys()):
                     try:
-                        if value.__getattr__('metadata')[i] in j:
+                        if value.__getattr__('meta')[i] in j:
                             a[key] = value
                     except:
                         pass
@@ -55,9 +55,9 @@ class DictionaryPlus(dict):
         """
         return_set = set()
         for i in self.values():
-            if hasattr(i, 'metadata') & (type(i.metadata) == type({})) & (attribute in i.metadata.keys()):
+            if hasattr(i, 'meta') & (type(i.metadata) == type({})) & (attribute in i.metadata.keys()):
                 try:
-                    return_set.add(i.__getattr__('metadata')[attribute])
+                    return_set.add(i.__getattr__('meta')[attribute])
                 except:
                     pass
             else:
