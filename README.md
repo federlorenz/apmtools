@@ -1,2 +1,2 @@
 # apmtools
-A collection of tools for processing air pollution monitoring data
+A collection of tools for processing air pollution monitoring data.
