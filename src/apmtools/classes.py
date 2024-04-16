@@ -47,7 +47,7 @@ class DictionaryPlus(dict):
                     except:
                         pass
 
-        return DictionaryPlus(return_dict)
+        return DictionaryPlus(a)
 
     def set_attrib(self, attribute):
         """
