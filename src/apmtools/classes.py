@@ -50,25 +50,23 @@ class DictionaryPlus(dict):
                         except:
                             pass
         if filter_style == 'all':
-            a = {}            
+            a = {key:value for key,value in return_dict.items()}         
             for key, value in return_dict.items():           
                 for i, j in filter_dict.items():
                     if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
                         try:
-                            if value.__getattr__('meta')[i] in j:
-                                a[key] = value
-                            else:
-                                if key in a.keys():
-                                    del a[key]
+                            if value.__getattr__('meta')[i] not in j:
+                                del a[key]
                         except:
                             pass
+                    elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i not in value.meta.keys()):
+                        del a[key]
+                    elif hasattr(value,i)==False:
+                        del a[key]
                     else:
                         try:
-                            if value.__getattr__(i) in j:
-                                a[key] = value
-                            else:
-                                if key in a.keys():
-                                    del a[key]
+                            if value.__getattr__(i) not in j:
+                                del a[key]
                         except:
                             pass
 
