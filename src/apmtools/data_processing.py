@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
-from .classes import Apm
+from .classes import Apm,Sum
 
 def in_list(origin, target):
     """
@@ -511,7 +511,7 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
     pur_average(df)
     return Apm(df)
 
-def lascar_processing(directory, file, return_dataframe=False,interpolation=1,interval="30 seconds"):
+def lascar_processing(directory, file, interpolation=1,interval="30 seconds"):
     numeric = ['CO(ppm)']
     dtformat = '%Y-%m-%d %H:%M:%S'
     df = pd.read_csv(directory+file,  index_col="Time",
@@ -521,3 +521,14 @@ def lascar_processing(directory, file, return_dataframe=False,interpolation=1,in
     df = keep_interval(df, interval)
     return Apm(df)
 
+
+def sum_processing(directory, file, interpolation=1, interval="5 minutes"):
+    numeric = ['dot_temperature']
+    binary = ['cooking']
+    dtformat = '%d/%m/%Y %H:%M:%S'
+    df = pd.read_csv(directory+file,  index_col="timestamp",
+                     date_format={'Time': dtformat})
+    df = interpolate(df, 300, interpolation, pd.Timedelta(
+        '00:06:00'), numeric_columns=numeric, binary_columns=binary, add_binary_counter=True)
+    df = keep_interval(df, interval)
+    return Sum(df)
