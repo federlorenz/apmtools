@@ -11,38 +11,57 @@ def show(dictionary, number=0):
     except:
         print("something's wrong")
 
-def subset(dictionary, filter_dict):
+def subset(dictionary, filter_dict, filter_style='all'):
     """
     Return a subset of a dictionary, specified in filter_dict (itself a dictionary)
     filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
-        attrib is an attribute of the elements of dictionary, or a metadata attrib and attrib_value is a list
+        attrib is an attribute of the elements of dictionary, and attrib_value is a list
         of the values of such attrib that the elements of returned dictionary can have    
+    
+    specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
     """
-    if type(dictionary) != type(dict()):
-        print("subset function error: type dictionary should be dict")
-        return
     if type(filter_dict) != type(dict()):
         print("subset function error: type filter_dict should be dict")
         return
     return_dict = dictionary
-    for i, j in filter_dict.items():
+    if filter_style=='any':
         a = {}
-        for key,value in return_dict.items():
-            if hasattr(value,'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
-                try:
-                    if value.__getattr__('meta')[i] in j:
-                        a[key] = value
-                except:
-                    pass
-            else:
-                try:
-                    if value.__getattr__(i) in j:
-                        a[key] = value
-                except:
-                    pass
-        return_dict = a
+        for key, value in return_dict.items():            
+            for i, j in filter_dict.items():
+                if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                    try:
+                        if value.__getattr__('meta')[i] in j:
+                            a[key] = value
+                    except:
+                        pass
+                else:
+                    try:
+                        if value.__getattr__(i) in j:
+                            a[key] = value
+                    except:
+                        pass
+    if filter_style == 'all':
+        a = {key:value for key,value in return_dict.items()}         
+        for key, value in return_dict.items():           
+            for i, j in filter_dict.items():
+                if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                    try:
+                        if value.__getattr__('meta')[i] not in j:
+                            del a[key]
+                    except:
+                        pass
+                elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i not in value.meta.keys()):
+                    del a[key]
+                elif hasattr(value,i)==False:
+                    del a[key]
+                else:
+                    try:
+                        if value.__getattr__(i) not in j:
+                            del a[key]
+                    except:
+                        pass
 
-    return return_dict
+    return a
 
 def set_attrib(dictionary, attribute):
     """

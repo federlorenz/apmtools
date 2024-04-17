@@ -71,7 +71,7 @@ class DictionaryPlus(dict):
                             pass
 
         return DictionaryPlus(a)
-
+    
 
     def set_attrib(self, attribute):
         """
