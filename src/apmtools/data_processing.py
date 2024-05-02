@@ -294,7 +294,6 @@ def blank_filter(df, variables):
 
 ##############
 
-
 def to_timedelta(x):
     hours, minutes, seconds = int(x.split(":")[0]), int(
         x.split(":")[1]), int(x.split(":")[2])
