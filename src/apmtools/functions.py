@@ -1,6 +1,6 @@
 import os as os
 import uuid as uuid
-from classes import DictionaryPlus
+from .classes import DictionaryPlus
 from typing import Dict, Tuple, List
 import math
 import bokeh.plotting as bopl
