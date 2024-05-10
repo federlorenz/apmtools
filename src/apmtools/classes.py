@@ -91,6 +91,9 @@ class DictionaryPlus(dict):
                     pass
 
         return return_set
+    
+    def metadata(self):
+        return {k:self.set_attrib(k) for k in set(i.meta.keys() for i in self)}
 
 
 class Apm(pd.DataFrame):
