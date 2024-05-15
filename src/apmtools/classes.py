@@ -92,11 +92,13 @@ class DictionaryPlus(dict):
 
         return return_set
     
-    def metadata(self):
+    def metadata(self, listall = False):
         meta = set().union(
             *[set(i.meta.keys()) for i in self.values()])
-        return meta
-
+        if listall:
+            return {key:self.set_attrib(key) for key in meta}
+        else: 
+            return meta
 
 class Apm(pd.DataFrame):
 
