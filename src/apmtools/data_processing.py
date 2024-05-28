@@ -434,7 +434,15 @@ def upas_processing(directory, file):
     df = interpolate(df, 30, 1, pd.Timedelta(
         '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
     df = keep_interval(df, '30 seconds')
-    return Apm(df)
+
+    out = Apm(df)
+    df = open(directory+file).readlines()[0:107]
+    out.meta['header'] = df
+    out.meta['upasid'] = df[2].split(',')[1]
+    out.meta['samplename'] = df[26].split(',')[1].strip('_')
+    out.meta['cartridgeid'] = df[27].split(',')[1].strip('_')
+
+    return out
 
 def pur_average(pur: pd.DataFrame):
     a = 0.524
@@ -519,7 +527,6 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds"):
         '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
     df = keep_interval(df, interval)
     return Apm(df)
-
 
 def sum_processing(directory, file, interpolation=1, interval="5 minutes"):
     numeric = ['dot_temperature']

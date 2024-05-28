@@ -5,6 +5,7 @@ from typing import Dict, Tuple, List
 import math
 import bokeh.plotting as bopl
 import numpy as np
+import copy
 from bokeh.layouts import column
 from bokeh.models import ColumnDataSource, RangeTool
 from bokeh.models import (LinearAxis, Range1d)
@@ -33,7 +34,7 @@ def subset(dictionary, filter_dict, filter_style='all'):
     if type(filter_dict) != type(dict()):
         print("subset function error: type filter_dict should be dict")
         return
-    return_dict = dictionary
+    return_dict = copy.deepcopy(dictionary)
     if filter_style == 'any':
         a = {}
         for key, value in return_dict.items():

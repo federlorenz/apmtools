@@ -1,5 +1,6 @@
 import pandas as pd
 import numpy as np
+import copy
 
 
 class DictionaryPlus(dict):
@@ -32,7 +33,7 @@ class DictionaryPlus(dict):
         if type(filter_dict) != type(dict()):
             print("subset function error: type filter_dict should be dict")
             return
-        return_dict = self
+        return_dict = copy.deepcopy(self)
         if filter_style=='any':
             a = {}
             for key, value in return_dict.items():            
