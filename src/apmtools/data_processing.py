@@ -433,7 +433,7 @@ def upas_processing(directory, file):
     df["SampleTime"] = df["SampleTime"].map(to_timedelta)
     df = interpolate(df, 30, 1, pd.Timedelta(
         '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
-    df = keep_interval(df, '30 seconds')
+    df = keep_interval(df, '5 minutes')
 
     out = Apm(df)
     df = open(directory+file).readlines()[0:107]
