@@ -160,7 +160,10 @@ def keep_interval(file,interval=None):
     "10 seconds"
     "30 seconds"
     "1 minute"
+    "2 minutes"
     "5 minutes"
+    "10 minutes"
+    "30 minutes"
     or a custom tuple ([list of minutes],[list of seconds])
     """
     if interval==None:
@@ -176,9 +179,18 @@ def keep_interval(file,interval=None):
             range(0, 60, 30)) else False for i in range(len(file))]]
     elif interval=="1 minute":
         df = file.loc[[True if file.index[i].second == 0 else False for i in range(len(file))]]
+    elif interval == "2 minutes":
+        df = file.loc[[True if (file.index[i].second == 0) & (
+            file.index[i].minute in list(range(0, 60, 2))) else False for i in range(len(file))]]
     elif interval == "5 minutes":
         df = file.loc[[True if (file.index[i].second == 0) & (
             file.index[i].minute in list(range(0,60,5))) else False for i in range(len(file))]]
+    elif interval == "10 minutes":
+        df = file.loc[[True if (file.index[i].second == 0) & (
+            file.index[i].minute in list(range(0, 60, 10))) else False for i in range(len(file))]]
+    elif interval == "30 minutes":
+        df = file.loc[[True if (file.index[i].second == 0) & (
+            file.index[i].minute in list(range(0, 60, 30))) else False for i in range(len(file))]]
     else:
         df = file.loc[[True if (file.index[i].second in interval[1]) & (
             file.index[i].minute in interval[0]) else False for i in range(len(file))]]
@@ -430,17 +442,94 @@ def upas_processing(directory, file):
     dtformat = '%Y-%m-%dT%H:%M:%S'
     df = pd.read_csv(directory+file, skiprows=list(range(114)) +
                      [115], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
+    df1 = open(directory+file).readlines()[0:107]
+    PMSensorInterval = int(df1[44].split(',')[1])
+    LogInterval = int(df1[47].split(',')[1])
+    PowerSaveMode = int(df1[50].split(',')[1])
     df["SampleTime"] = df["SampleTime"].map(to_timedelta)
-    df = interpolate(df, 30, 1, pd.Timedelta(
-        '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
-    df = keep_interval(df, '5 minutes')
+    df = interpolate(df, LogInterval, 1, pd.Timedelta(seconds=LogInterval*2), numeric_columns=numeric, add_binary_counter=False)
+    if LogInterval==1:
+        pass
+    elif (LogInterval <= 5) & (LogInterval > 1):
+        df = keep_interval(df, '5 seconds')
+    elif (LogInterval <= 10) & (LogInterval > 5):
+        df = keep_interval(df, '10 seconds')
+    elif (LogInterval <= 30) & (LogInterval > 10):
+        df = keep_interval(df, '30 seconds')
+    elif (LogInterval <= 60) & (LogInterval > 30):
+        df = keep_interval(df, '1 minute')
+    elif (LogInterval <= 120) & (LogInterval > 60):
+        df = keep_interval(df, '2 minutes')
+    elif (LogInterval <= 300) & (LogInterval > 120):
+        df = keep_interval(df, '5 minutes')
+    elif (LogInterval <= 600) & (LogInterval > 300):
+        df = keep_interval(df, '10 minutes')
+    elif (LogInterval <= 3600) & (LogInterval > 600):
+        df = keep_interval(df, '30 minutes')
+    else:
+        pass
+    pmSensorColumns = ["PMMeasCnt",
+                       "PM1MC",
+                       "PM1MCVar",
+                       "PM2_5MC",
+                       "PM2_5MCVar",
+                       "PM4MC",
+                       "PM4MCVar",
+                       "PM10MC",
+                       "PM10MCVar",
+                       "PM0_5NC",
+                       "PM0_5NCVar",
+                       "PM1NC",
+                       "PM1NCVar",
+                       "PM2_5NC",
+                       "PM2_5NCVar",
+                       "PM4NC",
+                       "PM4NCVar",
+                       "PM10NC",
+                       "PM10NCVar",
+                       "PMtypicalParticleSize",
+                       "PMtypicalParticleSizeVar",
+                       "PM2_5SampledMass",
+                       "PMReadingErrorCnt",
+                       "PMFanErrorCnt",
+                       "PMLaserErrorCnt",
+                       "PMFanSpeedWarn"]
+    for j in pmSensorColumns:
+        if PMSensorInterval == 0:
+            df[j]=np.nan
+        elif PMSensorInterval == 1:
+            pass
+        elif (PMSensorInterval >= 2) & (PMSensorInterval <= 15):
+            df[j] = [df[j].iloc[i] if ((df.index[i].minute % PMSensorInterval == 0) & (
+                df.index[i].second == 0)) else np.nan for i in range(len(df))]
+        
+        elif (PMSensorInterval ==16):
+            df[j] = [df[j].iloc[i] if (
+                (df.index[i].second % 30 == 0)) else np.nan for i in range(len(df))]
+        elif (PMSensorInterval == 17) | (PMSensorInterval == 18):
+            df[j] = [df[j].iloc[i] if (
+                (df.index[i].second == 0)) else np.nan for i in range(len(df))]
+    if PowerSaveMode == 1:
+        for j in ["GPSQual",
+                  "GPSlat",
+                  "GPSlon",
+                  "GPSalt",
+                  "GPSsat",
+                  "GPSspeed",
+                  "GPShDOP"]:
+            df[j] = [df[j].iloc[i] if ((df.index[i].hour <21) & (
+                df.index[i].hour >= 4)) else np.nan for i in range(len(df))]
+        for j in pmSensorColumns:
+            df[j] = [df[j].iloc[i] if ((df.index[i].minute % 15 == 0) & (
+                df.index[i].second == 0)) else np.nan for i in range(len(df))]
+            
 
     out = Apm(df)
-    df = open(directory+file).readlines()[0:107]
-    out.meta['header'] = df
-    out.meta['upasid'] = df[2].split(',')[1]
-    out.meta['samplename'] = df[26].split(',')[1].strip('_')
-    out.meta['cartridgeid'] = df[27].split(',')[1].strip('_')
+    
+    out.meta['header'] = df1
+    out.meta['upasid'] = df1[2].split(',')[1]
+    out.meta['samplename'] = df1[26].split(',')[1].strip('_')
+    out.meta['cartridgeid'] = df1[27].split(',')[1].strip('_')
 
     return out
 
