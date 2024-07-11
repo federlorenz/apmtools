@@ -502,7 +502,6 @@ def upas_processing(directory, file):
         elif (PMSensorInterval >= 2) & (PMSensorInterval <= 15):
             df[j] = [df[j].iloc[i] if ((df.index[i].minute % PMSensorInterval == 0) & (
                 df.index[i].second == 0)) else np.nan for i in range(len(df))]
-        
         elif (PMSensorInterval ==16):
             df[j] = [df[j].iloc[i] if (
                 (df.index[i].second % 30 == 0)) else np.nan for i in range(len(df))]
@@ -521,8 +520,8 @@ def upas_processing(directory, file):
                 df.index[i].hour >= 4)) else np.nan for i in range(len(df))]
         for j in pmSensorColumns:
             df[j] = [np.nan if (((df.index[i].minute % 15 != 0) | (
-                df.index[i].second != 0)) & (df.index[i].hour >= 21) | (
-                df.index[i].hour < 4)) else df[j].iloc[i] for i in range(len(df))]
+                df.index[i].second != 0)) & ((df.index[i].hour >= 21) | (
+                df.index[i].hour < 4))) else df[j].iloc[i] for i in range(len(df))]
             
 
     out = Apm(df)
