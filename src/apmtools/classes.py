@@ -261,7 +261,7 @@ class ApmSeries(pd.Series):
 class Sum(Apm):
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
-        self.metadata = {}
+        self.meta = {}
     _metadata = ['meta']
 
     @property
@@ -328,3 +328,56 @@ class SumSeries(ApmSeries):
     @property
     def _constructor(self):
         return SumSeries
+
+class PolarH10(dict):
+    def __init__(self, *args, **kwargs):
+        dict.__init__(self, *args, **kwargs)
+        self["ecg"] = None
+        self["acc"] = None
+        self["rr"] = None
+        self["hr"] = None
+        self.meta = {}
+    _metadata = ['meta']
+
+    @property
+    def end(self):
+        if not any([True if type(i) != type(None) else False for i in self.values()]):
+            return np.nan
+        else:
+            return {key: value.end for key, value in self.items() if type(value) != type(None)}
+
+    @property
+    def start(self):
+        if not any([True if type(i) != type(None) else False for i in self.values()]):
+            return np.nan
+        else:
+            return {key: value.start for key, value in self.items() if type(value) != type(None)}
+
+    @property
+    def length(self):
+        if not any([True if type(i) != type(None) else False for i in self.values()]):
+            return np.nan
+        else:
+            return {key: value.length for key, value in self.items() if type(value) != type(None)}
+
+    def date_time_filter(
+            self,
+            time_start=None,
+            time_end=None,
+            date_start=None,
+            date_end=None,
+            day=None):
+        """Filters a file by time or date\n
+            Input time as dt.time(hrs,min), and date as dt.date(year,month,day),\n
+            and day as [1,2] list of days, with 1 Monday and 7 Sunday,\n
+            if selecting a specific date interval that includes time, just specify\n
+            that as dt.datetime interval under date_start and date_end"""
+
+        out = copy.deepcopy(self)
+
+        for key, value in out.items():
+            if type(value) != type(None):
+                out[key] = value.date_time_filter(
+                    time_start=time_start, time_end=time_end, date_start=date_start, date_end=date_end, day=day)
+
+        return out

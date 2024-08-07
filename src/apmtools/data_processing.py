@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
-from .classes import Apm,Sum
+from .classes import Apm,Sum,PolarH10
 
 def in_list(origin, target):
     """
@@ -318,6 +318,13 @@ def to_datetime(x):
         ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2][:-1])
     return dt.datetime(year, month, day, hour, minute, second)
 
+def to_datetime_polar(x):
+    year, month, day = int(x.split('T')[0].split(
+        '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
+    hour, minute, second, microsecond = int(x.split('T')[1].split(
+        ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split(".")[0]), int(x.split('T')[1].split(':')[2].split(".")[1])*1000
+    return dt.datetime(year, month, day, hour, minute, second, microsecond)
+
 def remove_odd_characters(x):
     if type(x) == type(''):
         try:
@@ -627,3 +634,61 @@ def sum_processing(directory, file, interpolation=1, interval="5 minutes"):
         '00:06:00'), numeric_columns=numeric, binary_columns=binary, add_binary_counter=True)
     df = keep_interval(df, interval)
     return Sum(df)
+
+
+def polar_processing(directory):
+
+    files = [i.split(".")[0] for i in os.listdir(directory+"/") if (i.split(".")
+                                                                    [-1] == "txt") & (i.split(".")[0].split("_")[0] == "Polar")]
+    if len(files) == 0:
+        print("there are no data files in directory"+directory)
+        return
+    if len(set([i.split("_")[2] for i in files])) > 1:
+        print("the data files in this directory are from different sensors")
+        return
+    sensorID = [i.split("_")[2] for i in files][0]
+
+    out = PolarH10()
+    out.meta["sensorID"] = sensorID
+
+    data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
+            for i in files if i.split("_")[-1] == "ECG"]
+    if len(data) > 0:
+        df = pd.concat(data)
+        df['Phone timestamp'] = df['Phone timestamp'].map(to_datetime_polar)
+        df.set_index('Phone timestamp', inplace=True)
+        df.sort_index(inplace=True)
+        ecg = Apm(df)
+        ecg.meta["sensorID"] = sensorID
+        out["ecg"] = ecg
+    data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
+            for i in files if i.split("_")[-1] == "ACC"]
+    if len(data) > 0:
+        df = pd.concat(data)
+        df['Phone timestamp'] = df['Phone timestamp'].map(to_datetime_polar)
+        df.set_index('Phone timestamp', inplace=True)
+        df.sort_index(inplace=True)
+        acc = Apm(df)
+        acc.meta["sensorID"] = sensorID
+        out["acc"] = acc
+    data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
+            for i in files if i.split("_")[-1] == "RR"]
+    if len(data) > 0:
+        df = pd.concat(data)
+        df['Phone timestamp'] = df['Phone timestamp'].map(to_datetime_polar)
+        df.set_index('Phone timestamp', inplace=True)
+        df.sort_index(inplace=True)
+        rr = Apm(df)
+        rr.meta["sensorID"] = sensorID
+        out["rr"] = rr
+    data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
+            for i in files if i.split("_")[-1] == "HR"]
+    if len(data) > 0:
+        df = pd.concat(data)
+        df['Phone timestamp'] = df['Phone timestamp'].map(to_datetime_polar)
+        df.set_index('Phone timestamp', inplace=True)
+        df.sort_index(inplace=True)
+        hr = Apm(df)
+        hr.meta["sensorID"] = sensorID
+        out["hr"] = hr
+    return out
