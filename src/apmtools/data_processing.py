@@ -5,6 +5,7 @@ import datetime as dt
 import os as os
 from .classes import Apm,Sum,PolarH10, DictionaryPlus
 from io import BytesIO
+from zipfile import ZipFile
 from copy import deepcopy
 
 def in_list(origin, target):
@@ -656,7 +657,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
             ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split("Z")[0])
         return dt.datetime(year, month, day, hour, minute, second)
 
-    archive = zip.ZipFile(zipname)
+    archive = ZipFile(zipname)
 
     mission_logs = pd.read_csv(BytesIO(archive.read('mission_logs.csv')))
     events = pd.read_csv(BytesIO(archive.read('events.csv')))
