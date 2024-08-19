@@ -696,7 +696,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                         value['cooking'].iloc[k] = 1
     
     if return_csv:
-        for key,value in metrics.values():
+        for key,value in metrics.items():
             value.to_csv(key)
     
     if return_data:
