@@ -3,7 +3,9 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
-from .classes import Apm,Sum,PolarH10
+from .classes import Apm,Sum,PolarH10, DictionaryPlus
+from io import BytesIO
+from copy import deepcopy
 
 def in_list(origin, target):
     """
@@ -624,16 +626,85 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds"):
     df = keep_interval(df, interval)
     return Apm(df)
 
-def sum_processing(directory, file, interpolation=1, interval="5 minutes"):
+def sum_interpolation(file, interpolation=1, interval="5 minutes"):
     numeric = ['dot_temperature']
     binary = ['cooking']
-    dtformat = '%d/%m/%Y %H:%M:%S'
-    df = pd.read_csv(directory+file,  index_col="timestamp",
-                     date_format={'Time': dtformat})
-    df = interpolate(df, 300, interpolation, pd.Timedelta(
+    df = interpolate(file, 300, interpolation, pd.Timedelta(
         '00:06:00'), numeric_columns=numeric, binary_columns=binary, add_binary_counter=True)
     df = keep_interval(df, interval)
-    return Sum(df)
+    if type(file) == type(Sum()):
+        df=Sum(df)
+        df.meta = file.meta
+        return Sum(df)
+    else:
+        return Sum(df)
+
+def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True):
+
+    def to_datetime_metrics(x):
+        year, month, day = int(x.split('T')[0].split(
+            '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
+        hour, minute, second = int(x.split('T')[1].split(
+            ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split("+")[0])
+        return dt.datetime(year, month, day, hour, minute, second)
+
+
+    def to_datetime_events(x):
+        year, month, day = int(x.split('T')[0].split(
+            '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
+        hour, minute, second = int(x.split('T')[1].split(
+            ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split("Z")[0])
+        return dt.datetime(year, month, day, hour, minute, second)
+
+    archive = zip.ZipFile(zipname)
+
+    mission_logs = pd.read_csv(BytesIO(archive.read('mission_logs.csv')))
+    events = pd.read_csv(BytesIO(archive.read('events.csv')))
+    events["start_time"] = events["start_time"].map(to_datetime_events)
+    events["stop_time"] = events["stop_time"].map(to_datetime_events)
+
+    sensors = pd.read_csv(BytesIO(archive.read('sensors.csv')))
+    tags = pd.read_csv(BytesIO(archive.read('tags.csv')))
+    missions = pd.read_csv(BytesIO(archive.read('missions.csv')))
+    metrics = DictionaryPlus()
+
+    for i in archive.namelist():
+        if ("metrics/" in i) & (len(i) > 8):
+            name = i.split('/')[1]
+            metrics[name] = pd.read_csv(
+                BytesIO(archive.read(i)), index_col="timestamp")
+            metrics[name].index = metrics[name].index.map(to_datetime_metrics)
+            metrics[name].drop(
+                axis=1, labels=['channel', 'sensor_type_id', "created_at"], inplace=True)
+            metrics[name].rename(
+                columns={'value': 'dot_temperature'}, inplace=True)
+            metrics[name] = Sum(metrics[name])
+            metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
+                "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
+            metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
+                "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
+            metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
+                "-")[0:2])
+
+    for key, value in metrics.items():
+        value['cooking'] = 0
+        for j in range(len(events)):
+            if (events['mission_id'].iloc[j] == value.meta["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
+                for k in range(len(value)):
+                    if (value.index[k] >= events['start_time'].iloc[j]) & (value.index[k] < events['stop_time'].iloc[j]):
+                        value['cooking'].iloc[k] = 1
+    
+    if return_csv:
+        for key,value in metrics.values():
+            value.to_csv(key)
+    
+    if return_data:
+        for key, value in metrics.items():
+            out = deepcopy(value)
+            out = Sum(add_binary_counter(out))
+            out.meta = value.meta
+            metrics[key] = out
+        return metrics
 
 
 def polar_processing(directory):
