@@ -636,7 +636,7 @@ def sum_interpolation(file, interpolation=1, interval="5 minutes"):
     if type(file) == type(Sum()):
         df=Sum(df)
         df.meta = file.meta
-        return Sum(df)
+        return df
     else:
         return Sum(df)
 
