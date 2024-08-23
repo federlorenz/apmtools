@@ -328,6 +328,12 @@ def to_datetime_polar(x):
         ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split(".")[0]), int(x.split('T')[1].split(':')[2].split(".")[1])*1000
     return dt.datetime(year, month, day, hour, minute, second, microsecond)
 
+def hrv_comma_check(x):
+    if type(x) == type(""):
+        return float(x.replace(",","."))
+    else:
+        return float(x)
+
 def remove_odd_characters(x):
     if type(x) == type(''):
         try:
@@ -761,6 +767,8 @@ def polar_processing(directory):
         df.set_index('Phone timestamp', inplace=True)
         df.sort_index(inplace=True)
         hr = Apm(df)
+        hr["HRV [ms]"] = hr["HRV [ms]"].map(hrv_comma_check)
         hr.meta["sensorID"] = sensorID
+
         out["hr"] = hr
     return out
