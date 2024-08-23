@@ -3,6 +3,13 @@ import numpy as np
 import copy
 
 
+import itertools
+from bokeh.palettes import Dark2_5 as palette
+from bokeh.models import ColumnDataSource, DataRange1d
+from bokeh.layouts import column, layout
+import bokeh.plotting as bopl
+import os as os
+
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
@@ -126,7 +133,6 @@ class DictionaryPlus(dict):
         
     def apply_func(self,func):
         return DictionaryPlus({key:func(value) for key,value in self.items()})
-
 
 class Apm(pd.DataFrame):
 
@@ -385,3 +391,75 @@ class PolarH10(dict):
                     time_start=time_start, time_end=time_end, date_start=date_start, date_end=date_end, day=day)
 
         return out
+
+class Plot():
+    def __init__(self, figures=1, shape=column, titles=None, figure_sizes=(800, 1400)):
+        self.all_figures = []
+        for j in range((figures)):
+            self.all_figures.append(bopl.figure(height=figure_sizes[0], width=figure_sizes[1], tools=["box_zoom", 'reset', 'wheel_zoom', "pan"],
+                                                x_axis_type="datetime", x_axis_location="above",
+                                                background_fill_color="#efefef"))
+            shape(self.all_figures)
+        if titles == None:
+            for j in range(len(self.all_figures)):
+                self.all_figures[j].title.text = f"Figure {j}"
+                self.all_figures[j].title.align = "center"
+                self.all_figures[j].title.text_font_size = "25px"
+        else:
+            for j in range(len(self.all_figures)):
+                self.all_figures[j].title.text = titles[j]
+                self.all_figures[j].title.align = "center"
+                self.all_figures[j].title.text_font_size = "25px"
+        self.colors = itertools.cycle(palette)
+        self.range_start = None
+        self.range_end = None
+
+    def add_data(self, datain: DictionaryPlus, variable, plotn, filterdict=None, label="", color=True):
+        datain = datain.subset(filterdict) if filterdict != None else datain
+        if color:
+            color = next(self.colors)
+        if self.range_start == None:
+            self.range_start = min(datain.set_attrib('start'))
+        else:
+            self.range_start = min(
+                min(datain.set_attrib('start')), self.range_start)
+        if self.range_end == None:
+            self.range_end = max(datain.set_attrib('end'))
+        else:
+            self.range_end = max(
+                max(datain.set_attrib('end')), self.range_end)
+        if len(datain) == 0:
+            pass
+        else:
+            for value in datain.values():
+                dates = np.array(value.index, dtype=np.datetime64)
+                source = ColumnDataSource(
+                    data=dict(date=dates, close=value[variable]))
+                x = self.all_figures[plotn].line('date', 'close', source=source, alpha=0.7,
+                                                 muted_alpha=0.05, legend_label=label, color=color)
+
+    def finalize(self, axis_labels=False, plot_layout=None):
+        datarange = DataRange1d(start=self.range_start-(self.range_end-self.range_start)/20,
+                                end=self.range_end+(self.range_end-self.range_start)/20)
+        for j in range(len(self.all_figures)):
+            self.all_figures[j].add_layout(
+                self.all_figures[j].legend[0], 'right')
+            self.all_figures[j].legend.click_policy = "mute"
+        self.all_figures[0].x_range = datarange
+        for j in range(1, len(self.all_figures)):
+            self.all_figures[j].x_range = self.all_figures[0].x_range
+        if axis_labels:
+            for j in range(len(self.all_figures)):
+                self.all_figures[j].yaxis.axis_label = axis_labels[j]
+                self.all_figures[j].yaxis.axis_label_orientation = 'vertical'
+                self.all_figures[j].yaxis.axis_label_text_font_size = '10px'
+        if plot_layout == None:
+            self.layout = column(self.all_figures)
+        else:
+            self.layout = layout(plot_layout)
+
+    def show(self):
+        bopl.show(self.layout)
+
+    def save(self, filename=os.getcwd()+'/interactive_plots.html'):
+        bopl.save(self.layout, filename=filename)
