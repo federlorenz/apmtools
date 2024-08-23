@@ -123,6 +123,10 @@ class DictionaryPlus(dict):
             return {key:self.set_attrib(key) for key in meta}
         else: 
             return meta
+        
+    def apply_func(self,func):
+        return DictionaryPlus({key:func(value) for key,value in self.items()})
+
 
 class Apm(pd.DataFrame):
 
