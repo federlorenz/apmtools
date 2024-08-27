@@ -13,18 +13,22 @@ import os as os
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
+        self.filter_key = None
 
     @property
     def _constructor(self):
         return DictionaryPlus
 
-    def show(self, number=0):
+    def show(self, number=0, key=None):
         """
         return an element of a dictionary
         If number is not specified, returns the values associated with the first key
         """
         try:
-            return (self[list(self.keys())[number]])
+            if key!=None:
+                return (self.subset({self.filter_key:[key]}).show())
+            else:
+                return (self[list(self.keys())[number]])
         except:
             print("something's wrong")
 
