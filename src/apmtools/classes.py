@@ -28,7 +28,10 @@ class DictionaryPlus(dict):
             if key!=None:
                 return (self.subset({self.filter_key:[key]}).show())
             else:
-                return (self[list(self.keys())[number]])
+                if type(number) == type(""):
+                    return (self.subset({self.filter_key: [number]}).show())
+                else:
+                    return (self[list(self.keys())[number]])
         except:
             print("something's wrong")
 
