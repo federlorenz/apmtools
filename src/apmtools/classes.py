@@ -107,6 +107,39 @@ class DictionaryPlus(dict):
                     else:
                         del a[key]
                         break
+
+        if filter_style == 'negative':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if value.__getattr__(i) in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if value.__getattr__('meta')[i] in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        break
+
+
         a = DictionaryPlus(a)
         a.filter_key = self.filter_key
         return a
