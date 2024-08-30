@@ -59,7 +59,7 @@ class DictionaryPlus(dict):
                                     a[key] = value
                                     break
                             else:                  
-                                if value.__getattr__('meta')[i] in j:
+                                if getattr(value,'meta')[i] in j:
                                     a[key] = value
                                     break
                         except:
@@ -71,7 +71,7 @@ class DictionaryPlus(dict):
                                     a[key] = value
                                     break
                             else:
-                                if value.__getattr__(i) in j:
+                                if getattr(value, i) in j:
                                     a[key] = value
                                     break
                         except:
@@ -87,7 +87,7 @@ class DictionaryPlus(dict):
                                     del a[key]
                                     break
                             else:
-                                if value.__getattr__(i) not in j:
+                                if getattr(value, i) not in j:
                                     del a[key]
                                     break
                         except:
@@ -99,7 +99,7 @@ class DictionaryPlus(dict):
                                     del a[key]
                                     break
                             else:
-                                if value.__getattr__('meta')[i] not in j:
+                                if getattr(value, 'meta')[i] not in j:
                                     del a[key]
                                     break
                         except:
@@ -119,7 +119,7 @@ class DictionaryPlus(dict):
                                     del a[key]
                                     break
                             else:
-                                if value.__getattr__(i) in j:
+                                if getattr(value,i) in j:
                                     del a[key]
                                     break
                         except:
@@ -131,7 +131,7 @@ class DictionaryPlus(dict):
                                     del a[key]
                                     break
                             else:
-                                if value.__getattr__('meta')[i] in j:
+                                if getattr(value,'meta')[i] in j:
                                     del a[key]
                                     break
                         except:
@@ -153,12 +153,12 @@ class DictionaryPlus(dict):
         for i in self.values():
             if hasattr(i, 'meta') & (type(i.meta) == type({})) & (attribute in i.meta.keys()):
                 try:
-                    return_set.add(i.__getattr__('meta')[attribute])
+                    return_set.add(getattr(i,'meta')[attribute])
                 except:
                     pass
             else:
                 try:
-                    return_set.add(i.__getattr__(attribute))
+                    return_set.add(getattr(i,attribute))
                 except:
                     pass
 

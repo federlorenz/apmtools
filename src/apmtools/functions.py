@@ -46,7 +46,7 @@ def subset(dictionary, filter_dict, filter_style='all'):
                                 a[key] = value
                                 break
                         else:
-                            if value.__getattr__('meta')[i] in j:
+                            if getattr(value,'meta')[i] in j:
                                 a[key] = value
                                 break
                     except:
@@ -58,7 +58,7 @@ def subset(dictionary, filter_dict, filter_style='all'):
                                 a[key] = value
                                 break
                         else:
-                            if value.__getattr__(i) in j:
+                            if getattr(value,i) in j:
                                 a[key] = value
                                 break
                     except:
@@ -74,7 +74,7 @@ def subset(dictionary, filter_dict, filter_style='all'):
                                 del a[key]
                                 break
                         else:
-                            if value.__getattr__(i) not in j:
+                            if getattr(value,i) not in j:
                                 del a[key]
                                 break
                     except:
@@ -86,7 +86,7 @@ def subset(dictionary, filter_dict, filter_style='all'):
                                 del a[key]
                                 break
                         else:
-                            if value.__getattr__('meta')[i] not in j:
+                            if getattr(value,'meta')[i] not in j:
                                 del a[key]
                                 break
                     except:
@@ -105,12 +105,12 @@ def set_attrib(dictionary, attribute):
     for i in dictionary.values():
         if hasattr(i, 'meta') & (type(i.meta) == type({})) & (attribute in i.meta.keys()):
             try:
-                return_set.add(i.__getattr__('meta')[attribute])
+                return_set.add(getattr(i,'meta')[attribute])
             except:
                 pass
         else:
             try:
-                return_set.add(i.__getattr__(attribute))
+                return_set.add(getattr(i,attribute))
             except:
                 pass
     
