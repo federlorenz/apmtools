@@ -772,3 +772,16 @@ def polar_processing(directory):
 
         out["hr"] = hr
     return out
+
+
+def gpslogger_processing(directory, file, interpolation=None, interval=(0,3)):
+    numeric = ["latitude","longitude","accuracy(m)","altitude(m)","geoid_height(m)","speed(m/s)","bearing(deg)"]
+    dtformat = '%Y-%m-%d %H:%M:%S'
+    df = pd.read_csv(directory+file,  index_col="date time",
+                     date_format={'date time': dtformat})
+    if interpolation !=None:
+        df = interpolate(df, 1, interpolation, pd.Timedelta(
+            '00:0:10'), numeric_columns=numeric, add_binary_counter=False)
+        df = keep_interval(df, interval)
+    return Apm(df)
+

@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apmtools"
-version = "0.0.37"
+version = "0.0.38"
 authors = [
   { name="Federico Lorenzetti", email="lorenzetti.federico@gmail.com" },
 ]
