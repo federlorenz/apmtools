@@ -7,6 +7,7 @@ from .classes import Apm,Sum,PolarH10, DictionaryPlus
 from io import BytesIO
 from zipfile import ZipFile
 from copy import deepcopy
+from pandas.errors import EmptyDataError
 
 def in_list(origin, target):
     """
@@ -678,19 +679,22 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
     for i in archive.namelist():
         if ("metrics/" in i) & (len(i) > 8):
             name = i.split('/')[1]
-            metrics[name] = pd.read_csv(
-                BytesIO(archive.read(i)), index_col="timestamp")
-            metrics[name].index = metrics[name].index.map(to_datetime_metrics)
-            metrics[name].drop(
-                axis=1, labels=['channel', 'sensor_type_id', "created_at"], inplace=True)
-            metrics[name].rename(
-                columns={'value': 'dot_temperature'}, inplace=True)
-            metrics[name] = Sum(metrics[name])
-            metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
-                "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
-            metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
-                "-")[0:2])
-            metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
+            try:
+                metrics[name] = pd.read_csv(
+                    BytesIO(archive.read(i)), index_col="timestamp")
+                metrics[name].index = metrics[name].index.map(to_datetime_metrics)
+                metrics[name].drop(
+                    axis=1, labels=['channel', 'sensor_type_id', "created_at"], inplace=True)
+                metrics[name].rename(
+                    columns={'value': 'dot_temperature'}, inplace=True)
+                metrics[name] = Sum(metrics[name])
+                metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
+                    "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
+                metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
+                    "-")[0:2])
+                metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
+            except EmptyDataError:
+                print(f"empyt metric {i}")
 
     for key, value in metrics.items():
         value['cooking'] = 0
