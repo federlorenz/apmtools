@@ -688,10 +688,9 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
             metrics[name] = Sum(metrics[name])
             metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
                 "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
-            metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
-                "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
             metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
                 "-")[0:2])
+            metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
 
     for key, value in metrics.items():
         value['cooking'] = 0
