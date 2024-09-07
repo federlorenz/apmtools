@@ -2,7 +2,6 @@ import pandas as pd
 import numpy as np
 import copy
 
-
 import itertools
 from bokeh.palettes import Dark2_5 as palette
 from bokeh.models import ColumnDataSource, DataRange1d
@@ -147,7 +146,6 @@ class DictionaryPlus(dict):
         a.filter_key = self.filter_key
         return a
     
-
     def set_attrib(self, attribute):
         """
         returns the set of attribute values for dictionary

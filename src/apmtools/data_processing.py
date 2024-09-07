@@ -272,22 +272,29 @@ def add_combined_counter(file, gaps_delta=pd.Timedelta("00:05:00"), binary_colum
 
     return file
 
-def sum_merge(files):
+
+def sum_merge(files: DictionaryPlus):
     if len(files) == 1:
-        file = files[0]
+        return files.show()
+
     else:
-        file = add_combined_counter(files[0].drop(columns=["cooking_counter"]).join([i.drop(columns=["cooking_counter"]) for i in files[1:]], sort=True, how="outer"))
+        file = add_combined_counter(files.show().drop(columns=["cooking_counter"]).join(
+            [files.show(i).drop(columns=["cooking_counter"]) for i in range(1, len(files))], sort=True, how="outer"))
 
-    file.country = files[0].country if len(
-        set([i.country for i in files])) == 1 else [i.country for i in files]
+        meta_keys = files.metadata()
+        for k in meta_keys:
+            a = []
+            for j in files.values():
+                if type(j.meta[k]) == type([]):
+                    for z in j.meta[k]:
+                        a.append(z)
+                else:
+                    a.append(j.meta[k])
+            file.meta[k] = list(set(a))
 
-    file.household = files[0].household if len(
-        set([i.household for i in files])) == 1 else [i.household for i in files]
+        return file
 
-    file.stove = files[0].stove if len(
-        set([i.stove for i in files])) == 1 else [i.stove for i in files]
 
-    return file
 
 def gen_merge(files):
     if len(files) == 1:
