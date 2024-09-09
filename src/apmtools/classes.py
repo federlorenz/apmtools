@@ -521,14 +521,14 @@ class Plot():
                     for s in value[variable].value_counts().index:
                         left = value.loc[value[variable]==s].index[0]
                         right = value.loc[value[variable]== s].index[-1]
-                        x = self.all_figures[-1].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.3,
-                                                  muted_alpha=0.05, legend_label=label, fill_color=color)
+                        x = self.all_figures[-1].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.02,
+                                                  muted_alpha=0.2, legend_label=label, fill_color=color, line_alpha=0)
                 else:
                     for s in value[variable].value_counts().index:
                         left = value.loc[value[variable]==s].index[0]
                         right = value.loc[value[variable]== s].index[-1]
-                        x = self.all_figures[plotn].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.3,
-                                                  muted_alpha=0.05, legend_label=label, fill_color=color)
+                        x = self.all_figures[plotn].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.02,
+                                                  muted_alpha=0.2, legend_label=label, fill_color=color, line_alpha=0)
 
     def lnglat_to_meters(self, longitude, latitude):
         """
