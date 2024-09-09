@@ -470,21 +470,22 @@ class Plot():
 
     def add_data_time(self, datain: DictionaryPlus, variable, plotn=None, filterdict=None, label="", color=None):
         datain = datain.subset(filterdict) if filterdict != None else datain
-        if color == None:
-            color = next(self.colors)
-        if self.range_start == None:
-            self.range_start = min(datain.set_attrib('start'))
-        else:
-            self.range_start = min(
-                min(datain.set_attrib('start')), self.range_start)
-        if self.range_end == None:
-            self.range_end = max(datain.set_attrib('end'))
-        else:
-            self.range_end = max(
-                max(datain.set_attrib('end')), self.range_end)
         if len(datain) == 0:
             pass
         else:
+            if color == None:
+                color = next(self.colors)
+            if self.range_start == None:
+                self.range_start = min(datain.set_attrib('start'))
+            else:
+                self.range_start = min(
+                    min(datain.set_attrib('start')), self.range_start)
+            if self.range_end == None:
+                self.range_end = max(datain.set_attrib('end'))
+            else:
+                self.range_end = max(
+                    max(datain.set_attrib('end')), self.range_end)
+
             for value in datain.values():
                 dates = np.array(value.index, dtype=np.datetime64)
                 source = ColumnDataSource(data=dict(date=dates, close=value[variable]))
@@ -497,21 +498,22 @@ class Plot():
 
     def add_data_vertical(self, datain: DictionaryPlus, variable, range_variable,plotn=None, filterdict=None, label="", color=None, line_width=0.3):
         datain = datain.subset(filterdict) if filterdict != None else datain
-        if color == None:
-            color = next(self.colors)
-        if self.range_start == None:
-            self.range_start = min(datain.set_attrib('start'))
-        else:
-            self.range_start = min(
-                min(datain.set_attrib('start')), self.range_start)
-        if self.range_end == None:
-            self.range_end = max(datain.set_attrib('end'))
-        else:
-            self.range_end = max(
-                max(datain.set_attrib('end')), self.range_end)
         if len(datain) == 0:
             pass
         else:
+            if color == None:
+                color = next(self.colors)
+            if self.range_start == None:
+                self.range_start = min(datain.set_attrib('start'))
+            else:
+                self.range_start = min(
+                    min(datain.set_attrib('start')), self.range_start)
+            if self.range_end == None:
+                self.range_end = max(datain.set_attrib('end'))
+            else:
+                self.range_end = max(
+                    max(datain.set_attrib('end')), self.range_end)
+
             maximus = max([value[range_variable].max() for value in datain.values()])
             minimum = 0 if (0 < min([value[range_variable].min() for value in datain.values(
             )])) else min([value[range_variable].min() for value in datain.values()])
