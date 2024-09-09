@@ -487,15 +487,14 @@ class Plot():
         else:
             for value in datain.values():
                 dates = np.array(value.index, dtype=np.datetime64)
-                source = ColumnDataSource(
-                    data=dict(date=dates, close=value[variable]))
+                source = ColumnDataSource(data=dict(date=dates, close=value[variable]))
                 if plotn == None:
                     x = self.all_figures[-1].line('date', 'close', source=source, alpha=0.7,
                                                   muted_alpha=0.05, legend_label=label, color=color)
                 else:
                     x = self.all_figures[plotn].line('date', 'close', source=source, alpha=0.7,
                                                      muted_alpha=0.05, legend_label=label, color=color)
-    def add_data_vertical(self, datain: DictionaryPlus, variable, plotn=None, filterdict=None, label="", color=True, line_width=0.3):
+    def add_data_vertical(self, datain: DictionaryPlus, variable, range_variable,plotn=None, filterdict=None, label="", color=True, line_width=0.3):
         datain = datain.subset(filterdict) if filterdict != None else datain
         datain = datain.apply_func(lambda x: x.loc[~pd.isna(x[variable])])
         if color:
@@ -513,16 +512,25 @@ class Plot():
         if len(datain) == 0:
             pass
         else:
+            maximus = max([value[range_variable].max() for value in datain.values()])
+            minimum = min([value[range_variable].min() for value in datain.values()])
+
             for value in datain.values():
-                dates = np.array(value.index, dtype=np.datetime64)
-                source = ColumnDataSource(
-                    data=dict(date=dates, close=value[variable]))
-                if plotn == None:
-                    x = self.all_figures[-1].vspan(x='date', source=source, alpha=0.3,
-                                                  muted_alpha=0.05, legend_label=label, line_color=color, line_width=line_width)
+                if plotn == None:                
+                    for s in value['variable'].value_counts().index:
+                        left = value['variable'].loc[value['variable']==s].index[0]
+                        right = value['variable'].loc[value['variable']
+                                                     == s].index[-1]
+                        x = self.all_figures[-1].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.3,
+                                                  muted_alpha=0.05, legend_label=label, fill_color=color)
                 else:
-                    x = self.all_figures[plotn].vspan(x='date', source=source, alpha=0.3,
-                                                   muted_alpha=0.05, legend_label=label, line_color=color, line_width=line_width)
+                    for s in value['variable'].value_counts().index():
+                        left = value['variable'].loc[value['variable']
+                                                     == s].index[0]
+                        right = value['variable'].loc[value['variable']
+                                                      == s].index[-1]
+                        x = self.all_figures[plotn].quad(left=left, right=right, top=maximus, bottom=minimum, alpha=0.3,
+                                                      muted_alpha=0.05, legend_label=label, fill_color=color)
 
 
     
