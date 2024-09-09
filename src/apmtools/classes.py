@@ -495,7 +495,37 @@ class Plot():
                 else:
                     x = self.all_figures[plotn].line('date', 'close', source=source, alpha=0.7,
                                                      muted_alpha=0.05, legend_label=label, color=color)
+    def add_data_vertical(self, datain: DictionaryPlus, variable, plotn=None, filterdict=None, label="", color=True, line_width=0.3):
+        datain = datain.subset(filterdict) if filterdict != None else datain
+        datain = datain.apply_func(lambda x: x.loc[~pd.isna(x[variable])])
+        if color:
+            color = next(self.colors)
+        if self.range_start == None:
+            self.range_start = min(datain.set_attrib('start'))
+        else:
+            self.range_start = min(
+                min(datain.set_attrib('start')), self.range_start)
+        if self.range_end == None:
+            self.range_end = max(datain.set_attrib('end'))
+        else:
+            self.range_end = max(
+                max(datain.set_attrib('end')), self.range_end)
+        if len(datain) == 0:
+            pass
+        else:
+            for value in datain.values():
+                dates = np.array(value.index, dtype=np.datetime64)
+                source = ColumnDataSource(
+                    data=dict(date=dates, close=value[variable]))
+                if plotn == None:
+                    x = self.all_figures[-1].vspan(x='date', source=source, alpha=0.3,
+                                                  muted_alpha=0.05, legend_label=label, line_color=color, line_width=line_width)
+                else:
+                    x = self.all_figures[plotn].vspan(x='date', source=source, alpha=0.3,
+                                                   muted_alpha=0.05, legend_label=label, line_color=color, line_width=line_width)
 
+
+    
     def lnglat_to_meters(self, longitude, latitude):
         """
         Projects the given (longitude, latitude) values into Web Mercator
