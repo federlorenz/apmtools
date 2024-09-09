@@ -468,9 +468,9 @@ class Plot():
             self.all_figures[-1].title.align = "center"
             self.all_figures[-1].title.text_font_size = "25px"
 
-    def add_data_time(self, datain: DictionaryPlus, variable, plotn=None, filterdict=None, label="", color=True):
+    def add_data_time(self, datain: DictionaryPlus, variable, plotn=None, filterdict=None, label="", color=None):
         datain = datain.subset(filterdict) if filterdict != None else datain
-        if color:
+        if color == None:
             color = next(self.colors)
         if self.range_start == None:
             self.range_start = min(datain.set_attrib('start'))
@@ -495,9 +495,9 @@ class Plot():
                     x = self.all_figures[plotn].line('date', 'close', source=source, alpha=0.7,
                                                      muted_alpha=0.05, legend_label=label, color=color)
 
-    def add_data_vertical(self, datain: DictionaryPlus, variable, range_variable,plotn=None, filterdict=None, label="", color=True, line_width=0.3):
+    def add_data_vertical(self, datain: DictionaryPlus, variable, range_variable,plotn=None, filterdict=None, label="", color=None, line_width=0.3):
         datain = datain.subset(filterdict) if filterdict != None else datain
-        if color:
+        if color == None:
             color = next(self.colors)
         if self.range_start == None:
             self.range_start = min(datain.set_attrib('start'))
@@ -558,8 +558,8 @@ class Plot():
                           ) * origin_shift / np.pi
         return (easting, northing)
 
-    def add_data_geo(self, datain: DictionaryPlus, lat, lon, plotn=None, filterdict=None, label="", color=True, linked_timeseries=True):
-        if color:
+    def add_data_geo(self, datain: DictionaryPlus, lat, lon, plotn=None, filterdict=None, label="", color=None, linked_timeseries=True):
+        if color == None:
             color = next(self.colors)
         if len(datain) == 0:
             pass
