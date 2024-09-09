@@ -497,7 +497,6 @@ class Plot():
 
     def add_data_vertical(self, datain: DictionaryPlus, variable, range_variable,plotn=None, filterdict=None, label="", color=True, line_width=0.3):
         datain = datain.subset(filterdict) if filterdict != None else datain
-        datain = datain.apply_func(lambda x: x.loc[~pd.isna(x[variable])])
         if color:
             color = next(self.colors)
         if self.range_start == None:
@@ -514,7 +513,8 @@ class Plot():
             pass
         else:
             maximus = max([value[range_variable].max() for value in datain.values()])
-            minimum = min([value[range_variable].min() for value in datain.values()])
+            minimum = 0 if (0 < min([value[range_variable].min() for value in datain.values(
+            )])) else min([value[range_variable].min() for value in datain.values()])
 
             for value in datain.values():
                 if plotn == None:                
