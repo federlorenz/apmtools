@@ -272,7 +272,6 @@ def add_combined_counter(file, gaps_delta=pd.Timedelta("00:05:00"), binary_colum
 
     return file
 
-
 def sum_merge(files: DictionaryPlus):
     if len(files) == 1:
         return files.show()
@@ -294,8 +293,6 @@ def sum_merge(files: DictionaryPlus):
 
         return file
 
-
-
 def gen_merge(files):
     if len(files) == 1:
         file = files[0]
@@ -303,7 +300,6 @@ def gen_merge(files):
         file = files[0].join([i for i in files[1:]], sort=True, how="inner")
 
     return file
-
 
 ##############
 
@@ -673,14 +669,14 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
 
     archive = ZipFile(zipname)
 
-    mission_logs = pd.read_csv(BytesIO(archive.read('mission_logs.csv')))
+    #mission_logs = pd.read_csv(BytesIO(archive.read('mission_logs.csv')))
     events = pd.read_csv(BytesIO(archive.read('events.csv')))
     events["start_time"] = events["start_time"].map(to_datetime_events)
     events["stop_time"] = events["stop_time"].map(to_datetime_events)
 
-    sensors = pd.read_csv(BytesIO(archive.read('sensors.csv')))
+    #sensors = pd.read_csv(BytesIO(archive.read('sensor.csv')))
     tags = pd.read_csv(BytesIO(archive.read('tags.csv')))
-    missions = pd.read_csv(BytesIO(archive.read('missions.csv')))
+    #missions = pd.read_csv(BytesIO(archive.read('missions.csv')))
     metrics = DictionaryPlus()
 
     for i in archive.namelist():
@@ -722,7 +718,6 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
             out.meta = value.meta
             metrics[key] = out
         return metrics
-
 
 def polar_processing(directory):
 
@@ -782,7 +777,6 @@ def polar_processing(directory):
 
         out["hr"] = hr
     return out
-
 
 def gpslogger_processing(directory, file, interpolation=None, interval=(0,3)):
     numeric = ["latitude","longitude","accuracy(m)","altitude(m)","geoid_height(m)","speed(m/s)","bearing(deg)"]
