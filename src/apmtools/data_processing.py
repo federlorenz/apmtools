@@ -637,7 +637,7 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds"):
     df = keep_interval(df, interval)
     return Apm(df)
 
-def sum_interpolation(file, interpolation=1, interval="5 minutes"):
+def sum_interpolation(file, interpolation=1, interval="5 minutes", print_status=False):
     numeric = ['dot_temperature']
     binary = ['cooking']
     df = interpolate(file, 300, interpolation, pd.Timedelta(
@@ -646,11 +646,13 @@ def sum_interpolation(file, interpolation=1, interval="5 minutes"):
     if type(file) == type(Sum()):
         df=Sum(df)
         df.meta = file.meta
-        return df
+        if print_status:
+            print(file.meta)
+        return df            
     else:
         return Sum(df)
 
-def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True):
+def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True,print_status=False):
 
     def to_datetime_metrics(x):
         year, month, day = int(x.split('T')[0].split(
@@ -696,6 +698,8 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
                     "-")[0:2])
                 metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
+                if print_status:
+                    print(name)
             except EmptyDataError:
                 print(f"empyt metric {i}")
 
