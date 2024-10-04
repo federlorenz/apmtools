@@ -8,6 +8,7 @@ from io import BytesIO
 from zipfile import ZipFile
 from copy import deepcopy
 from pandas.errors import EmptyDataError
+import time
 
 def in_list(origin, target):
     """
@@ -637,7 +638,9 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds"):
     df = keep_interval(df, interval)
     return Apm(df)
 
-def sum_interpolation(file, interpolation=1, interval="5 minutes", print_status=False):
+def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False):
+    if timing:
+        start = time.process_time()
     numeric = ['dot_temperature']
     binary = ['cooking']
     df = interpolate(file, 300, interpolation, pd.Timedelta(
@@ -646,13 +649,14 @@ def sum_interpolation(file, interpolation=1, interval="5 minutes", print_status=
     if type(file) == type(Sum()):
         df=Sum(df)
         df.meta = file.meta
-        if print_status:
-            print(file.meta)
+        if timing:
+            end = time.process_time()
+            print(f"{end-start} seconds")
         return df            
     else:
         return Sum(df)
 
-def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True,print_status=False):
+def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True):
 
     def to_datetime_metrics(x):
         year, month, day = int(x.split('T')[0].split(
@@ -698,8 +702,6 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
                     "-")[0:2])
                 metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
-                if print_status:
-                    print(name)
             except EmptyDataError:
                 print(f"empyt metric {i}")
 
