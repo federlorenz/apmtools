@@ -654,6 +654,9 @@ def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False)
             print(f"{end-start} seconds")
         return df            
     else:
+        if timing:
+            end = time.process_time()
+            print(f"{end-start} seconds")
         return Sum(df)
 
 def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True):
