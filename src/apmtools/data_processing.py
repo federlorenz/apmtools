@@ -714,7 +714,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
             if (events['mission_id'].iloc[j] == value.meta["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
                 for k in range(len(value)):
                     if (value.index[k] >= events['start_time'].iloc[j]) & (value.index[k] < events['stop_time'].iloc[j]):
-                        value['cooking'].iloc[k] = 1
+                        value.loc[value.index[k],'cooking'] = 1
     
     if return_csv:
         for key,value in metrics.items():
