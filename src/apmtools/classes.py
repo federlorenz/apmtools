@@ -155,14 +155,21 @@ class DictionaryPlus(dict):
             if hasattr(i, 'meta') & (type(i.meta) == type({})) & (attribute in i.meta.keys()):
                 try:
                     return_set.add(getattr(i,'meta')[attribute])
-                except:
-                    pass
+                except TypeError:
+                    try:
+                        for j in getattr(i, 'meta')[attribute]:
+                            return_set.add(j)
+                    except:
+                        pass
             else:
                 try:
                     return_set.add(getattr(i,attribute))
-                except:
-                    pass
-
+                except TypeError:
+                    try:
+                        for j in getattr(i, attribute):
+                            return_set.add(j)
+                    except:
+                        pass
         return return_set
     
     def metadata(self, listall = False):
