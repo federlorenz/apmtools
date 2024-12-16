@@ -701,6 +701,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].rename(
                     columns={'value': 'dot_temperature'}, inplace=True)
                 metrics[name] = Sum(metrics[name])
+                metrics[name].meta['rejected'] = False
                 metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
                     "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
                 metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
