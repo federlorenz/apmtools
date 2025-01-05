@@ -480,7 +480,7 @@ class Grav_Filter():
         if (self.difference_corrected == None) | (self.sampled_volume == None):
             return None
         else:
-            return self.difference_corrected/self.sampled_volume*1000
+            return self.difference_corrected/self.sampled_volume
 
 class Plot():
     def __init__(self):
