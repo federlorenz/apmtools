@@ -443,6 +443,44 @@ class PolarH10(dict):
 
         return out
 
+class Filter():
+
+    def __init__(self, *args, **kwargs):
+        self.filterid = None
+        self.pre_weight = None
+        self.pre_weightsd = None
+        self.post_weight = None
+        self.post_weightsd = None
+        self.blanks = None
+        self.sampled_volume = None
+
+    @property
+    def difference(self):
+        if (self.pre_weight == None) | (self.post_weight ==  None):
+            return None
+        else:
+            return self.post_weight - self.pre_weight
+    
+    @property
+    def difference_corrected(self):
+        if (self.difference == None) | (self.blanks == None):
+            return None
+        else:
+            return self.difference - self.blanks
+    
+    @property
+    def concentration(self):
+        if (self.difference == None) | (self.sampled_volume == None):
+            return None
+        else:
+            return self.difference/self.sampled_volume
+
+    @property
+    def concentration_corrected(self):
+        if (self.difference_corrected == None) | (self.sampled_volume == None):
+            return None
+        else:
+            return self.difference_corrected/self.sampled_volume*1000
 
 class Plot():
     def __init__(self):
