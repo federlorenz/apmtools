@@ -3,7 +3,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
-from .classes import Apm,Sum,PolarH10, DictionaryPlus, Filter
+from .classes import Apm, Sum, PolarH10, DictionaryPlus, Grav_Filter
 from io import BytesIO
 from zipfile import ZipFile
 from copy import deepcopy
@@ -551,7 +551,7 @@ def upas_processing(directory, file):
     out.meta['upasid'] = df1[2].split(',')[1]
     out.meta['samplename'] = df1[26].split(',')[1].strip('_')
     out.meta['cartridgeid'] = df1[27].split(',')[1].strip('_')
-    out.meta['filter'] = Filter()
+    out.meta['filter'] = Grav_Filter()
     out.meta['filter'].sampled_volume = float(df1[69].split(',')[1].strip())
 
     return out

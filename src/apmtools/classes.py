@@ -443,7 +443,7 @@ class PolarH10(dict):
 
         return out
 
-class Filter():
+class Grav_Filter():
 
     def __init__(self, *args, **kwargs):
         self.filterid = None
