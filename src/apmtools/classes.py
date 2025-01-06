@@ -453,6 +453,7 @@ class Grav_Filter():
         self.post_weightsd = None
         self.blanks = None
         self.sampled_volume = None
+        self.concentration_manual_input = None
 
     @property
     def difference(self):
