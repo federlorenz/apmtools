@@ -471,17 +471,17 @@ class Grav_Filter():
     
     @property
     def concentration(self):
-        if (self.difference == None) | (self.sampled_volume == None):
+        if (self.difference() == None) | (self.sampled_volume == None):
             return None
         else:
-            return self.difference/self.sampled_volume
+            return self.difference()/self.sampled_volume
 
     @property
     def concentration_corrected(self):
-        if (self.difference_corrected == None) | (self.sampled_volume == None):
+        if (self.difference_corrected() == None) | (self.sampled_volume == None):
             return None
         else:
-            return self.difference_corrected/self.sampled_volume
+            return self.difference_corrected()/self.sampled_volume
 
 class Plot():
     def __init__(self):
