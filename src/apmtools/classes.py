@@ -234,9 +234,9 @@ class Apm(pd.DataFrame):
             if selecting a specific date interval that includes time, just specify\n
             that as dt.datetime interval under date_start and date_end"""
         if date_start is not None:
-            self = self.loc[self.index >= date_start]
+            self = self.loc[self.index.date >= date_start]
         if date_end is not None:
-            self = self.loc[self.index <= date_end]
+            self = self.loc[self.index.date < date_end]
         if (time_start is not None) & (time_end is not None):
             if time_start > time_end:
                 self = self.loc[(self.index.time >= time_start)
@@ -298,9 +298,9 @@ class ApmSeries(pd.Series):
             if selecting a specific date interval that includes time, just specify\n
             that as dt.datetime interval under date_start and date_end"""
         if date_start is not None:
-            self = self.loc[self.index >= date_start]
+            self = self.loc[self.index.date >= date_start]
         if date_end is not None:
-            self = self.loc[self.index <= date_end]
+            self = self.loc[self.index.date < date_end]
         if (time_start is not None) & (time_end is not None):
             if time_start > time_end:
                 self = self.loc[(self.index.time >= time_start)
