@@ -186,7 +186,8 @@ class DictionaryPlus(dict):
         return a
 
     def len(self):
-        return len(self)
+        a = len(self)
+        return a
 
     def concat_var(self,variable):
         a  = self.apply_func(lambda x:x[variable])
