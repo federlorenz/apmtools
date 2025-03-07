@@ -189,8 +189,11 @@ class DictionaryPlus(dict):
         a = len(self)
         return a
 
-    def concat_var(self,variable):
-        a  = self.apply_func(lambda x:x[variable])
+    def concat_var(self,variable=None):
+        if variable != None:
+            a  = self.apply_func(lambda x:x[variable])
+        else:
+            a = self
         return pd.concat(a)
 
 
