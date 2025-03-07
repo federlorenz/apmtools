@@ -185,6 +185,15 @@ class DictionaryPlus(dict):
         a.filter_key = self.filter_key
         return a
 
+    def len(self):
+        return len(self)
+
+    def concat_var(self,variable):
+        a  = self.apply_func(lambda x:x[variable])
+        return pd.concat(a)
+
+
+
 class Apm(pd.DataFrame):
 
     def __init__(self, *args, **kwargs):
