@@ -181,7 +181,7 @@ class DictionaryPlus(dict):
             return meta
         
     def apply_func(self,func):
-        a = DictionaryPlus({key: func(value) for key, value in self.items()})
+        a = DictionaryPlus({key: func(value)() for key, value in self.items()})
         a.filter_key = self.filter_key
         return a
 
