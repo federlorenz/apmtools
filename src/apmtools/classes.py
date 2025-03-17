@@ -83,14 +83,21 @@ class DictionaryPlus(dict):
                 for key, value in return_dict.items():
                     if condition(value):
                         a[key] = value
+                a = DictionaryPlus(a)
+                a.filter_key = self.filter_key
+                return a                        
             else:
-                 for key, value in a.items():
-                    if not condition(value):
-                        del a[key]
-
-        a = DictionaryPlus(a)
-        a.filter_key = self.filter_key
-        return a
+                b={}
+                for key, value in a.items():
+                    if condition(value):
+                        b[key] = value
+                b = DictionaryPlus(b)
+                b.filter_key = self.filter_key
+                return b        
+        else:
+            a = DictionaryPlus(a)
+            a.filter_key = self.filter_key
+            return a   
     
     def set_attrib(self, attribute):
         """
