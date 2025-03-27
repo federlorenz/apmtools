@@ -37,13 +37,12 @@ class DictionaryPlus(dict):
         except:
             print("something's wrong")
 
-    def subset(self, filter_dict={}, condition=None):
+    def subset(self, filter_dict={}, filter_style='all', condition=None):
         """
-        Return a subset of a dictionary, specified in filter_dict (itself a dictionary)
-        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]} or {attrib:"condition"}, where 
+        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
+        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
             attrib is an attribute of the elements of dictionary, and attrib_value is a list
-            of the values of such attrib that the elements of returned dictionary can have, and condition    
-            is the string of the condition that the attribute should verify, such as for example "< 0"
+            of the values of such attrib that the elements of returned dictionary can have
         specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
         """
         if type(filter_dict) != type(dict()):
@@ -51,32 +50,97 @@ class DictionaryPlus(dict):
             return
         return_dict = copy.deepcopy(self)
         a = {}
-        for key, value in return_dict.items():            
-            for i, j in filter_dict.items():
-                if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
-                    try:
-                        if type(j) == type(""):
-                            if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
-                                a[key] = value
-                                break
-                        else:                  
-                            if getattr(value,'meta')[i] in j:
-                                a[key] = value
-                                break
-                    except:
-                        pass
-                else:
-                    try:
-                        if type(j) == type(""):
-                            if eval("value.__getattr__(\""+i+"\")" + j):
-                                a[key] = value
-                                break
-                        else:
-                            if getattr(value, i) in j:
-                                a[key] = value
-                                break
-                    except:
-                        pass
+
+        if filter_style == 'all':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if not eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, i) not in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if not eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, 'meta')[i] not in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        del a[key]
+                        break
+
+        if filter_style == 'any':
+            for key, value in return_dict.items():            
+                for i, j in filter_dict.items():
+                    if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                    a[key] = value
+                                    break
+                            else:                  
+                                if getattr(value,'meta')[i] in j:
+                                    a[key] = value
+                                    break
+                        except:
+                            pass
+                    else:
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    a[key] = value
+                                    break
+                            else:
+                                if getattr(value, i) in j:
+                                    a[key] = value
+                                    break
+                        except:
+                            pass
+
+        if filter_style == 'negative':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, i) in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, 'meta')[i] in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        break
 
         if condition != None:
             if a == {}:

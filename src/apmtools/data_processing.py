@@ -709,7 +709,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
                     "-")[0:2])
                 metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
-                metrics[name].meta['dot'] = missions.loc[missions['mission_id']
+                metrics[name].meta['dotname'] = missions.loc[missions['mission_id']
                                                          == metrics[name].meta['mission_id']]['meter_name'].iloc[0]
             except EmptyDataError:
                 print(f"empyt metric {i}")
