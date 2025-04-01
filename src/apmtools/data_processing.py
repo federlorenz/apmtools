@@ -664,11 +664,18 @@ def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False)
 def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True):
 
     def to_datetime_metrics(x):
-        year, month, day = int(x.split('T')[0].split(
-            '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
-        hour, minute, second = int(x.split('T')[1].split(
-            ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split("+")[0])
-        return dt.datetime(year, month, day, hour, minute, second)
+        if x[-1]=="Z":
+            year, month, day = int(x.split('T')[0].split(
+                '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
+            hour, minute, second = int(x.split('T')[1].split(
+                ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2][:-1])
+            return dt.datetime(year, month, day, hour, minute, second)
+        else:
+            year, month, day = int(x.split('T')[0].split(
+                '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
+            hour, minute, second = int(x.split('T')[1].split(
+                ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split("+")[0])
+            return dt.datetime(year, month, day, hour, minute, second)
 
 
     def to_datetime_events(x):
