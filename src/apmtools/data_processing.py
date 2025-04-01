@@ -712,7 +712,10 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].meta['dotname'] = missions.loc[missions['mission_id']
                                                          == metrics[name].meta['mission_id']]['meter_name'].iloc[0]
             except EmptyDataError:
-                print(f"empyt metric {i}")
+                print(f"EmptyDataError metric {i}")
+
+            except ValueError:
+                print(f"ValueError metric {i}")
 
     for key, value in metrics.items():
         value['cooking'] = 0
