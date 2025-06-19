@@ -353,15 +353,16 @@ def remove_odd_characters(x):
 def upas_processing(directory, file):
 
     dtformat = '%Y-%m-%dT%H:%M:%S'
-    x = csv.reader(directory+file, delimiter=',')
-    parameters = {}
-    for row in x:
-        if row != ["SAMPLE LOG"]:
-            if (len(row) > 1) and (row != ['PARAMETER', 'VALUE', 'UNITS/NOTES']):
-                parameters[row[0]] = row[1]
-        else:
-            datastart = x.line_num
-            break
+    with open(directory+file) as csvfile:
+        x = csv.reader(csvfile, delimiter=',')
+        parameters = {}
+        for row in x:
+            if row != ["SAMPLE LOG"]:
+                if (len(row) > 1) and (row != ['PARAMETER', 'VALUE', 'UNITS/NOTES']):
+                    parameters[row[0]] = row[1]
+            else:
+                datastart = x.line_num
+                break
 
     df = pd.read_csv(directory+file, skiprows=list(range(datastart+2)) +
                      [datastart+3], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
