@@ -1,14 +1,16 @@
-        
+
+import csv as csv
 import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
 from .classes import Apm, Sum, PolarH10, DictionaryPlus, Grav_Filter
-from io import BytesIO
 from zipfile import ZipFile
 from copy import deepcopy
 from pandas.errors import EmptyDataError
 import time
+from io import BytesIO
+
 
 def in_list(origin, target):
     """
@@ -349,7 +351,106 @@ def remove_odd_characters(x):
         return x
 
 def upas_processing(directory, file):
-    numeric = ['PumpingFlowRate',
+
+    dtformat = '%Y-%m-%dT%H:%M:%S'
+    x = csv.reader(directory+file, delimiter=',')
+    parameters = {}
+    for row in x:
+        if row != ["SAMPLE LOG"]:
+            if (len(row) > 1) and (row != ['PARAMETER', 'VALUE', 'UNITS/NOTES']):
+                parameters[row[0]] = row[1]
+        else:
+            datastart = x.line_num
+            break
+
+    df = pd.read_csv(directory+file, skiprows=list(range(datastart+2)) +
+                     [datastart+3], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
+    
+    match parameters["UPASfirmware"][10:19]:
+        case "rev_00200":
+            numeric = ["PumpingFlowFactory",
+                       "OverallFlowFactory",
+                       "SampledVolumeFactory",
+                       "PumpingFlowOffset",
+                       "OverallFlowOffset",
+                       "SampledVolumeOffset",
+                       "FilterDP",
+                       "BatteryCharge",
+                       "AtmoT",
+                       "AtmoP",
+                       "AtmoRH",
+                       "AtmoDensity",
+                       "AtmoAlt",
+                       "GPSQual",
+                       "GPSlat",
+                       "GPSlon",
+                       "GPSalt",
+                       "GPSsat",
+                       "GPSspeed",
+                       "GPShDOP",
+                       "AccelX",
+                       "AccelXVar",
+                       "AccelXMin",
+                       "AccelXMax",
+                       "AccelY",
+                       "AccelYVar",
+                       "AccelYMin",
+                       "AccelYMax",
+                       "AccelZ",
+                       "AccelZVar",
+                       "AccelZMin",
+                       "AccelZMax",
+                       "AccelComplianceCnt",
+                       "AccelComplianceHrs",
+                       "Xup",
+                       "XDown",
+                       "Yup",
+                       "Ydown",
+                       "Zup",
+                       "Zdown",
+                       "StepCount",
+                       "LUX",
+                       "UVindex",
+                       "HighVisRaw",
+                       "LowVisRaw",
+                       "IRRaw",
+                       "UVRaw",
+                       "PMMeasCnt",
+                       "PM1MC",
+                       "PM1MCVar",
+                       "PM2_5MC",
+                       "PM2_5MCVar",
+                       "PM0_5NC",
+                       "PM1NC",
+                       "PM2_5NC",
+                       "PMtypicalParticleSize",
+                       "PM2_5SampledMassFactory",
+                       "PM2_5SampledMassOffset",
+                       "U12T",
+                       "U29T",
+                       "FdpT",
+                       "AccelT",
+                       "U29P",
+                       "PumpPow1",
+                       "PumpV",
+                       "MassFlowFactory",
+                       "MFSVout",
+                       "BattVolt",
+                       "v3_3",
+                       "v5",
+                       "Charging",
+                       "ExtPow",
+                       "FLOWCTL",
+                       "GPSRT",
+                       "SD_DATAW",
+                       "SD_HEADW",
+                       "CO2",
+                       "SCDT",
+                       "SCDRH",
+                       "VOCRaw",
+                       "NOXRaw"]
+        case _:
+            numeric = ['PumpingFlowRate',
                'OverallFlowRate',
                'SampledVolume',
                'FilterDP',
@@ -460,13 +561,11 @@ def upas_processing(directory, file):
                'SCDRH',
                'VOCRaw',
                'NOXRaw']
-    dtformat = '%Y-%m-%dT%H:%M:%S'
-    df = pd.read_csv(directory+file, skiprows=list(range(114)) +
-                     [115], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
-    df1 = open(directory+file).readlines()[0:107]
-    PMSensorInterval = int(df1[44].split(',')[1])
-    LogInterval = int(df1[47].split(',')[1])
-    PowerSaveMode = int(df1[50].split(',')[1])
+
+    df1 = open(directory+file).readlines()[0:datastart]
+    PMSensorInterval = int(parameters["PMSensorInterval"])
+    LogInterval = int(parameters["LogInterval"])
+    PowerSaveMode = int(parameters["PowerSaveMode"])
     df["SampleTime"] = df["SampleTime"].map(to_timedelta)
     df = interpolate(df, LogInterval, 1, pd.Timedelta(seconds=LogInterval*2), numeric_columns=numeric, add_binary_counter=False)
     if LogInterval==1:
@@ -489,7 +588,23 @@ def upas_processing(directory, file):
         df = keep_interval(df, '30 minutes')
     else:
         pass
-    pmSensorColumns = ["PMMeasCnt",
+
+
+    match parameters["UPASfirmware"][10:19]:
+        case "rev_00200":
+            pmSensorColumns = ["PMMeasCnt",
+                               "PM1MC",
+                               "PM1MCVar",
+                               "PM2_5MC",
+                               "PM2_5MCVar",
+                               "PM0_5NC",
+                               "PM1NC",
+                               "PM2_5NC",
+                               "PMtypicalParticleSize",
+                               "PM2_5SampledMassFactory",
+                               "PM2_5SampledMassOffset"]
+        case _:
+            pmSensorColumns = ["PMMeasCnt",
                        "PM1MC",
                        "PM1MCVar",
                        "PM2_5MC",
@@ -514,7 +629,7 @@ def upas_processing(directory, file):
                        "PMReadingErrorCnt",
                        "PMFanErrorCnt",
                        "PMLaserErrorCnt",
-                       "PMFanSpeedWarn"]
+                           "PMFanSpeedWarn"]
     for j in pmSensorColumns:
         if PMSensorInterval == 0:
             df[j]=np.nan
@@ -548,11 +663,17 @@ def upas_processing(directory, file):
     out = Apm(df)
     
     out.meta['header'] = df1
-    out.meta['upasid'] = df1[2].split(',')[1]
-    out.meta['samplename'] = df1[26].split(',')[1].strip('_')
-    out.meta['cartridgeid'] = df1[27].split(',')[1].strip('_')
+    out.meta['upasid'] = parameters["UPASserial"]
+    out.meta['samplename'] = parameters["SampleName"].strip('_')
+    out.meta['cartridgeid'] = parameters["CartridgeID"].strip('_')
     out.meta['filter'] = Grav_Filter()
-    out.meta['filter'].sampled_volume = float(df1[69].split(',')[1].strip())
+    match parameters["UPASfirmware"][10:19]:
+        case "rev_00200":
+            out.meta['filter'].sampled_volume = float(
+                parameters["SampledVolumeOffset"].strip())
+        case _:
+            out.meta['filter'].sampled_volume = float(
+                parameters["SampledVolume"].strip())
 
     return out
 
