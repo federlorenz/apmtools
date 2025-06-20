@@ -363,12 +363,9 @@ def upas_processing(directory, file):
             else:
                 datastart = x.line_num
                 break
-    match parameters["UPASfirmware"][10:19]:
-        case "rev_00200":
-            df = pd.read_csv(directory+file, skiprows=list(range(datastart+1)), index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
-        case _:
-            df = pd.read_csv(directory+file, skiprows=list(range(datastart+2)) +
-                             [datastart+3], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
+
+    df = pd.read_csv(directory+file, skiprows=list(range(datastart+2)) + [
+                             datastart+3], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
 
     match parameters["UPASfirmware"][10:19]:
         case "rev_00200":
@@ -678,6 +675,7 @@ def upas_processing(directory, file):
         case _:
             out.meta['filter'].sampled_volume = float(
                 parameters["SampledVolume"].strip())
+    out.meta["parameters"] = parameters
 
     return out
 
