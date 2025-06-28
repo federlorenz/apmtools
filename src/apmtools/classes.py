@@ -197,8 +197,12 @@ class DictionaryPlus(dict):
         else: 
             return meta
         
-    def apply_func(self,func):
-        a = DictionaryPlus({key: func(value) for key, value in self.items()})
+    def apply_func(self, func, verbose=False):
+        a = DictionaryPlus()
+        for key, value in self.items():
+            a[key] = func(value)
+            if verbose:
+                print(key)
         a.filter_key = self.filter_key
         return a
 
