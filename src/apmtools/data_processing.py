@@ -350,7 +350,7 @@ def remove_odd_characters(x):
     else:
         return x
 
-def upas_processing(directory, file):
+def upas_processing(directory, file,interpolate_data=True):
 
     dtformat = '%Y-%m-%dT%H:%M:%S'
     with open(directory+file) as csvfile:
@@ -568,97 +568,97 @@ def upas_processing(directory, file):
     LogInterval = int(parameters["LogInterval"])
     PowerSaveMode = int(parameters["PowerSaveMode"])
     df["SampleTime"] = df["SampleTime"].map(to_timedelta)
-    df = interpolate(df, LogInterval, 1, pd.Timedelta(seconds=LogInterval*2), numeric_columns=numeric, add_binary_counter=False)
-    if LogInterval==1:
-        pass
-    elif (LogInterval <= 5) & (LogInterval > 1):
-        df = keep_interval(df, '5 seconds')
-    elif (LogInterval <= 10) & (LogInterval > 5):
-        df = keep_interval(df, '10 seconds')
-    elif (LogInterval <= 30) & (LogInterval > 10):
-        df = keep_interval(df, '30 seconds')
-    elif (LogInterval <= 60) & (LogInterval > 30):
-        df = keep_interval(df, '1 minute')
-    elif (LogInterval <= 120) & (LogInterval > 60):
-        df = keep_interval(df, '2 minutes')
-    elif (LogInterval <= 300) & (LogInterval > 120):
-        df = keep_interval(df, '5 minutes')
-    elif (LogInterval <= 600) & (LogInterval > 300):
-        df = keep_interval(df, '10 minutes')
-    elif (LogInterval <= 3600) & (LogInterval > 600):
-        df = keep_interval(df, '30 minutes')
-    else:
-        pass
-
-
-    match parameters["UPASfirmware"][10:19]:
-        case "rev_00200":
-            pmSensorColumns = ["PMMeasCnt",
-                               "PM1MC",
-                               "PM1MCVar",
-                               "PM2_5MC",
-                               "PM2_5MCVar",
-                               "PM0_5NC",
-                               "PM1NC",
-                               "PM2_5NC",
-                               "PMtypicalParticleSize",
-                               "PM2_5SampledMassFactory",
-                               "PM2_5SampledMassOffset"]
-        case _:
-            pmSensorColumns = ["PMMeasCnt",
-                       "PM1MC",
-                       "PM1MCVar",
-                       "PM2_5MC",
-                       "PM2_5MCVar",
-                       "PM4MC",
-                       "PM4MCVar",
-                       "PM10MC",
-                       "PM10MCVar",
-                       "PM0_5NC",
-                       "PM0_5NCVar",
-                       "PM1NC",
-                       "PM1NCVar",
-                       "PM2_5NC",
-                       "PM2_5NCVar",
-                       "PM4NC",
-                       "PM4NCVar",
-                       "PM10NC",
-                       "PM10NCVar",
-                       "PMtypicalParticleSize",
-                       "PMtypicalParticleSizeVar",
-                       "PM2_5SampledMass",
-                       "PMReadingErrorCnt",
-                       "PMFanErrorCnt",
-                       "PMLaserErrorCnt",
-                           "PMFanSpeedWarn"]
-    for j in pmSensorColumns:
-        if PMSensorInterval == 0:
-            df[j]=np.nan
-        elif PMSensorInterval == 1:
+    if interpolate_data:
+        df = interpolate(df, LogInterval, 1, pd.Timedelta(seconds=LogInterval*2), numeric_columns=numeric, add_binary_counter=False)
+        if LogInterval==1:
             pass
-        elif (PMSensorInterval >= 2) & (PMSensorInterval <= 15):
-            df[j] = [df[j].iloc[i] if ((df.index[i].minute % PMSensorInterval == 0) & (
-                df.index[i].second == 0)) else np.nan for i in range(len(df))]
-        elif (PMSensorInterval ==16):
-            df[j] = [df[j].iloc[i] if (
-                (df.index[i].second % 30 == 0)) else np.nan for i in range(len(df))]
-        elif (PMSensorInterval == 17) | (PMSensorInterval == 18):
-            df[j] = [df[j].iloc[i] if (
-                (df.index[i].second == 0)) else np.nan for i in range(len(df))]
-    if PowerSaveMode == 1:
-        for j in ["GPSQual",
-                  "GPSlat",
-                  "GPSlon",
-                  "GPSalt",
-                  "GPSsat",
-                  "GPSspeed",
-                  "GPShDOP"]:
-            df[j] = [df[j].iloc[i] if ((df.index[i].hour <21) & (
-                df.index[i].hour >= 4)) else np.nan for i in range(len(df))]
+        elif (LogInterval <= 5) & (LogInterval > 1):
+            df = keep_interval(df, '5 seconds')
+        elif (LogInterval <= 10) & (LogInterval > 5):
+            df = keep_interval(df, '10 seconds')
+        elif (LogInterval <= 30) & (LogInterval > 10):
+            df = keep_interval(df, '30 seconds')
+        elif (LogInterval <= 60) & (LogInterval > 30):
+            df = keep_interval(df, '1 minute')
+        elif (LogInterval <= 120) & (LogInterval > 60):
+            df = keep_interval(df, '2 minutes')
+        elif (LogInterval <= 300) & (LogInterval > 120):
+            df = keep_interval(df, '5 minutes')
+        elif (LogInterval <= 600) & (LogInterval > 300):
+            df = keep_interval(df, '10 minutes')
+        elif (LogInterval <= 3600) & (LogInterval > 600):
+            df = keep_interval(df, '30 minutes')
+        else:
+            pass
+
+        match parameters["UPASfirmware"][10:19]:
+            case "rev_00200":
+                pmSensorColumns = ["PMMeasCnt",
+                                "PM1MC",
+                                "PM1MCVar",
+                                "PM2_5MC",
+                                "PM2_5MCVar",
+                                "PM0_5NC",
+                                "PM1NC",
+                                "PM2_5NC",
+                                "PMtypicalParticleSize",
+                                "PM2_5SampledMassFactory",
+                                "PM2_5SampledMassOffset"]
+            case _:
+                pmSensorColumns = ["PMMeasCnt",
+                        "PM1MC",
+                        "PM1MCVar",
+                        "PM2_5MC",
+                        "PM2_5MCVar",
+                        "PM4MC",
+                        "PM4MCVar",
+                        "PM10MC",
+                        "PM10MCVar",
+                        "PM0_5NC",
+                        "PM0_5NCVar",
+                        "PM1NC",
+                        "PM1NCVar",
+                        "PM2_5NC",
+                        "PM2_5NCVar",
+                        "PM4NC",
+                        "PM4NCVar",
+                        "PM10NC",
+                        "PM10NCVar",
+                        "PMtypicalParticleSize",
+                        "PMtypicalParticleSizeVar",
+                        "PM2_5SampledMass",
+                        "PMReadingErrorCnt",
+                        "PMFanErrorCnt",
+                        "PMLaserErrorCnt",
+                            "PMFanSpeedWarn"]
         for j in pmSensorColumns:
-            df[j] = [np.nan if (((df.index[i].minute % 15 != 0) | (
-                df.index[i].second != 0)) & ((df.index[i].hour >= 21) | (
-                df.index[i].hour < 4))) else df[j].iloc[i] for i in range(len(df))]
+            if PMSensorInterval == 0:
+                df[j]=np.nan
+            elif PMSensorInterval == 1:
+                pass
+            elif (PMSensorInterval >= 2) & (PMSensorInterval <= 15):
+                df[j] = [df[j].iloc[i] if ((df.index[i].minute % PMSensorInterval == 0) & (
+                    df.index[i].second == 0)) else np.nan for i in range(len(df))]
+            elif (PMSensorInterval ==16):
+                df[j] = [df[j].iloc[i] if (
+                    (df.index[i].second % 30 == 0)) else np.nan for i in range(len(df))]
+            elif (PMSensorInterval == 17) | (PMSensorInterval == 18):
+                df[j] = [df[j].iloc[i] if (
+                    (df.index[i].second == 0)) else np.nan for i in range(len(df))]
+        if PowerSaveMode == 1:
+            for j in ["GPSQual",
+                    "GPSlat",
+                    "GPSlon",
+                    "GPSalt",
+                    "GPSsat",
+                    "GPSspeed",
+                    "GPShDOP"]:
+                df[j] = [df[j].iloc[i] if ((df.index[i].hour <21) & (
+                    df.index[i].hour >= 4)) else np.nan for i in range(len(df))]
+            for j in pmSensorColumns:
+                df[j] = [np.nan if (((df.index[i].minute % 15 != 0) | (
+                    df.index[i].second != 0)) & ((df.index[i].hour >= 21) | (
+                    df.index[i].hour < 4))) else df[j].iloc[i] for i in range(len(df))]
             
 
     out = Apm(df)
@@ -694,7 +694,7 @@ def pur_average(pur: pd.DataFrame):
     chadj = (a*chclean)+(b*pur[rh])+c
     pur['pm_adj'] = chadj
 
-def purple_processing(directory, interpolation=1, interval="30 seconds", timezone_shift = dt.timedelta(hours=0) ):
+def purple_processing(directory, interpolation=1, interval="30 seconds", timezone_shift = dt.timedelta(hours=0), interpolate_data=True):
     numeric = ['current_temp_f',
                'current_humidity',
                'current_dewpoint_f',
@@ -746,21 +746,23 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
         return
     df.sort_index(inplace=True)
     df[numeric] = df[numeric].map(remove_odd_characters)
-    df = interpolate(df, 120, interpolation, pd.Timedelta(
-        '00:04:00'), numeric_columns=numeric, add_binary_counter=False)
-    df = keep_interval(df, interval)
+    if interpolate_data:
+        df = interpolate(df, 120, interpolation, pd.Timedelta(
+            '00:04:00'), numeric_columns=numeric, add_binary_counter=False)
+        df = keep_interval(df, interval)
     df.index = df.index + timezone_shift
     pur_average(df)
     return Apm(df)
 
-def lascar_processing(directory, file, interpolation=1,interval="30 seconds"):
+def lascar_processing(directory, file, interpolation=1,interval="30 seconds", interpolate_data=True):
     numeric = ['CO(ppm)']
     dtformat = '%Y-%m-%d %H:%M:%S'
     df = pd.read_csv(directory+file,  index_col="Time",
                      date_format={'Time': dtformat}, usecols=['Time', 'CO(ppm)'])
-    df = interpolate(df, 30, interpolation, pd.Timedelta(
-        '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
-    df = keep_interval(df, interval)
+    if interpolate_data:
+        df = interpolate(df, 30, interpolation, pd.Timedelta(
+            '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
+        df = keep_interval(df, interval)
     return Apm(df)
 
 def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False):

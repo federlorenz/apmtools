@@ -217,8 +217,6 @@ class DictionaryPlus(dict):
             a = self
         return pd.concat(a)
 
-
-
 class Apm(pd.DataFrame):
 
     def __init__(self, *args, **kwargs):
