@@ -67,14 +67,14 @@ class DictionaryPlus(dict):
                                     break
                         except:
                             pass
-                    elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
                             if type(j) == type(""):
-                                if not eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
                                     del a[key]
                                     break
                             else:
-                                if getattr(value, 'meta')[i] not in j:
+                                if getattr(value, 'm')[i] not in j:
                                     del a[key]
                                     break
                         except:
@@ -86,14 +86,14 @@ class DictionaryPlus(dict):
         if filter_style == 'any':
             for key, value in return_dict.items():            
                 for i, j in filter_dict.items():
-                    if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                    if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
                             if type(j) == type(""):
-                                if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
                                     a[key] = value
                                     break
                             else:                  
-                                if getattr(value,'meta')[i] in j:
+                                if getattr(value,'m')[i] in j:
                                     a[key] = value
                                     break
                         except:
@@ -127,14 +127,14 @@ class DictionaryPlus(dict):
                                     break
                         except:
                             pass
-                    elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
                             if type(j) == type(""):
-                                if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
                                     del a[key]
                                     break
                             else:
-                                if getattr(value, 'meta')[i] in j:
+                                if getattr(value, 'm')[i] in j:
                                     del a[key]
                                     break
                         except:
@@ -169,12 +169,12 @@ class DictionaryPlus(dict):
         """
         return_set = set()
         for i in self.values():
-            if hasattr(i, 'meta') & (type(i.meta) == type({})) & (attribute in i.meta.keys()):
+            if hasattr(i, 'm') & (type(i.m) == type({})) & (attribute in i.m.keys()):
                 try:
-                    return_set.add(getattr(i,'meta')[attribute])
+                    return_set.add(getattr(i,'m')[attribute])
                 except TypeError:
                     try:
-                        for j in getattr(i, 'meta')[attribute]:
+                        for j in getattr(i, 'm')[attribute]:
                             return_set.add(j)
                     except:
                         pass
@@ -189,9 +189,9 @@ class DictionaryPlus(dict):
                         pass
         return return_set
     
-    def metadata(self, listall = False):
+    def meta(self, listall = False):
         meta = set().union(
-            *[set(i.meta.keys()) for i in self.values()])
+            *[set(i.m.keys()) for i in self.values()])
         if listall:
             return {key:self.set_attrib(key) for key in meta}
         else: 
@@ -221,8 +221,8 @@ class Apm(pd.DataFrame):
 
     def __init__(self, *args, **kwargs):
         pd.DataFrame.__init__(self, *args, **kwargs)
-        self.meta = {}
-    _metadata = ['meta']
+        self.m = {}
+    _m = ['m']
 
     @property
     def _constructor(self):
@@ -290,7 +290,7 @@ class Apm(pd.DataFrame):
 class ApmSeries(pd.Series):
     def __init__(self, *args, **kwargs):
         pd.Series.__init__(self, *args, **kwargs)
-    _metadata = ['meta']
+    _m = ['m']
 
     @property
     def _constructor(self):
@@ -354,8 +354,8 @@ class ApmSeries(pd.Series):
 class Sum(Apm):
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
-        self.meta = {}
-    _metadata = ['meta']
+        self.m = {}
+    _m = ['m']
 
     @property
     def _constructor(self):
@@ -416,7 +416,7 @@ class Sum(Apm):
 class SumSeries(ApmSeries):
     def __init__(self, *args, **kwargs):
         ApmSeries.__init__(self, *args, **kwargs)
-    _metadata = ['meta']
+    _m = ['m']
 
     @property
     def _constructor(self):
@@ -429,8 +429,8 @@ class PolarH10(dict):
         self["acc"] = None
         self["rr"] = None
         self["hr"] = None
-        self.meta = {}
-    _metadata = ['meta']
+        self.m = {}
+    _m = ['m']
 
     @property
     def end(self):

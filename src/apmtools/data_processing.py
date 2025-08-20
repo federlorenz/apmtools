@@ -283,16 +283,16 @@ def sum_merge(files: DictionaryPlus):
         file = add_combined_counter(files.show().drop(columns=["cooking_counter"]).join(
             [files.show(i).drop(columns=["cooking_counter"]) for i in range(1, len(files))], sort=True, how="outer"))
 
-        meta_keys = files.metadata()
+        meta_keys = files.meta()
         for k in meta_keys:
             a = []
             for j in files.values():
-                if type(j.meta[k]) == type([]):
-                    for z in j.meta[k]:
+                if type(j.m[k]) == type([]):
+                    for z in j.m[k]:
                         a.append(z)
                 else:
-                    a.append(j.meta[k])
-            file.meta[k] = list(set(a))
+                    a.append(j.m[k])
+            file.m[k] = list(set(a))
 
         return file
 
@@ -663,19 +663,19 @@ def upas_processing(directory, file,interpolate_data=True):
 
     out = Apm(df)
     
-    out.meta['header'] = df1
-    out.meta['upasid'] = parameters["UPASserial"]
-    out.meta['samplename'] = parameters["SampleName"].strip('_')
-    out.meta['cartridgeid'] = parameters["CartridgeID"].strip('_')
-    out.meta['filter'] = Grav_Filter()
+    out.m['header'] = df1
+    out.m['upasid'] = parameters["UPASserial"]
+    out.m['samplename'] = parameters["SampleName"].strip('_')
+    out.m['cartridgeid'] = parameters["CartridgeID"].strip('_')
+    out.m['filter'] = Grav_Filter()
     match parameters["UPASfirmware"][10:19]:
         case "rev_00200":
-            out.meta['filter'].sampled_volume = float(
+            out.m['filter'].sampled_volume = float(
                 parameters["SampledVolumeOffset"].strip())
         case _:
-            out.meta['filter'].sampled_volume = float(
+            out.m['filter'].sampled_volume = float(
                 parameters["SampledVolume"].strip())
-    out.meta["parameters"] = parameters
+    out.m["parameters"] = parameters
 
     return out
 
@@ -775,7 +775,7 @@ def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False)
     df = keep_interval(df, interval)
     if type(file) == type(Sum()):
         df=Sum(df)
-        df.meta = file.meta
+        df.m = file.m
         if timing:
             end = time.process_time()
             print(f"{end-start} seconds")
@@ -836,14 +836,14 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].rename(
                     columns={'value': 'dot_temperature'}, inplace=True)
                 metrics[name] = Sum(metrics[name])
-                metrics[name].meta['rejected'] = False
-                metrics[name].meta["mission_id"] = "-".join(name.split(".")[0].split(
+                metrics[name].m['rejected'] = False
+                metrics[name].m["mission_id"] = "-".join(name.split(".")[0].split(
                     "-")[-5:-1])+"-"+(name.split(".")[0].split("-")[-1].upper())
-                metrics[name].meta["meter_name"] = "-".join(name.split(".")[0].split(
+                metrics[name].m["meter_name"] = "-".join(name.split(".")[0].split(
                     "-")[0:2])
-                metrics[name].meta['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].meta['mission_id']])
-                metrics[name].meta['dotname'] = missions.loc[missions['mission_id']
-                                                         == metrics[name].meta['mission_id']]['meter_name'].iloc[0]
+                metrics[name].m['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].m['mission_id']])
+                metrics[name].m['dotname'] = missions.loc[missions['mission_id']
+                                                         == metrics[name].m['mission_id']]['meter_name'].iloc[0]
             except EmptyDataError:
                 print(f"EmptyDataError metric {i}")
 
@@ -853,7 +853,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
     for key, value in metrics.items():
         value['cooking'] = 0
         for j in range(len(events)):
-            if (events['mission_id'].iloc[j] == value.meta["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
+            if (events['mission_id'].iloc[j] == value.m["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
                 for k in range(len(value)):
                     if (value.index[k] >= events['start_time'].iloc[j]) & (value.index[k] < events['stop_time'].iloc[j]):
                         value.loc[value.index[k],'cooking'] = 1
@@ -866,7 +866,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
         for key, value in metrics.items():
             out = deepcopy(value)
             out = Sum(add_binary_counter(out))
-            out.meta = value.meta
+            out.m = value.m
             metrics[key] = out
         return metrics
 
@@ -883,7 +883,7 @@ def polar_processing(directory):
     sensorID = [i.split("_")[2] for i in files][0]
 
     out = PolarH10()
-    out.meta["sensorID"] = sensorID
+    out.m["sensorID"] = sensorID
 
     data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
             for i in files if i.split("_")[-1] == "ECG"]
@@ -893,7 +893,7 @@ def polar_processing(directory):
         df.set_index('Phone timestamp', inplace=True)
         df.sort_index(inplace=True)
         ecg = Apm(df)
-        ecg.meta["sensorID"] = sensorID
+        ecg.m["sensorID"] = sensorID
         out["ecg"] = ecg
     data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
             for i in files if i.split("_")[-1] == "ACC"]
@@ -903,7 +903,7 @@ def polar_processing(directory):
         df.set_index('Phone timestamp', inplace=True)
         df.sort_index(inplace=True)
         acc = Apm(df)
-        acc.meta["sensorID"] = sensorID
+        acc.m["sensorID"] = sensorID
         out["acc"] = acc
     data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
             for i in files if i.split("_")[-1] == "RR"]
@@ -913,7 +913,7 @@ def polar_processing(directory):
         df.set_index('Phone timestamp', inplace=True)
         df.sort_index(inplace=True)
         rr = Apm(df)
-        rr.meta["sensorID"] = sensorID
+        rr.m["sensorID"] = sensorID
         out["rr"] = rr
     data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
             for i in files if i.split("_")[-1] == "HR"]
@@ -924,7 +924,7 @@ def polar_processing(directory):
         df.sort_index(inplace=True)
         hr = Apm(df)
         hr["HRV [ms]"] = hr["HRV [ms]"].map(hrv_comma_check)
-        hr.meta["sensorID"] = sensorID
+        hr.m["sensorID"] = sensorID
 
         out["hr"] = hr
     return out

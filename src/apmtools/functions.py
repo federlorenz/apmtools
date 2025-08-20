@@ -41,14 +41,14 @@ def subset(dictionary, filter_dict, filter_style='all', condition=None):
         a = {}
         for key, value in return_dict.items():
             for i, j in filter_dict.items():
-                if hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                     try:
                         if type(j) == type(""):
-                            if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                            if eval("value.__getattr__('m')[\""+i+"\"]" + j):
                                 a[key] = value
                                 break
                         else:
-                            if getattr(value,'meta')[i] in j:
+                            if getattr(value,'m')[i] in j:
                                 a[key] = value
                                 break
                     except:
@@ -81,14 +81,14 @@ def subset(dictionary, filter_dict, filter_style='all', condition=None):
                                 break
                     except:
                         pass
-                elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                     try:
                         if type(j) == type(""):
-                            if not eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                            if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
                                 del a[key]
                                 break
                         else:
-                            if getattr(value,'meta')[i] not in j:
+                            if getattr(value,'m')[i] not in j:
                                 del a[key]
                                 break
                     except:
@@ -113,14 +113,14 @@ def subset(dictionary, filter_dict, filter_style='all', condition=None):
                                 break
                     except:
                         pass
-                elif hasattr(value, 'meta') & (type(value.meta) == type({})) & (i in value.meta.keys()):
+                elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                     try:
                         if type(j) == type(""):
-                            if eval("value.__getattr__('meta')[\""+i+"\"]" + j):
+                            if eval("value.__getattr__('m')[\""+i+"\"]" + j):
                                 del a[key]
                                 break
                         else:
-                            if getattr(value, 'meta')[i] in j:
+                            if getattr(value, 'm')[i] in j:
                                 del a[key]
                                 break
                     except:
@@ -161,9 +161,9 @@ def set_attrib(dictionary, attribute):
     """
     return_set = set()
     for i in dictionary.values():
-        if hasattr(i, 'meta') & (type(i.meta) == type({})) & (attribute in i.meta.keys()):
+        if hasattr(i, 'm') & (type(i.m) == type({})) & (attribute in i.m.keys()):
             try:
-                return_set.add(getattr(i,'meta')[attribute])
+                return_set.add(getattr(i,'m')[attribute])
             except:
                 pass
         else:
