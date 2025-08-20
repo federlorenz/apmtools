@@ -222,7 +222,7 @@ class Apm(pd.DataFrame):
     def __init__(self, *args, **kwargs):
         pd.DataFrame.__init__(self, *args, **kwargs)
         self.m = {}
-    _m = ['m']
+    _metadata = ['m']
 
     @property
     def _constructor(self):
@@ -290,7 +290,7 @@ class Apm(pd.DataFrame):
 class ApmSeries(pd.Series):
     def __init__(self, *args, **kwargs):
         pd.Series.__init__(self, *args, **kwargs)
-    _m = ['m']
+    _metadata = ['m']
 
     @property
     def _constructor(self):
@@ -355,7 +355,7 @@ class Sum(Apm):
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
-    _m = ['m']
+    _metadata = ['m']
 
     @property
     def _constructor(self):
@@ -416,7 +416,7 @@ class Sum(Apm):
 class SumSeries(ApmSeries):
     def __init__(self, *args, **kwargs):
         ApmSeries.__init__(self, *args, **kwargs)
-    _m = ['m']
+    _metadata = ['m']
 
     @property
     def _constructor(self):
@@ -430,7 +430,7 @@ class PolarH10(dict):
         self["rr"] = None
         self["hr"] = None
         self.m = {}
-    _m = ['m']
+    _metadata = ['m']
 
     @property
     def end(self):
