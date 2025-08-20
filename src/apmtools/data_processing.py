@@ -940,3 +940,28 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(0,3)):
         df = keep_interval(df, interval)
     return Apm(df)
 
+
+def mpems_processing(directory, file, interpolation=1, interval="10 seconds", interpolate_data=True):
+    numeric = ["corneph", "Temp", "RH","Vector_Sum_Composite___g_unit_"]
+    dtformat1 = '%Y-%m-%d %H:%M:%S'
+    dtformat2 = '%d/%m/%Y %H:%M'
+    df = pd.read_csv(directory+file, index_col=0)
+    if "-" in df.index[0]:
+        df.index = pd.to_datetime(df.index, format=dtformat1)
+    else:
+        df.index = pd.to_datetime(df.index, format=dtformat2)
+        b = pd.Series(df.index)
+        counts = b.value_counts()
+        for j in list(set(b)):
+            length = counts.loc[j]
+            location = b[b == j].index
+            for k in range(length):
+                b.loc[location[k]] = b.loc[location[k]] + \
+                    (dt.timedelta(0, 60)*(k/length))
+        df.index = b
+
+    if interpolate_data:
+        df = interpolate(df, 10, interpolation, pd.Timedelta(
+            '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
+        df = keep_interval(df, interval)
+    return Apm(df)
