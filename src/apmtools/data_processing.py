@@ -84,7 +84,7 @@ def reduce(file, resolution=1):
 
     return gg
 
-def interpolate(file, original_resolution=300, resolution=1, gaps_delta=pd.Timedelta("00:06:00"), binary_columns=[], numeric_columns=[], add_binary_counter=True):
+def interpolate(file, original_resolution=300, resolution=1, gaps_delta=pd.Timedelta("00:06:00"), binary_columns=[], numeric_columns=[], integer_columns = [], add_binary_counter=True):
     """
     resolution can be 1 (for 1 second resolution) or greater (for greater resolution), the latter gives smaller file size. 
     """
@@ -137,6 +137,10 @@ def interpolate(file, original_resolution=300, resolution=1, gaps_delta=pd.Timed
     for y in columns_to_add:
         if y in in_list(numeric_columns, columns_to_add):
             gg[y] = gg[y].infer_objects(copy=False).interpolate() if (gg[y].dtype == np.dtypes.ObjectDType) else gg[y].interpolate()
+
+    for y in columns_to_add:
+        if y in in_list(integer_columns, columns_to_add):
+            gg[y] = gg[y].map(lambda x:round(x))
 
     gaps = []
     for j in range(len(file.index)-1):
@@ -935,6 +939,7 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(0,3)):
     df = pd.read_csv(directory+file,  index_col="date time")
     df.index = pd.to_datetime(df.index.map(
         lambda x: x.split(".")[0]), format=dtformat)
+    df.drop(labels=["name", "desc"], axis=1, inplace=True)
     if interpolation !=None:
         df = interpolate(df, 1, interpolation, pd.Timedelta(
             '00:0:10'), numeric_columns=numeric, add_binary_counter=False)
