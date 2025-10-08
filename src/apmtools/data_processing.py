@@ -934,7 +934,8 @@ def polar_processing(directory):
     return out
 
 def gpslogger_processing(directory, file, interpolation=None, interval=(0,3)):
-    numeric = ["latitude","longitude","accuracy(m)","altitude(m)","geoid_height(m)","speed(m/s)","bearing(deg)"]
+    numeric = ["latitude", "longitude",
+               "accuracy(m)", "altitude(m)", "geoid_height(m)", "speed(m/s)", "bearing(deg)", "sat_used", "sat_inview"]
     integer = ["sat_used","sat_inview"]
     dtformat = '%Y-%m-%d %H:%M:%S'
     df = pd.read_csv(directory+file,  index_col="date time")
