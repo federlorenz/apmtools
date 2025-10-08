@@ -940,8 +940,13 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(list(ran
     integer = ["sat_used","sat_inview"]
     dtformat = '%Y-%m-%d %H:%M:%S'
     df = pd.read_csv(directory+file,  index_col="date time")
-    df.index = pd.to_datetime(df.index.map(
-        lambda x: x.split(".")[0]), format=dtformat)
+    try:
+        df.index = pd.to_datetime(df.index.map(
+            lambda x: x.split(".")[0]), format=dtformat)
+    except ValueError:
+        df.drop(index=df.index[-1], axis=0,inplace=True)
+        df.index = pd.to_datetime(df.index.map(
+            lambda x: x.split(".")[0]), format=dtformat)
     df.drop(labels=["type","name", "desc"], axis=1, inplace=True)
     if interpolation !=None:
         df = interpolate(df, 3, interpolation, pd.Timedelta(
