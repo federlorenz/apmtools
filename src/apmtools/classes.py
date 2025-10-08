@@ -493,14 +493,14 @@ class Grav_Filter():
             return None
         else:
             return self.post_weight - self.pre_weight
-    
+
     @property
     def difference_corrected(self):
         if (self.difference == None) | (self.blanks == None):
             return None
         else:
             return self.difference - self.blanks
-    
+
     @property
     def concentration(self):
         if (self.difference == None) | (self.sampled_volume == None):
