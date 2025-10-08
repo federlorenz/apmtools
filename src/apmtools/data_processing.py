@@ -942,7 +942,7 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(list(ran
     df = pd.read_csv(directory+file,  index_col="date time")
     df.index = pd.to_datetime(df.index.map(
         lambda x: x.split(".")[0]), format=dtformat)
-    df.drop(labels=["name", "desc"], axis=1, inplace=True)
+    df.drop(labels=["type","name", "desc"], axis=1, inplace=True)
     if interpolation !=None:
         df = interpolate(df, 3, interpolation, pd.Timedelta(
             '00:0:10'), numeric_columns=numeric, integer_columns=integer,add_binary_counter=False)
