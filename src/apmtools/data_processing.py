@@ -942,7 +942,7 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(0,3)):
         lambda x: x.split(".")[0]), format=dtformat)
     df.drop(labels=["name", "desc"], axis=1, inplace=True)
     if interpolation !=None:
-        df = interpolate(df, 1, interpolation, pd.Timedelta(
+        df = interpolate(df, 3, interpolation, pd.Timedelta(
             '00:0:10'), numeric_columns=numeric, integer_columns=integer,add_binary_counter=False)
         df = keep_interval(df, interval)
     return Apm(df)
