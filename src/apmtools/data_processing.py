@@ -934,7 +934,7 @@ def polar_processing(directory):
     return out
 
 
-def gpslogger_processing(directory, file, interpolation=None, interval=(list(range(0, 60, 3)), list(range(0, 60, 1)))):
+def gpslogger_processing(directory, file, interpolation=None, interval=(list(range(0, 60, 1)), list(range(0, 60, 3)))):
     numeric = ["latitude", "longitude",
                "accuracy(m)", "altitude(m)", "geoid_height(m)", "speed(m/s)", "bearing(deg)", "sat_used", "sat_inview"]
     integer = ["sat_used","sat_inview"]
