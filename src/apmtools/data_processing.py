@@ -372,6 +372,88 @@ def upas_processing(directory, file,interpolate_data=True):
                              datastart+3], index_col="DateTimeLocal", date_format={'DateTimeLocal': dtformat, 'DateTimeUTC': dtformat})
 
     match parameters["UPASfirmware"][10:19]:
+        case "rev_00206":
+            numeric = ["PumpingFlowFactory",
+                       "OverallFlowFactory",
+                       "SampledVolumeFactory",
+                       "PumpingFlowOffset",
+                       "OverallFlowOffset",
+                       "SampledVolumeOffset",
+                       "FilterDP",
+                       "BatteryCharge",
+                       "AtmoT",
+                       "AtmoP",
+                       "AtmoRH",
+                       "AtmoDensity",
+                       "AtmoAlt",
+                       "GPSQual",
+                       "GPSlat",
+                       "GPSlon",
+                       "GPSalt",
+                       "GPSsat",
+                       "GPSspeed",
+                       "GPShDOP",
+                       "AccelX",
+                       "AccelXVar",
+                       "AccelXMin",
+                       "AccelXMax",
+                       "AccelY",
+                       "AccelYVar",
+                       "AccelYMin",
+                       "AccelYMax",
+                       "AccelZ",
+                       "AccelZVar",
+                       "AccelZMin",
+                       "AccelZMax",
+                       "AccelComplianceCnt",
+                       "AccelComplianceHrs",
+                       "Xup",
+                       "XDown",
+                       "Yup",
+                       "Ydown",
+                       "Zup",
+                       "Zdown",
+                       "StepCount",
+                       "LUX",
+                       "UVindex",
+                       "HighVisRaw",
+                       "LowVisRaw",
+                       "IRRaw",
+                       "UVRaw",
+                       "PMMeasCnt",
+                       "PM1MC",
+                       "PM1MCVar",
+                       "PM2_5MC",
+                       "PM2_5MCVar",
+                       "PM0_5NC",
+                       "PM1NC",
+                       "PM2_5NC",
+                       "PMtypicalParticleSize",
+                       "PM2_5SampledMassFactory",
+                       "PM2_5SampledMassOffset",
+                       "U12T",
+                       "U29T",
+                       "FdpT",
+                       "AccelT",
+                       "U29P",
+                       "PumpPow1",
+                       "PumpV",
+                       "MassFlowFactory",
+                       "MFSVout",
+                       "BattVolt",
+                       "v3_3",
+                       "v5",
+                       "Charging",
+                       "ExtPow",
+                       "FLOWCTL",
+                       "GPSRT",
+                       "SD_DATAW",
+                       "SD_HEADW",
+                       "CO2",
+                       "SCDT",
+                       "SCDRH",
+                       "VOCRaw",
+                       "NOXRaw"]
         case "rev_00200":
             numeric = ["PumpingFlowFactory",
                        "OverallFlowFactory",
@@ -596,6 +678,18 @@ def upas_processing(directory, file,interpolate_data=True):
             pass
 
         match parameters["UPASfirmware"][10:19]:
+            case "rev_00206":
+                pmSensorColumns = ["PMMeasCnt",
+                                   "PM1MC",
+                                   "PM1MCVar",
+                                   "PM2_5MC",
+                                   "PM2_5MCVar",
+                                   "PM0_5NC",
+                                   "PM1NC",
+                                   "PM2_5NC",
+                                   "PMtypicalParticleSize",
+                                   "PM2_5SampledMassFactory",
+                                   "PM2_5SampledMassOffset"]
             case "rev_00200":
                 pmSensorColumns = ["PMMeasCnt",
                                 "PM1MC",
@@ -663,16 +757,17 @@ def upas_processing(directory, file,interpolate_data=True):
                 df[j] = [np.nan if (((df.index[i].minute % 15 != 0) | (
                     df.index[i].second != 0)) & ((df.index[i].hour >= 21) | (
                     df.index[i].hour < 4))) else df[j].iloc[i] for i in range(len(df))]
-            
 
     out = Apm(df)
-    
     out.m['header'] = df1
     out.m['upasid'] = parameters["UPASserial"]
     out.m['samplename'] = parameters["SampleName"].strip('_')
     out.m['cartridgeid'] = parameters["CartridgeID"].strip('_')
     out.m['filter'] = Grav_Filter()
     match parameters["UPASfirmware"][10:19]:
+        case "rev_00206":
+            out.m['filter'].sampled_volume = float(
+                parameters["SampledVolumeOffset"].strip())
         case "rev_00200":
             out.m['filter'].sampled_volume = float(
                 parameters["SampledVolumeOffset"].strip())
@@ -680,7 +775,6 @@ def upas_processing(directory, file,interpolate_data=True):
             out.m['filter'].sampled_volume = float(
                 parameters["SampledVolume"].strip())
     out.m["parameters"] = parameters
-
     return out
 
 def pur_average(pur: pd.DataFrame):
