@@ -922,8 +922,11 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
     metrics = DictionaryPlus()
 
     def change_dotname(x):
-        if ":" in x:
-            return x.replace(":","-")
+        if type(x) is str:
+            if ":" in x:
+                return x.replace(":","-")
+        else:
+            return x
 
     for i in archive.namelist():
         if ("metrics/" in i) & (len(i) > 8):
