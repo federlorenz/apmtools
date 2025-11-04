@@ -921,6 +921,10 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
     ) else pd.read_csv(BytesIO(archive.read('mission.csv')))
     metrics = DictionaryPlus()
 
+    def change_dotname(x):
+        if ":" in x:
+            return x.replace(":","-")
+
     for i in archive.namelist():
         if ("metrics/" in i) & (len(i) > 8):
             name = i.split('/')[1]
@@ -940,8 +944,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].m["meter_name"] = "-".join(name.split(".")[0].split(
                     "-")[0:2])
                 metrics[name].m['tags'] = list(tags['tag'].loc[tags['mission_id']==metrics[name].m['mission_id']])
-                metrics[name].m['dotname'] = missions.loc[missions['mission_id']
-                                                         == metrics[name].m['mission_id']]['meter_name'].iloc[0]
+                metrics[name].m['dotname'] = change_dotname(missions.loc[missions['mission_id'] == metrics[name].m['mission_id']]['meter_name'].iloc[0])
             except EmptyDataError:
                 print(f"EmptyDataError metric {i}")
 
