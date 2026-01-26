@@ -169,7 +169,7 @@ class DictionaryPlus(dict):
         """
         return_set = set()
         for i in self.values():
-            if hasattr(i, 'm') & (type(i.m) == type({})) & (attribute in i.m.keys()):
+            if hasattr(i, 'm') & (type(i.m) is dict) & (attribute in i.m.keys()):
                 try:
                     return_set.add(getattr(i,'m')[attribute])
                 except TypeError:
@@ -178,15 +178,19 @@ class DictionaryPlus(dict):
                             return_set.add(j)
                     except:
                         pass
-            else:
+            elif hasattr(i, attribute):
                 try:
-                    return_set.add(getattr(i,attribute))
+                    return_set.add(getattr(i, attribute))
                 except TypeError:
                     try:
                         for j in getattr(i, attribute):
                             return_set.add(j)
                     except:
                         pass
+                except AttributeError:
+                    pass
+            else:
+                pass
         return return_set
     
     def meta(self, listall = False):
