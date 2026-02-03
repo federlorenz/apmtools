@@ -207,107 +207,73 @@ def keep_interval(file,interval=None):
             file.index[i].minute in interval[0]) else False for i in range(len(file))]]
     return df
 
-def add_binary_counter(file, gaps_delta=pd.Timedelta("00:05:00"), binary_columns=["cooking"]):
+
+def add_binary_counter(file, gaps_delta=pd.Timedelta("00:30:00"), binary_column="cooking"):
     """
     """
-    gg = pd.DataFrame()
-    gg["Datetime"] = file.index
-    gg = gg.set_index("Datetime")
+    gg = deepcopy(file)
 
-    for k in file.columns:
-        s = []
-        for j in gg.index:
-            if j in file.index:
-                s.append(file[k].loc[j])
-            else:
-                s.append(None)
-        gg[k] = s
+    binary = gg[[i for i in gg.columns if binary_column in i]].any(axis=1)
 
-    for y in binary_columns:
-
-        counter = []
-        counter_n = 0
-        if gg[y].iloc[0] == 1:
+    counter = []
+    counter_n = 0
+    if binary.iloc[0]:
+        counter_n += 1
+        counter.append(counter_n)
+    else:
+        counter.append(np.nan)
+    for k in range(1, len(binary)):
+        if (binary.iloc[k] == 1) & (binary.iloc[k-1] == 0):
             counter_n = counter_n + 1
+            counter.append(counter_n)
+        elif (binary.iloc[k] == 1) & (binary.iloc[k-1] == 1) & ((binary.index[k]-binary.index[k-1]) > gaps_delta):
+            counter_n = counter_n + 1
+            counter.append(counter_n)
+        elif (binary.iloc[k] == 1) & (binary.iloc[k-1] == 1) & ((binary.index[k]-binary.index[k-1]) <= gaps_delta):
             counter.append(counter_n)
         else:
             counter.append(np.nan)
-        for k in range(1, len(gg)):
-            if (gg[y].iloc[k] == 1) & (gg[y].iloc[k-1] == 0):
-                counter_n = counter_n + 1
-                counter.append(counter_n)
-            elif (gg[y].iloc[k] == 1) & (gg[y].iloc[k-1] == 1) & ((gg.index[k]-gg.index[k-1])>gaps_delta*2):
-                counter_n = counter_n + 1                
-                counter.append(counter_n)
-            elif (gg[y].iloc[k] == 1) & (gg[y].iloc[k-1] == 1) & ((gg.index[k]-gg.index[k-1]) <= gaps_delta*2):
-                counter.append(counter_n)
-            else:
-                counter.append(np.nan)
-        gg[y+"_counter"] = counter
+    gg[binary_column+"_counter"] = counter
 
     return gg
 
-def add_combined_counter(file, gaps_delta=pd.Timedelta("00:05:00"), binary_columns=["cooking"]):
-    """
-    """
 
-    counter = []
-
-    for y in binary_columns:
-
-        set_columns = in_list([y], file.columns)
-
-        counter = []
-        counter_n = 0
-        if file[set_columns].iloc[0].sum() != 0:
-            counter_n = counter_n + 1
-            counter.append(counter_n)
-        else:
-            counter.append(np.nan)
-        for k in range(1, len(file)):
-            if (file[set_columns].iloc[k].sum() != 0) & (file[set_columns].iloc[k-1].sum() == 0):
-                counter_n = counter_n + 1
-                counter.append(counter_n)
-            elif (file[set_columns].iloc[k].sum() != 0) & (file[set_columns].iloc[k-1].sum() != 0) & ((file.index[k]-file.index[k-1]) > gaps_delta*2):
-                counter_n = counter_n + 1
-                counter.append(counter_n)
-            elif (file[set_columns].iloc[k].sum() != 0) & (file[set_columns].iloc[k-1].sum() != 0) & ((file.index[k]-file.index[k-1]) <= gaps_delta*2):
-                counter.append(counter_n)
-            else:
-                counter.append(np.nan)
-        file[y+"_counter"] = counter
-
-    return file
-
-def sum_merge(files: DictionaryPlus):
+def gen_merge(files: DictionaryPlus, drop=None):
+    if drop != None:
+        files = DictionaryPlus({k: v.drop(columns=[drop]) for k, v in files.items()})
     if len(files) == 1:
         return files.show()
-
     else:
-        file = add_combined_counter(files.show().drop(columns=["cooking_counter"]).join(
-            [files.show(i).drop(columns=["cooking_counter"]) for i in range(1, len(files))], sort=True, how="outer"))
-
-        meta_keys = files.meta()
-        for k in meta_keys:
-            a = []
-            for j in files.values():
-                if type(j.m[k]) == type([]):
-                    for z in j.m[k]:
-                        a.append(z)
-                else:
-                    a.append(j.m[k])
-            file.m[k] = list(set(a))
-
-        return file
-
-def gen_merge(files):
-    if len(files) == 1:
-        file = files[0]
-    else:
-        file = files[0].join([i for i in files[1:]], sort=True, how="inner")
-
+        file = files.show().join([files.show(i) for i in range(1, len(files))], sort=True, how="outer")
     return file
 
+
+def sum_merge(files: DictionaryPlus):
+
+    if len(files) == 1:
+        file = files.show()
+    else:
+        file = gen_merge(files, drop="cooking_counter")
+        file = add_binary_counter(file)
+
+    meta_keys = files.meta()
+    for k in meta_keys:
+        a = []
+        for value in files.values():
+            if type(value.m[k]) is list:
+                for z in value.m[k]:
+                    a.append(z)
+            else:
+                a.append(value.m[k])
+        a = list(set(a))
+        if len(a) == 0:
+            file.m[k] = None
+        elif len(a) == 1:
+            file.m[k] = a[0]
+        else:
+            file.m[k] = a
+
+    return file
 ##############
 
 def blank_filter(df, variables):
