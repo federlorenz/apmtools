@@ -208,29 +208,30 @@ def keep_interval(file,interval=None):
     return df
 
 
-def add_binary_counter(file, gaps_delta=pd.Timedelta("00:30:00"), binary_column="cooking"):
+def add_binary_counter(file, gaps_delta=pd.Timedelta("00:06:00"), binary_column="cooking"):
     """
     """
     gg = deepcopy(file)
 
     binary = gg[[i for i in gg.columns if binary_column in i]].any(axis=1)
+    last_cooking = dt.datetime(1900,0,0,0,0,0)
 
     counter = []
     counter_n = 0
     if binary.iloc[0]:
         counter_n += 1
         counter.append(counter_n)
+        last_cooking = binary.index[0]
     else:
         counter.append(np.nan)
     for k in range(1, len(binary)):
-        if (binary.iloc[k] == 1) & (binary.iloc[k-1] == 0):
+        if (binary.iloc[k] == 1) & (binary.index[k]-last_cooking>=gaps_delta):
             counter_n = counter_n + 1
             counter.append(counter_n)
-        elif (binary.iloc[k] == 1) & (binary.iloc[k-1] == 1) & ((binary.index[k]-binary.index[k-1]) > gaps_delta):
-            counter_n = counter_n + 1
+            last_cooking = binary.index[k]
+        elif (binary.iloc[k] == 1) & (binary.index[k]-last_cooking<gaps_delta):
             counter.append(counter_n)
-        elif (binary.iloc[k] == 1) & (binary.iloc[k-1] == 1) & ((binary.index[k]-binary.index[k-1]) <= gaps_delta):
-            counter.append(counter_n)
+            last_cooking = binary.index[k]
         else:
             counter.append(np.nan)
     gg[binary_column+"_counter"] = counter
