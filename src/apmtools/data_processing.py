@@ -214,7 +214,7 @@ def add_binary_counter(file, gaps_delta=pd.Timedelta("00:06:00"), binary_column=
     gg = deepcopy(file)
 
     binary = gg[[i for i in gg.columns if binary_column in i]].any(axis=1)
-    last_cooking = dt.datetime(1900,0,0,0,0,0)
+    last_cooking = dt.datetime(1900,1,1)
 
     counter = []
     counter_n = 0
