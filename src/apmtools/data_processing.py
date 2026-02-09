@@ -249,13 +249,10 @@ def gen_merge(files: DictionaryPlus, drop=None):
     return file
 
 
-def sum_merge(files: DictionaryPlus):
+def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00")):
 
-    if len(files) == 1:
-        file = files.show()
-    else:
-        file = gen_merge(files, drop="cooking_counter")
-        file = add_binary_counter(file)
+    file = gen_merge(files, drop="cooking_counter")
+    file = add_binary_counter(file,gaps_delta=gaps_delta)
 
     meta_keys = files.meta()
     for k in meta_keys:
