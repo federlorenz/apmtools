@@ -235,9 +235,20 @@ def add_binary_counter(file, gaps_delta=pd.Timedelta("00:06:00"), binary_column=
         else:
             counter.append(np.nan)
     gg[binary_column+"_counter"] = counter
-
     return gg
 
+def add_stacking(df):
+    file = deepcopy(df)
+    stacking = []
+    columns = [column for column in list(
+        file.columns[:-1]) if "cooking" in column]
+    for i in range(len(file)):
+        if pd.isna(file["cooking_counter"].iloc[i]):
+            stacking.append(np.nan)
+        else:
+            stacking.append(file[columns].iloc[i].sum())
+    file["stacking"] = stacking
+    return file
 
 def gen_merge(files: DictionaryPlus, drop=None):
     if drop != None:
@@ -249,10 +260,12 @@ def gen_merge(files: DictionaryPlus, drop=None):
     return file
 
 
-def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00")):
+def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00"),stacking=False):
 
     file = gen_merge(files, drop="cooking_counter")
     file = add_binary_counter(file,gaps_delta=gaps_delta)
+    if stacking:
+        file = add_stacking(file)
 
     meta_keys = files.meta()
     for k in meta_keys:
