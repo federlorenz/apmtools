@@ -946,7 +946,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
     
     if return_csv:
         for key,value in metrics.items():
-            value.to_csv(key)
+            value.to_csv(f"{key.split(".")[0]}.csv")
     
     if return_data:
         for key, value in metrics.items():
