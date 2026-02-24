@@ -920,6 +920,8 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                             to_datetime_metrics)
                     case ".gz":
                         metrics[name] = pd.read_json(gzip.open(BytesIO(archive.read(i)), mode="rt")).set_index("timestamp")
+                        metrics[name].index = metrics[name].index.map(
+                            to_datetime_metrics)
                 to_be_dropped = list(set(metrics[name].columns).intersection(set(["channel","sensor_type_id","created_at","download_time","start_time","mission_id"])))
                 metrics[name].drop(
                     axis=1, labels=to_be_dropped, inplace=True)
