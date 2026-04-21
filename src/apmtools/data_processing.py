@@ -942,7 +942,7 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
     for key, value in metrics.items():
         value['cooking'] = 0
         for j in range(len(events)):
-            if (events['mission_id'].iloc[j] == value.m["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
+            if (events['mission_id'].iloc[j].upper() == value.m["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
                 for k in range(len(value)):
                     if (value.index[k] >= events['start_time'].iloc[j]) & (value.index[k] < events['stop_time'].iloc[j]):
                         value.loc[value.index[k],'cooking'] = 1
