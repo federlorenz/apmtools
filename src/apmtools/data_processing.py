@@ -252,28 +252,31 @@ def add_stacking(df):
     file["stacking"] = stacking
     return file
 
-def gen_merge(files: DictionaryPlus, drop=None):
+def gen_merge(files: DictionaryPlus, drop=None, how="outer"):
     if drop != None:
         files = DictionaryPlus({k: v.drop(columns=[drop]) for k, v in files.items()})
     if len(files) == 1:
         return files.show()
     else:
-        file = files.show().join([files.show(i) for i in range(1, len(files))], sort=True, how="outer")
+        file = files.show().join([files.show(i) for i in range(1, len(files))], sort=True, how=how)
     return file
 
 
-def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00"),stacking=False):
+def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00"),stacking=False,how="outer"):
 
-    file = gen_merge(files, drop="cooking_counter")
-    file = add_binary_counter(file,gaps_delta=gaps_delta)
-    if stacking:
-        file = add_stacking(file)
+    file = gen_merge(files, drop="cooking_counter",how=how)
+    if len(file)>0:
+        file = add_binary_counter(file, gaps_delta=gaps_delta)
+        if stacking:
+            file = add_stacking(file)
 
     meta_keys = files.meta()
     for k in meta_keys:
         a = []
         for value in files.values():
-            if type(value.m[k]) is list:
+            if k not in value.m.keys():
+                a.append(None)
+            elif type(value.m[k]) is list:
                 for z in value.m[k]:
                     a.append(z)
             else:
