@@ -944,11 +944,14 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
 
     for key, value in metrics.items():
         value['cooking'] = 0
-        for j in range(len(events)):
-            if (events['mission_id'].iloc[j].upper() == value.m["mission_id"]) and (events['processor_name'].iloc[j] in processor_name):
-                for k in range(len(value)):
-                    if (value.index[k] >= events['start_time'].iloc[j]) & (value.index[k] < events['stop_time'].iloc[j]):
-                        value.loc[value.index[k],'cooking'] = 1
+        events_sub = events.loc[(events["mission_id"].map(
+            str.upper) == value.m["mission_id"])]
+        events_sub = events_sub.loc[[True if events_sub['processor_name'].iloc[i] in processor_name else False for i in range(len(events_sub))]]
+        for j in range(len(events_sub)):
+            start_time = events_sub['start_time'].iloc[j]
+            end_time = events_sub['stop_time'].iloc[j]
+            value.loc[(value.index >= start_time) & (
+                value.index < end_time), 'cooking'] = 1
     
     if return_csv:
         for key,value in metrics.items():
