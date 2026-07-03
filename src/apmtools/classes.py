@@ -426,6 +426,116 @@ class SumSeries(ApmSeries):
     def _constructor(self):
         return SumSeries
 
+class Grav_Filter():
+
+    def __init__(self, *args, **kwargs):
+        self.filterid = None
+        self.pre_weight = None
+        self.pre_weightsd = None
+        self.post_weight = None
+        self.post_weightsd = None
+        self.blanks = None
+        self.sampled_volume = None
+        self.concentration_manual_input = None
+
+    @property
+    def difference(self):
+        if (self.pre_weight == None) | (self.post_weight == None):
+            return None
+        else:
+            return self.post_weight - self.pre_weight
+
+    @property
+    def difference_corrected(self):
+        if (self.difference == None) | (self.blanks == None):
+            return None
+        else:
+            return self.difference - self.blanks
+
+    @property
+    def concentration(self):
+        if (self.difference == None) | (self.sampled_volume == None):
+            return None
+        else:
+            return self.difference/self.sampled_volume
+
+    @property
+    def concentration_corrected(self):
+        if (self.difference_corrected == None) | (self.sampled_volume == None):
+            return None
+        else:
+            return self.difference_corrected/self.sampled_volume
+
+class Upas(Apm):
+    def __init__(self, *args, **kwargs):
+        Apm.__init__(self, *args, **kwargs)
+        self.m = {}
+        self.m["filter"] = Grav_Filter()
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return Upas
+
+    @property
+    def _constructor_sliced(self):
+        return UpasSeries
+
+class UpasSeries(ApmSeries):
+    def __init__(self, *args, **kwargs):
+        ApmSeries.__init__(self, *args, **kwargs)
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return UpasSeries
+
+class Lascar(Apm):
+    def __init__(self, *args, **kwargs):
+        Apm.__init__(self, *args, **kwargs)
+        self.m = {}
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return Lascar
+
+    @property
+    def _constructor_sliced(self):
+        return LascarSeries
+
+class LascarSeries(ApmSeries):
+    def __init__(self, *args, **kwargs):
+        ApmSeries.__init__(self, *args, **kwargs)
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return LascarSeries
+
+class Purple(Apm):
+    def __init__(self, *args, **kwargs):
+        Apm.__init__(self, *args, **kwargs)
+        self.m = {}
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return Purple
+
+    @property
+    def _constructor_sliced(self):
+        return PurpleSeries
+
+class PurpleSeries(ApmSeries):
+    def __init__(self, *args, **kwargs):
+        ApmSeries.__init__(self, *args, **kwargs)
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return PurpleSeries
+
 class PolarH10(dict):
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
@@ -478,46 +588,6 @@ class PolarH10(dict):
                     time_start=time_start, time_end=time_end, date_start=date_start, date_end=date_end, day=day)
 
         return out
-
-class Grav_Filter():
-
-    def __init__(self, *args, **kwargs):
-        self.filterid = None
-        self.pre_weight = None
-        self.pre_weightsd = None
-        self.post_weight = None
-        self.post_weightsd = None
-        self.blanks = None
-        self.sampled_volume = None
-        self.concentration_manual_input = None
-
-    @property
-    def difference(self):
-        if (self.pre_weight == None) | (self.post_weight ==  None):
-            return None
-        else:
-            return self.post_weight - self.pre_weight
-
-    @property
-    def difference_corrected(self):
-        if (self.difference == None) | (self.blanks == None):
-            return None
-        else:
-            return self.difference - self.blanks
-
-    @property
-    def concentration(self):
-        if (self.difference == None) | (self.sampled_volume == None):
-            return None
-        else:
-            return self.difference/self.sampled_volume
-
-    @property
-    def concentration_corrected(self):
-        if (self.difference_corrected == None) | (self.sampled_volume == None):
-            return None
-        else:
-            return self.difference_corrected/self.sampled_volume
 
 class Plot():
     def __init__(self):
