@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
-from .classes import Apm, Sum, PolarH10, DictionaryPlus, Grav_Filter
+from .classes import Apm, Sum, PolarH10, DictionaryPlus, Grav_Filter, Upas, Lascar, Purple
 from zipfile import ZipFile
 from copy import deepcopy
 from pandas.errors import EmptyDataError
@@ -740,7 +740,7 @@ def upas_processing(directory, file,interpolate_data=True):
                     df.index[i].second != 0)) & ((df.index[i].hour >= 21) | (
                     df.index[i].hour < 4))) else df[j].iloc[i] for i in range(len(df))]
 
-    out = Apm(df)
+    out = Upas(df)
     out.m['header'] = df1
     out.m['upasid'] = parameters["UPASserial"]
     out.m['samplename'] = parameters["SampleName"].strip('_')
@@ -832,7 +832,7 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
         df = keep_interval(df, interval)
     df.index = df.index + timezone_shift
     pur_average(df)
-    return Apm(df)
+    return Purple(df)
 
 def lascar_processing(directory, file, interpolation=1,interval="30 seconds", interpolate_data=True):
     numeric = ['CO(ppm)']
@@ -843,7 +843,7 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds", in
         df = interpolate(df, 30, interpolation, pd.Timedelta(
             '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
         df = keep_interval(df, interval)
-    return Apm(df)
+    return Lascar(df)
 
 def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False):
     if timing:
