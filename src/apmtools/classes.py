@@ -226,6 +226,7 @@ class Apm(pd.DataFrame):
     def __init__(self, *args, **kwargs):
         pd.DataFrame.__init__(self, *args, **kwargs)
         self.m = {}
+        self.variable = None
     _metadata = ['m']
 
     @property
@@ -291,11 +292,21 @@ class Apm(pd.DataFrame):
 
         return self
 
+    def func(self,function=lambda x:x, variable=None):
+        if self.variable == None:
+            if variable==None:
+                return None
+            else:
+                return function(self[variable])
+        else:
+            return function(self[self.variable])       
+
 class ApmSeries(pd.Series):
     def __init__(self, *args, **kwargs):
         pd.Series.__init__(self, *args, **kwargs)
+        
     _metadata = ['m']
-
+    
     @property
     def _constructor(self):
         return ApmSeries
@@ -471,6 +482,7 @@ class Upas(Apm):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
         self.m["filter"] = Grav_Filter()
+        self.variable = "PM2_5MC"
     _metadata = ['m']
 
     @property
@@ -494,7 +506,9 @@ class Lascar(Apm):
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
+        self.variable = "CO(ppm)"
     _metadata = ['m']
+    
 
     @property
     def _constructor(self):
@@ -517,6 +531,7 @@ class Purple(Apm):
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
+        self.variable = "pm_adj"
     _metadata = ['m']
 
     @property
