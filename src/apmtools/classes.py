@@ -297,9 +297,9 @@ class Apm(pd.DataFrame):
             if variable==None:
                 return None
             else:
-                return function(self[variable])
+                return function(self[variable].dropna())
         else:
-            return function(self[self.variable])       
+            return function(self[self.variable].dropna())       
 
 class ApmSeries(pd.Series):
     def __init__(self, *args, **kwargs):
