@@ -177,7 +177,7 @@ def set_attrib(dictionary, attribute):
     return return_set
 
 
-def __scan(directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
+def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
 
     if levels_dict == None:
         levels_dict = dict(zip(levels, [None]*len(levels)))
@@ -244,11 +244,12 @@ def __scan(directory="./", levels=[], level=0, monitor=None, levels_dict=None, g
                             f"processing of purple air directory {directory}{j} failed.")
             else:
                 levels_dict[levels[level]] = j
-                scan(directory=f"{directory}{j}/", levels=levels,
-                     level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, output=output)
+                __scan(directory=f"{directory}{j}/", levels=levels,
+                       level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, output=output)
 
 
 def scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
+
     data = DictionaryPlus()
     __scan(directory=directory, levels=levels, level=level, monitor=monitor, levels_dict=levels_dict,
            gmt_timezone_shift=gmt_timezone_shift, output=data, interpolate=interpolate)
