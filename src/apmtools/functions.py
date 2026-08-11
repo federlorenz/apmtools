@@ -1,6 +1,7 @@
 import os as os
 import uuid as uuid
 from .classes import DictionaryPlus
+from .data_processing import upas_processing, lascar_processing, purple_processing
 from typing import Dict, Tuple, List
 import math
 import bokeh.plotting as bopl
@@ -11,6 +12,7 @@ from bokeh.models import ColumnDataSource, RangeTool
 from bokeh.models import (LinearAxis, Range1d)
 from bokeh.palettes import Dark2_5 as palette
 import itertools
+from datetime import timedelta
 
 def show(dictionary, number=0):
     """
@@ -174,14 +176,80 @@ def set_attrib(dictionary, attribute):
     
     return return_set
 
-def scan(directory, function, extension, target_dictionary):
-    for j in os.listdir(directory):
-        if j.split('.')[-1] == extension:
-            processed = function(directory, j)
-            target_dictionary[str(uuid.uuid4())] = processed
-        elif (len(j.split('.'))) == 1:
-            d = directory+j+'/'
-            scan(d, function, extension, target_dictionary)
-        else:
-            pass
 
+def __scan(directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
+
+    if levels_dict == None:
+        levels_dict = dict(zip(levels, [None]*len(levels)))
+    elements = os.listdir(directory)
+
+    def match_monitor(x, monitor):
+        if x.lower() in ["upas", "upass", "upas monitor"]:
+            monitor = "upas"
+        if x.lower() in ["lascar", "las"]:
+            monitor = "lascar"
+        if x.lower() in ["purple", "pair", "purple air", "purpleair", "purplea"]:
+            monitor = "purple"
+        else:
+            monitor = monitor
+        return monitor
+
+    for j in elements:
+        if (j.split(".")[-1] == "py") and (j != "py"):
+            pass
+        elif os.path.isfile(f"{directory}{j}"):
+            if monitor == None:
+                print(f"file {directory}{j} is not associated with any monitor type. If this is a monitoring file, please make sure to place the file below a directory identifying the monitor type")
+            else:
+                match monitor:
+                    case "upas":
+                        try:
+                            processed = upas_processing(
+                                directory, file=j, interpolate_data=interpolate)
+                            for k, v in levels_dict.items():
+                                processed.m[k] = v.lower()
+                            processed.m["rejected"] = False
+                            processed.m["filename"] = j
+                            output[str(uuid.uuid4())] = processed
+                        except:
+                            print(
+                                f"processing of file {directory}{j} failed. Is this a {monitor} file?")
+                    case "lascar":
+                        try:
+                            processed = lascar_processing(
+                                directory, file=j, interpolate_data=interpolate)
+                            for k, v in levels_dict.items():
+                                processed.m[k] = v.lower()
+                            processed.m["rejected"] = False
+                            processed.m["filename"] = j
+                            output[str(uuid.uuid4())] = processed
+                        except:
+                            print(
+                                f"processing of file {directory}{j} failed. Is this a {monitor} file?")
+
+        elif os.path.isdir(f"{directory}{j}"):
+            monitor = match_monitor(j, monitor)
+            if monitor == "purple" and (False not in set([os.path.isfile(f"{directory}{j}/{z}") for z in os.listdir(f"{directory}{j}/")])):
+                    try:
+
+                        processed = purple_processing(
+                            f"{directory}{j}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
+                        for k, v in levels_dict.items():
+                            processed.m[k] = v.lower()
+                        processed.m["rejected"] = False
+                        processed.m["filename"] = j
+                        output[str(uuid.uuid4())] = processed
+                    except:
+                        print(
+                            f"processing of purple air directory {directory}{j} failed.")
+            else:
+                levels_dict[levels[level]] = j
+                scan(directory=f"{directory}{j}/", levels=levels,
+                     level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, output=output)
+
+
+def scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
+    data = DictionaryPlus()
+    __scan(directory=directory, levels=levels, level=level, monitor=monitor, levels_dict=levels_dict,
+           gmt_timezone_shift=gmt_timezone_shift, output=data, interpolate=interpolate)
+    return data
