@@ -243,6 +243,8 @@ def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt
                     except:
                         print(
                             f"processing of purple air directory {directory}{j} failed.")
+            elif (len(os.listdir(f"{directory}{j}/")) == 0):
+                pass
             else:
                 levels_dict[levels[level]] = j
                 __scan(directory=f"{directory}{j}/", levels=levels,
