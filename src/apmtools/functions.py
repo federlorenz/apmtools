@@ -230,19 +230,19 @@ def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt
         elif os.path.isdir(f"{directory}{j}"):
             monitor = match_monitor(j, monitor)
             if monitor == "purple" and (False not in set([os.path.isfile(f"{directory}{j}/{z}") for z in os.listdir(f"{directory}{j}/")])) and (len(os.listdir(f"{directory}{j}/"))>0):
-                    try:
-
-                        processed = purple_processing(
-                            f"{directory}{j}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
-                        for k, v in levels_dict.items():
-                            if v not in ["None", "_", "-"]:
-                                processed.m[k] = v
-                        processed.m["rejected"] = False
-                        processed.m["filename"] = j
-                        output[str(uuid.uuid4())] = processed
-                    except:
-                        print(
-                            f"processing of purple air directory {directory}{j} failed.")
+                levels_dict[levels[level]] = j
+                try:
+                    processed = purple_processing(
+                        f"{directory}{j}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
+                    for k, v in levels_dict.items():
+                        if v not in ["None", "_", "-"]:
+                            processed.m[k] = v
+                    processed.m["rejected"] = False
+                    processed.m["filename"] = j
+                    output[str(uuid.uuid4())] = processed
+                except:
+                    print(
+                        f"processing of purple air directory {directory}{j} failed.")
             elif (len(os.listdir(f"{directory}{j}/")) == 0):
                 pass
             else:
