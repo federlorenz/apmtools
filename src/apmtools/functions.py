@@ -24,7 +24,6 @@ def show(dictionary, number=0):
     except:
         print("something's wrong")
 
-
 def subset(dictionary, filter_dict, filter_style='all', condition=None):
     """
         Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
@@ -176,7 +175,6 @@ def set_attrib(dictionary, attribute):
     
     return return_set
 
-
 def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
 
     if levels_dict == None:
@@ -207,7 +205,8 @@ def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt
                             processed = upas_processing(
                                 directory, file=j, interpolate_data=interpolate)
                             for k, v in levels_dict.items():
-                                processed.m[k] = v.lower()
+                                if v not in ["None","_","-"]:
+                                    processed.m[k] = v
                             processed.m["rejected"] = False
                             processed.m["filename"] = j
                             output[str(uuid.uuid4())] = processed
@@ -219,7 +218,8 @@ def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt
                             processed = lascar_processing(
                                 directory, file=j, interpolate_data=interpolate)
                             for k, v in levels_dict.items():
-                                processed.m[k] = v.lower()
+                                if v not in ["None", "_", "-"]:
+                                    processed.m[k] = v
                             processed.m["rejected"] = False
                             processed.m["filename"] = j
                             output[str(uuid.uuid4())] = processed
@@ -229,13 +229,14 @@ def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt
 
         elif os.path.isdir(f"{directory}{j}"):
             monitor = match_monitor(j, monitor)
-            if monitor == "purple" and (False not in set([os.path.isfile(f"{directory}{j}/{z}") for z in os.listdir(f"{directory}{j}/")])):
+            if monitor == "purple" and (False not in set([os.path.isfile(f"{directory}{j}/{z}") for z in os.listdir(f"{directory}{j}/")])) and (len(os.listdir(f"{directory}{j}/"))>0):
                     try:
 
                         processed = purple_processing(
                             f"{directory}{j}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
                         for k, v in levels_dict.items():
-                            processed.m[k] = v.lower()
+                            if v not in ["None", "_", "-"]:
+                                processed.m[k] = v
                         processed.m["rejected"] = False
                         processed.m["filename"] = j
                         output[str(uuid.uuid4())] = processed
@@ -246,7 +247,6 @@ def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt
                 levels_dict[levels[level]] = j
                 __scan(directory=f"{directory}{j}/", levels=levels,
                        level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, output=output)
-
 
 def scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
 
