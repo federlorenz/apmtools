@@ -13,6 +13,216 @@ import os as os
 import xyzservices.providers as xyz
 
 
+class DictionaryPlus(dict):
+    def __init__(self, *args, **kwargs):
+        dict.__init__(self, *args, **kwargs)
+        self.filter_key = None
+
+    @property
+    def _constructor(self):
+        return DictionaryPlus
+
+    def show(self, number=0, key=None):
+        """
+        return an element of a dictionary
+        If number is not specified, returns the values associated with the first key
+        """
+        try:
+            if key != None:
+                return (self.subset({self.filter_key: [key]}).show())
+            else:
+                if type(number) == type(""):
+                    return (self.subset({self.filter_key: [number]}).show())
+                else:
+                    return (self[list(self.keys())[number]])
+        except:
+            print("something's wrong")
+
+    def subset(self, filter_dict={}, filter_style='all', condition=None):
+        """
+        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
+        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
+            attrib is an attribute of the elements of dictionary, and attrib_value is a list
+            of the values of such attrib that the elements of returned dictionary can have
+        specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
+        """
+        if type(filter_dict) != type(dict()):
+            print("subset function error: type filter_dict should be dict")
+            return
+        return_dict = copy.deepcopy(self)
+        a = {}
+
+        if filter_style == 'all':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if not eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, i) not in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] not in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        del a[key]
+                        break
+
+        if filter_style == 'any':
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                                    a[key] = value
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] in j:
+                                    a[key] = value
+                                    break
+                        except:
+                            pass
+                    else:
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    a[key] = value
+                                    break
+                            else:
+                                if getattr(value, i) in j:
+                                    a[key] = value
+                                    break
+                        except:
+                            pass
+
+        if filter_style == 'negative':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, i) in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        break
+
+        if condition != None:
+            if a == {}:
+                for key, value in return_dict.items():
+                    if condition(value):
+                        a[key] = value
+                a = DictionaryPlus(a)
+                a.filter_key = self.filter_key
+                return a
+            else:
+                b = {}
+                for key, value in a.items():
+                    if condition(value):
+                        b[key] = value
+                b = DictionaryPlus(b)
+                b.filter_key = self.filter_key
+                return b
+        else:
+            a = DictionaryPlus(a)
+            a.filter_key = self.filter_key
+            return a
+
+    def set_attrib(self, attribute):
+        """
+        returns the set of attribute values for dictionary
+        """
+        return_set = set()
+        for i in self.values():
+            if hasattr(i, 'm') & (type(i.m) is dict) & (attribute in i.m.keys()):
+                try:
+                    return_set.add(getattr(i, 'm')[attribute])
+                except TypeError:
+                    try:
+                        for j in getattr(i, 'm')[attribute]:
+                            return_set.add(j)
+                    except:
+                        pass
+            elif hasattr(i, attribute):
+                try:
+                    return_set.add(getattr(i, attribute))
+                except TypeError:
+                    try:
+                        for j in getattr(i, attribute):
+                            return_set.add(j)
+                    except:
+                        pass
+                except AttributeError:
+                    pass
+            else:
+                pass
+        return return_set
+
+    def meta(self, listall=False):
+        meta = set().union(
+            *[set(i.m.keys()) for i in self.values()])
+        if listall:
+            return {key: self.set_attrib(key) for key in meta}
+        else:
+            return meta
+
+    def apply_func(self, func, verbose=False):
+        a = DictionaryPlus()
+        for key, value in self.items():
+            a[key] = func(value)
+            if verbose:
+                print(key)
+        a.filter_key = self.filter_key
+        return a
+
+    def len(self):
+        a = len(self)
+        return a
+
+    def concat_var(self, variable=None):
+        if variable != None:
+            a = self.apply_func(lambda x: x[variable])
+        else:
+            a = self
+        return pd.concat(a)
+
+
 class Dataset(DictionaryPlus):
     
     def __init__(self, *args, **kwargs):
@@ -254,216 +464,6 @@ class Dataset(DictionaryPlus):
                 out[z[0]] = z[1]
             return out
 
-
-
-class DictionaryPlus(dict):
-    def __init__(self, *args, **kwargs):
-        dict.__init__(self, *args, **kwargs)
-        self.filter_key = None
-
-    @property
-    def _constructor(self):
-        return DictionaryPlus
-
-    def show(self, number=0, key=None):
-        """
-        return an element of a dictionary
-        If number is not specified, returns the values associated with the first key
-        """
-        try:
-            if key!=None:
-                return (self.subset({self.filter_key:[key]}).show())
-            else:
-                if type(number) == type(""):
-                    return (self.subset({self.filter_key: [number]}).show())
-                else:
-                    return (self[list(self.keys())[number]])
-        except:
-            print("something's wrong")
-
-    def subset(self, filter_dict={}, filter_style='all', condition=None):
-        """
-        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
-        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
-            attrib is an attribute of the elements of dictionary, and attrib_value is a list
-            of the values of such attrib that the elements of returned dictionary can have
-        specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
-        """
-        if type(filter_dict) != type(dict()):
-            print("subset function error: type filter_dict should be dict")
-            return
-        return_dict = copy.deepcopy(self)
-        a = {}
-
-        if filter_style == 'all':
-            a = {key: value for key, value in return_dict.items()}
-            for key, value in return_dict.items():
-                for i, j in filter_dict.items():
-                    if hasattr(value, i):
-                        try:
-                            if type(j) == type(""):
-                                if not eval("value.__getattr__(\""+i+"\")" + j):
-                                    del a[key]
-                                    break
-                            else:
-                                if getattr(value, i) not in j:
-                                    del a[key]
-                                    break
-                        except:
-                            pass
-                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
-                        try:
-                            if type(j) == type(""):
-                                if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
-                                    del a[key]
-                                    break
-                            else:
-                                if getattr(value, 'm')[i] not in j:
-                                    del a[key]
-                                    break
-                        except:
-                            pass
-                    else:
-                        del a[key]
-                        break
-
-        if filter_style == 'any':
-            for key, value in return_dict.items():            
-                for i, j in filter_dict.items():
-                    if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
-                        try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
-                                    a[key] = value
-                                    break
-                            else:                  
-                                if getattr(value,'m')[i] in j:
-                                    a[key] = value
-                                    break
-                        except:
-                            pass
-                    else:
-                        try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__(\""+i+"\")" + j):
-                                    a[key] = value
-                                    break
-                            else:
-                                if getattr(value, i) in j:
-                                    a[key] = value
-                                    break
-                        except:
-                            pass
-
-        if filter_style == 'negative':
-            a = {key: value for key, value in return_dict.items()}
-            for key, value in return_dict.items():
-                for i, j in filter_dict.items():
-                    if hasattr(value, i):
-                        try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__(\""+i+"\")" + j):
-                                    del a[key]
-                                    break
-                            else:
-                                if getattr(value, i) in j:
-                                    del a[key]
-                                    break
-                        except:
-                            pass
-                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
-                        try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
-                                    del a[key]
-                                    break
-                            else:
-                                if getattr(value, 'm')[i] in j:
-                                    del a[key]
-                                    break
-                        except:
-                            pass
-                    else:
-                        break
-
-        if condition != None:
-            if a == {}:
-                for key, value in return_dict.items():
-                    if condition(value):
-                        a[key] = value
-                a = DictionaryPlus(a)
-                a.filter_key = self.filter_key
-                return a                        
-            else:
-                b={}
-                for key, value in a.items():
-                    if condition(value):
-                        b[key] = value
-                b = DictionaryPlus(b)
-                b.filter_key = self.filter_key
-                return b        
-        else:
-            a = DictionaryPlus(a)
-            a.filter_key = self.filter_key
-            return a   
-    
-    def set_attrib(self, attribute):
-        """
-        returns the set of attribute values for dictionary
-        """
-        return_set = set()
-        for i in self.values():
-            if hasattr(i, 'm') & (type(i.m) is dict) & (attribute in i.m.keys()):
-                try:
-                    return_set.add(getattr(i,'m')[attribute])
-                except TypeError:
-                    try:
-                        for j in getattr(i, 'm')[attribute]:
-                            return_set.add(j)
-                    except:
-                        pass
-            elif hasattr(i, attribute):
-                try:
-                    return_set.add(getattr(i, attribute))
-                except TypeError:
-                    try:
-                        for j in getattr(i, attribute):
-                            return_set.add(j)
-                    except:
-                        pass
-                except AttributeError:
-                    pass
-            else:
-                pass
-        return return_set
-    
-    def meta(self, listall = False):
-        meta = set().union(
-            *[set(i.m.keys()) for i in self.values()])
-        if listall:
-            return {key:self.set_attrib(key) for key in meta}
-        else: 
-            return meta
-        
-    def apply_func(self, func, verbose=False):
-        a = DictionaryPlus()
-        for key, value in self.items():
-            a[key] = func(value)
-            if verbose:
-                print(key)
-        a.filter_key = self.filter_key
-        return a
-
-    def len(self):
-        a = len(self)
-        return a
-
-    def concat_var(self,variable=None):
-        if variable != None:
-            a  = self.apply_func(lambda x:x[variable])
-        else:
-            a = self
-        return pd.concat(a)
 
 class Apm(pd.DataFrame):
 
