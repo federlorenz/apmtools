@@ -9,6 +9,8 @@ from bokeh.layouts import column, layout
 import bokeh.plotting as bopl
 from bokeh.models.axes import DatetimeAxis, MercatorAxis
 import os as os
+import uuid as uuid
+from datetime import timedelta
 
 import xyzservices.providers as xyz
 
@@ -222,7 +224,6 @@ class DictionaryPlus(dict):
             a = self
         return pd.concat(a)
 
-
 class Dataset(DictionaryPlus):
     
     def __init__(self, *args, **kwargs):
@@ -233,7 +234,10 @@ class Dataset(DictionaryPlus):
     def _constructor(self):
         return Dataset
 
-    def scan(self, directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, interpolate=False):
+    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, interpolate=False):
+
+        from .data_processing import upas_processing, lascar_processing, purple_processing
+
         if len(set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]))) > 0:
             print(
                 f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]))}. Please choose different level names")
@@ -266,7 +270,7 @@ class Dataset(DictionaryPlus):
                                 processed = upas_processing(
                                     directory, file=j, interpolate_data=interpolate)
                                 for k, v in levels_dict.items():
-                                    if v not in ["None", "_", "-"]:
+                                    if v not in ["None", "_", "-", None]:
                                         processed.m[k] = v
                                 processed.m["rejected"] = False
                                 processed.m["filename"] = j
@@ -279,7 +283,7 @@ class Dataset(DictionaryPlus):
                                 processed = lascar_processing(
                                     directory, file=j, interpolate_data=interpolate)
                                 for k, v in levels_dict.items():
-                                    if v not in ["None", "_", "-"]:
+                                    if v not in ["None", "_", "-", None]:
                                         processed.m[k] = v
                                 processed.m["rejected"] = False
                                 processed.m["filename"] = j
@@ -296,7 +300,7 @@ class Dataset(DictionaryPlus):
                         processed = purple_processing(
                             f"{directory}{j}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
                         for k, v in levels_dict.items():
-                            if v not in ["None", "_", "-"]:
+                            if v not in ["None", "_", "-", None]:
                                 processed.m[k] = v
                         processed.m["rejected"] = False
                         processed.m["filename"] = j
@@ -308,10 +312,13 @@ class Dataset(DictionaryPlus):
                     pass
                 else:
                     levels_dict[levels[level]] = j
-                    __scan(directory=f"{directory}{j}/", levels=levels,
-                        level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift)
+                    if level+1 < len(levels):
+                        for r in range(level+1, len(levels_dict)):
+                            levels_dict[levels[r]] = None
+                    self.scan_folder(directory=f"{directory}{j}/", levels=levels,
+                              level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate)
 
-    def save_data(self, save_csv=True):
+    def save_summary(self, save_csv=True):
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -464,6 +471,110 @@ class Dataset(DictionaryPlus):
                 out[z[0]] = z[1]
             return out
 
+    def save_data(self, directory="./saved/", levels=[]):
+        try:
+            os.mkdir(directory)
+        except FileExistsError:
+            pass
+        for k, v in self.items():
+            for i in range(len(levels)):
+                folder = [v.m[levels[j]]
+                          for j in range(0, i+1) if levels[j] in v.m.keys()]
+                folder = "/".join(folder)
+                try:
+                    os.mkdir(f"{directory}/{folder}")
+                except FileExistsError:
+                    print(folder)
+            filename = "_".join([v.m[level]
+                                for level in levels if level in v.m.keys()])+"_"+str(v.start.date())+"_"+k
+            v.to_csv(
+                f"{directory}{"/".join([v.m[levels[j]] for j in range(0, len(levels)) if levels[j] in v.m.keys()])}/{filename}.csv")
+
+    def save_upas_filter_summary(self, directory="./"):
+
+        from .data_processing import upas_processing, lascar_processing, purple_processing
+
+        def match_monitor(x):
+            match x:
+                case Upas():
+                    return "Upas"
+                case Lascar():
+                    return "Lascar"
+                case Purple():
+                    return "Purple"
+                case Apm():
+                    return "Apm"
+                case PolarH10():
+                    return "PolarH10"
+                case Sum():
+                    return "Sum"
+
+        types_in = list(set(type(v) for v in self.values()))
+        if Upas in types_in:
+            d = self.subset(condition=lambda x: match_monitor(x) == "Upas")
+            columns1 = ["identifier", "start", "end", "length"]
+            columns2 = list(set(d.meta()).difference(
+                set(["filter", "header", "parameters"])))
+            columns3 = ["filterid", "pre_weight [mg]", "pre_weightsd [mg]", "post_weight [mg]",
+                        "post_weightsd [mg]", "blank weight [mg]", "sampled volume [m3]"]
+
+            df = pd.DataFrame(columns=columns1+columns2+columns3)
+
+            count = 0
+            for k, v in d.items():
+                app = []
+                v = v.dropna(subset="PM2_5MC")
+                app.append(k)
+                app.append(v.start)
+                app.append(v.end)
+                app.append(v.length)
+                for m in columns2:
+                    app.append(v.m[m] if v.m[m] != None else "")
+                app.append("")
+                app.append("")
+                app.append("")
+                app.append("")
+                app.append("")
+                app.append("")
+                app.append(float(v.m["parameters"]["SampledVolumeOffset"].strip(
+                ))/1000 if "SampledVolumeOffset" in v.m["parameters"].keys() else float(v.m["parameters"]["SampledVolume"].strip())/1000)
+                df.loc[len(df)] = app
+            df.to_csv(f"{directory}filter_summary.csv", index=False)
+        else:
+            print("No Upas files detected in Dataset")
+
+    def load_upas_filter_summary(self, directory="./", filename="filter_summary.csv"):
+
+        def nw(x):
+            if pd.isna(x):
+                return None
+            else:
+                return (x)
+
+        try:
+            with open(f"{directory}{filename}", "rb") as file:
+                frame = pd.read_csv(file)
+        except:
+            print(
+                "file loading failed. Check that the correct file and directory have been specified.")
+        for i in range(len(frame)):
+            df = frame.iloc[i]
+            k = df["identifier"]
+            try:
+                self[k].m["filter"].filterid = nw(df["filterid"])
+                self[k].m["filter"].pre_weight = nw(
+                    float(df["pre_weight [mg]"]))
+                self[k].m["filter"].pre_weightsd = nw(float(
+                    df["pre_weightsd [mg]"]))
+                self[k].m["filter"].post_weight = nw(float(
+                    df["post_weight [mg]"]))
+                self[k].m["filter"].post_weightsd = nw(float(
+                    df["post_weightsd [mg]"]))
+                self[k].m["filter"].blanks = nw(float(df["blank weight [mg]"]))
+                self[k].m["filter"].sampled_volume = nw(float(
+                    df["sampled volume [m3]"]))
+            except:
+                print("loading data failed. Check that the file is filled in correctly")
 
 class Apm(pd.DataFrame):
 
