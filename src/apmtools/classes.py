@@ -576,6 +576,18 @@ class Dataset(DictionaryPlus):
             except:
                 print("loading data failed. Check that the file is filled in correctly")
 
+    def add_metadata(self,metadata:{}):
+        for k,v in metadata.items():
+            for value in self.values():
+                value.m[k] = v
+
+    def remove_metadata(self, metadata: {}):
+        for k, v in metadata.items():
+            for value in self.values():
+                if (k in value.m.keys()) and (value.m[k] == v):
+                    value.m[k] = None
+
+        
 class Apm(pd.DataFrame):
 
     def __init__(self, *args, **kwargs):
