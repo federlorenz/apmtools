@@ -176,7 +176,10 @@ def set_attrib(dictionary, attribute):
     return return_set
 
 def __scan(directory="", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, output=DictionaryPlus(), interpolate=False):
-
+    if len(set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"])))>0:
+        print(
+            f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]))}. Please choose different level names")
+        return
     if levels_dict == None:
         levels_dict = dict(zip(levels, [None]*len(levels)))
     elements = os.listdir(directory)
