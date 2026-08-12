@@ -576,12 +576,12 @@ class Dataset(DictionaryPlus):
             except:
                 print("loading data failed. Check that the file is filled in correctly")
 
-    def add_metadata(self,metadata:{}):
+    def add_metadata(self,metadata={}):
         for k,v in metadata.items():
             for value in self.values():
                 value.m[k] = v
 
-    def remove_metadata(self, metadata: {}):
+    def remove_metadata(self, metadata= {}):
         for k, v in metadata.items():
             for value in self.values():
                 if (k in value.m.keys()) and (value.m[k] == v):
