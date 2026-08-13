@@ -262,7 +262,7 @@ class Dataset(DictionaryPlus):
                 pass
             elif os.path.isfile(f"{directory}{j}"):
                 if monitor == None:
-                    print(f"file {directory}{j} is not associated with any monitor type. If this is a monitoring file, please make sure to place the file below a directory identifying the monitor type")
+                    print(f"file {directory}{j} is not associated with any monitor type. If this is a monitoring file, please make sure to place the file below a directory identifying the monitor type (i.e. a directory with the monitor name such as Upas, Lascar ...)")
                 else:
                     match monitor:
                         case "upas":
