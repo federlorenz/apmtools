@@ -234,6 +234,141 @@ class Dataset(DictionaryPlus):
     def _constructor(self):
         return Dataset
 
+    def apply_func(self, func, verbose=False):
+        a = Dataset()
+        for key, value in self.items():
+            a[key] = func(value)
+            if verbose:
+                print(key)
+        a.filter_key = self.filter_key
+        return a
+
+    def subset(self, filter_dict={}, filter_style='all', condition=None):
+        """
+        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
+        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
+            attrib is an attribute of the elements of dictionary, and attrib_value is a list
+            of the values of such attrib that the elements of returned dictionary can have
+        specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
+        """
+        if type(filter_dict) != type(dict()):
+            print("subset function error: type filter_dict should be dict")
+            return
+        return_dict = copy.deepcopy(self)
+        a = {}
+
+        if filter_style == 'all':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if not eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, i) not in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] not in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        del a[key]
+                        break
+
+        if filter_style == 'any':
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                                    a[key] = value
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] in j:
+                                    a[key] = value
+                                    break
+                        except:
+                            pass
+                    else:
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    a[key] = value
+                                    break
+                            else:
+                                if getattr(value, i) in j:
+                                    a[key] = value
+                                    break
+                        except:
+                            pass
+
+        if filter_style == 'negative':
+            a = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__(\""+i+"\")" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, i) in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) == type(""):
+                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                                    del a[key]
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] in j:
+                                    del a[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        break
+
+        if condition != None:
+            if a == {}:
+                for key, value in return_dict.items():
+                    if condition(value):
+                        a[key] = value
+                a = Dataset(a)
+                a.filter_key = self.filter_key
+                return a
+            else:
+                b = {}
+                for key, value in a.items():
+                    if condition(value):
+                        b[key] = value
+                b = Dataset(b)
+                b.filter_key = self.filter_key
+                return b
+        else:
+            a = Dataset(a)
+            a.filter_key = self.filter_key
+            return a
+
     def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, interpolate=False):
 
         from .data_processing import upas_processing, lascar_processing, purple_processing
@@ -460,16 +595,13 @@ class Dataset(DictionaryPlus):
                     df.loc[len(df)] = app
                 count += 1
             return df
-        if save_csv:
-            for cl in types_in:
-                out = match_class(cl)
-                out[1].to_csv(f"{out[0]}.csv", index=False)
-        else:
-            out = {}
-            for cl in types_in:
-                z = match_class(cl)
-                out[z[0]] = z[1]
-            return out
+        out = {}
+        for cl in types_in:
+            z = match_class(cl)
+            if save_csv:
+                z[1].to_csv(f"{z[0]}.csv", index=False)
+            out[z[0]] = z[1]
+        return out
 
     def save_data(self, directory="./saved/", levels=[]):
         try:
@@ -588,7 +720,7 @@ class Dataset(DictionaryPlus):
                     value.m[k] = None
 
 class Apm(pd.DataFrame):
-
+    monitor = "apm"
     def __init__(self, *args, **kwargs):
         pd.DataFrame.__init__(self, *args, **kwargs)
         self.m = {}
@@ -733,6 +865,7 @@ class ApmSeries(pd.Series):
         return self
 
 class Sum(Apm):
+    monitor = "sum"
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
@@ -844,6 +977,7 @@ class Grav_Filter():
             return self.difference_corrected/self.sampled_volume
 
 class Upas(Apm):
+    monitor = "upas"
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
@@ -869,6 +1003,7 @@ class UpasSeries(ApmSeries):
         return UpasSeries
 
 class Lascar(Apm):
+    monitor = "lascar"
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
@@ -894,6 +1029,7 @@ class LascarSeries(ApmSeries):
         return LascarSeries
 
 class Purple(Apm):
+    monitor = "purple"
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
@@ -918,6 +1054,7 @@ class PurpleSeries(ApmSeries):
         return PurpleSeries
 
 class PolarH10(dict):
+    monitor = "polarh10"
     def __init__(self, *args, **kwargs):
         dict.__init__(self, *args, **kwargs)
         self["ecg"] = None

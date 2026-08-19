@@ -740,7 +740,6 @@ def upas_processing(directory, file,interpolate_data=True):
     out.m['samplename'] = parameters["SampleName"].strip('_')
     out.m['cartridgeid'] = parameters["CartridgeID"].strip('_')
     out.m['filter'] = Grav_Filter()
-    out.m['monitor'] = "upas"
     match parameters["UPASfirmware"][10:19]:
         case "rev_00206":
             out.m['filter'].sampled_volume = float(
@@ -828,7 +827,6 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
     df.index = df.index + timezone_shift
     pur_average(df)
     out = Purple(df)
-    out.m["monitor"] = "purple"
     return out
 
 def lascar_processing(directory, file, interpolation=1,interval="30 seconds", interpolate_data=True):
@@ -841,7 +839,6 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds", in
             '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
         df = keep_interval(df, interval)
     out = Lascar(df)
-    out.m["monitor"] = "lascar"
     return out
 
 def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False):
@@ -936,7 +933,6 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].m["meter_name"] = "-".join(name.split(".")[0].split("-")[0:2])
                 metrics[name].m['tags'] = list(tags['tag'].loc[tags['mission_id'].map(str.upper)==metrics[name].m['mission_id']])
                 metrics[name].m['dotname'] = change_dotname(missions.loc[missions['mission_id'].map(str.upper) == metrics[name].m['mission_id']]['meter_name'].iloc[0])
-                metrics[name].m['monitor'] = "geocene_sum"
 
             except EmptyDataError:
                 print(f"EmptyDataError metric {i}")
@@ -980,7 +976,6 @@ def polar_processing(directory):
 
     out = PolarH10()
     out.m["sensorID"] = sensorID
-    out.m["monitor"] = "polarH10"
 
     data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
             for i in files if i.split("_")[-1] == "ECG"]
@@ -1022,7 +1017,6 @@ def polar_processing(directory):
         hr = Apm(df)
         hr["HRV [ms]"] = hr["HRV [ms]"].map(hrv_comma_check)
         hr.m["sensorID"] = sensorID
-
         out["hr"] = hr
     return out
 
@@ -1045,7 +1039,7 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(list(ran
             '00:0:10'), numeric_columns=numeric, integer_columns=integer,add_binary_counter=False)
         df = keep_interval(df, interval)
     out = Apm(df)
-    out.m["monitor"] = "gps_logger"
+    out.monitor = "gps_logger"
     return out
 
 def mpems_processing(directory, file, interpolation=1, interval="10 seconds", interpolate_data=True):
@@ -1072,6 +1066,6 @@ def mpems_processing(directory, file, interpolation=1, interval="10 seconds", in
             '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
         df = keep_interval(df, interval)
     out = Apm(df)
-    out.m["monitor"] = "mpems"
+    out.monitor = "mpems"
     return out
 
