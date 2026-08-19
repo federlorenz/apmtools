@@ -587,7 +587,6 @@ class Dataset(DictionaryPlus):
                 if (k in value.m.keys()) and (value.m[k] == v):
                     value.m[k] = None
 
-        
 class Apm(pd.DataFrame):
 
     def __init__(self, *args, **kwargs):

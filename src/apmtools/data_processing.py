@@ -13,7 +13,6 @@ from io import BytesIO
 import gzip as gzip
 import json as json
 
-
 def in_list(origin, target):
     """
     origin = columns without suffix\n
@@ -209,7 +208,6 @@ def keep_interval(file,interval=None):
             file.index[i].minute in interval[0]) else False for i in range(len(file))]]
     return df
 
-
 def add_binary_counter(file, gaps_delta=pd.Timedelta("00:06:00"), binary_column="cooking"):
     """
     """
@@ -261,7 +259,6 @@ def gen_merge(files: DictionaryPlus, drop=None, how="outer"):
         file = files.show().join([files.show(i) for i in range(1, len(files))], sort=True, how=how)
     return file
 
-
 def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00"),stacking=False,how="outer"):
 
     file = gen_merge(files, drop="cooking_counter",how=how)
@@ -290,7 +287,6 @@ def sum_merge(files: DictionaryPlus, gaps_delta = pd.Timedelta("00:06:00"),stack
             file.m[k] = a
 
     return file
-##############
 
 def blank_filter(df, variables):
     """Filters a dataframe of blank values for all the columns
@@ -299,8 +295,6 @@ def blank_filter(df, variables):
     for i in variables:
         df = df.loc[~df[i].isna()]
     return df
-
-##############
 
 def to_timedelta(x):
     hours, minutes, seconds = int(x.split(":")[0]), int(
@@ -746,6 +740,7 @@ def upas_processing(directory, file,interpolate_data=True):
     out.m['samplename'] = parameters["SampleName"].strip('_')
     out.m['cartridgeid'] = parameters["CartridgeID"].strip('_')
     out.m['filter'] = Grav_Filter()
+    out.m['monitor'] = "upas"
     match parameters["UPASfirmware"][10:19]:
         case "rev_00206":
             out.m['filter'].sampled_volume = float(
@@ -832,7 +827,9 @@ def purple_processing(directory, interpolation=1, interval="30 seconds", timezon
         df = keep_interval(df, interval)
     df.index = df.index + timezone_shift
     pur_average(df)
-    return Purple(df)
+    out = Purple(df)
+    out.m["monitor"] = "purple"
+    return out
 
 def lascar_processing(directory, file, interpolation=1,interval="30 seconds", interpolate_data=True):
     numeric = ['CO(ppm)']
@@ -843,7 +840,9 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds", in
         df = interpolate(df, 30, interpolation, pd.Timedelta(
             '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
         df = keep_interval(df, interval)
-    return Lascar(df)
+    out = Lascar(df)
+    out.m["monitor"] = "lascar"
+    return out
 
 def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False):
     if timing:
@@ -937,6 +936,8 @@ def sum_processing(zipname,processor_name = [],return_data=False,return_csv=True
                 metrics[name].m["meter_name"] = "-".join(name.split(".")[0].split("-")[0:2])
                 metrics[name].m['tags'] = list(tags['tag'].loc[tags['mission_id'].map(str.upper)==metrics[name].m['mission_id']])
                 metrics[name].m['dotname'] = change_dotname(missions.loc[missions['mission_id'].map(str.upper) == metrics[name].m['mission_id']]['meter_name'].iloc[0])
+                metrics[name].m['monitor'] = "geocene_sum"
+
             except EmptyDataError:
                 print(f"EmptyDataError metric {i}")
             except ValueError:
@@ -979,6 +980,7 @@ def polar_processing(directory):
 
     out = PolarH10()
     out.m["sensorID"] = sensorID
+    out.m["monitor"] = "polarH10"
 
     data = [pd.read_csv(directory+"/"+i+".txt", delimiter=";")
             for i in files if i.split("_")[-1] == "ECG"]
@@ -1042,7 +1044,9 @@ def gpslogger_processing(directory, file, interpolation=None, interval=(list(ran
         df = interpolate(df, 3, interpolation, pd.Timedelta(
             '00:0:10'), numeric_columns=numeric, integer_columns=integer,add_binary_counter=False)
         df = keep_interval(df, interval)
-    return Apm(df)
+    out = Apm(df)
+    out.m["monitor"] = "gps_logger"
+    return out
 
 def mpems_processing(directory, file, interpolation=1, interval="10 seconds", interpolate_data=True):
     numeric = ["corneph", "Temp", "RH","Vector_Sum_Composite___g_unit_"]
@@ -1067,5 +1071,7 @@ def mpems_processing(directory, file, interpolation=1, interval="10 seconds", in
         df = interpolate(df, 10, interpolation, pd.Timedelta(
             '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
         df = keep_interval(df, interval)
-    return Apm(df)
+    out = Apm(df)
+    out.m["monitor"] = "mpems"
+    return out
 
