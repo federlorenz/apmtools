@@ -11,9 +11,10 @@ from bokeh.models.axes import DatetimeAxis, MercatorAxis
 import os as os
 import uuid as uuid
 from datetime import timedelta
+from io import StringIO
+from csv import writer
 
 import xyzservices.providers as xyz
-
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
@@ -369,7 +370,7 @@ class Dataset(DictionaryPlus):
             a.filter_key = self.filter_key
             return a
 
-    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, interpolate=False):
+    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, interpolate=False, add_m={}):
 
         from .data_processing import upas_processing, lascar_processing, purple_processing
 
@@ -378,37 +379,47 @@ class Dataset(DictionaryPlus):
                 f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]))}. Please choose different level names")
             return
         if levels_dict == None:
-            levels_dict = dict(zip(levels, [None]*len(levels)))
+            levels_dict = dict(
+                zip(list(set(levels)), [None]*len(list(set(levels)))))
         elements = os.listdir(directory)
 
-        def match_monitor(x, monitor):
-            if x.lower() in ["upas", "upass", "upas monitor"]:
-                monitor = "upas"
-            if x.lower() in ["lascar", "las"]:
-                monitor = "lascar"
-            if x.lower() in ["purple", "pair", "purple air", "purpleair", "purplea"]:
-                monitor = "purple"
-            else:
-                monitor = monitor
-            return monitor
+        def monitor_signature(f):
+            try:
+                with open(f, encoding="utf-8") as file:
+                    line = file.readline().split(",")[1:3]
+                match line:
+                    case ['VALUE', 'UNITS/NOTES\n']:
+                        return "upas"
+                    case ['mac_address', 'firmware_ver']:
+                        return "purple"
+                    case ['Time', 'CO(ppm)']:
+                        return "lascar"
+                    case _:
+                        return None
+            except:
+                return None
 
         for j in elements:
             if (j.split(".")[-1] == "py") and (j != "py"):
                 pass
             elif os.path.isfile(f"{directory}{j}"):
-                if monitor == None:
-                    print(f"file {directory}{j} is not associated with any monitor type. If this is a monitoring file, please make sure to place the file below a directory identifying the monitor type (i.e. a directory with the monitor name such as Upas, Lascar ...)")
+                if monitor_signature(f"{directory}{j}") == None:
+                    print(
+                        f"file {directory}{j} is not associated with any monitor type.")
                 else:
+                    monitor = monitor_signature(f"{directory}{j}")
                     match monitor:
                         case "upas":
                             try:
                                 processed = upas_processing(
                                     directory, file=j, interpolate_data=interpolate)
                                 for k, v in levels_dict.items():
-                                    if v not in ["None", "_", "-", None]:
+                                    if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
                                         processed.m[k] = v
                                 processed.m["rejected"] = False
                                 processed.m["filename"] = j
+                                for key, value in add_m.items():
+                                    processed.m[key] = value
                                 self[str(uuid.uuid4())] = processed
                             except:
                                 print(
@@ -418,42 +429,48 @@ class Dataset(DictionaryPlus):
                                 processed = lascar_processing(
                                     directory, file=j, interpolate_data=interpolate)
                                 for k, v in levels_dict.items():
-                                    if v not in ["None", "_", "-", None]:
+                                    if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
                                         processed.m[k] = v
                                 processed.m["rejected"] = False
                                 processed.m["filename"] = j
+                                for key, value in add_m.items():
+                                    processed.m[key] = value
                                 self[str(uuid.uuid4())] = processed
                             except:
                                 print(
                                     f"processing of file {directory}{j} failed. Is this a {monitor} file?")
+                        case "purple":
+                            try:
+                                processed = purple_processing(
+                                    f"{directory}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
+                                for k, v in levels_dict.items():
+                                    if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
+                                        processed.m[k] = v
+                                processed.m["rejected"] = False
+                                processed.m["filename"] = j
+                                for key, value in add_m.items():
+                                    processed.m[key] = value
+                                self[str(uuid.uuid4())] = processed
+                                break
+                            except:
+                                print(
+                                    f"processing of purple air directory {directory}{j} failed.")
+                                break
 
             elif os.path.isdir(f"{directory}{j}"):
-                monitor = match_monitor(j, monitor)
-                if monitor == "purple" and (False not in set([os.path.isfile(f"{directory}{j}/{z}") for z in os.listdir(f"{directory}{j}/")])) and (len(os.listdir(f"{directory}{j}/")) > 0):
-                    levels_dict[levels[level]] = j
-                    try:
-                        processed = purple_processing(
-                            f"{directory}{j}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
-                        for k, v in levels_dict.items():
-                            if v not in ["None", "_", "-", None]:
-                                processed.m[k] = v
-                        processed.m["rejected"] = False
-                        processed.m["filename"] = j
-                        self[str(uuid.uuid4())] = processed
-                    except:
-                        print(
-                            f"processing of purple air directory {directory}{j} failed.")
-                elif (len(os.listdir(f"{directory}{j}/")) == 0):
+                if (len(os.listdir(f"{directory}{j}/")) == 0):
                     pass
                 else:
-                    levels_dict[levels[level]] = j
+                    if level < len(levels):
+                        levels_dict[levels[level]] = j
                     if level+1 < len(levels):
-                        for r in range(level+1, len(levels_dict)):
-                            levels_dict[levels[r]] = None
+                        for r in range(level+1, len(levels)):
+                            if levels[r] not in levels[:level+1]:
+                                levels_dict[levels[r]] = None
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
-                              level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate)
+                                     level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate, add_m=add_m)
 
-    def save_summary(self, save_csv=True):
+    def save_summary(self, save_csv=True, filename="./"):
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -495,47 +512,50 @@ class Dataset(DictionaryPlus):
                 set(["filter", "header", "parameters"])))
             columns3 = ["pm25", "pm25correctedrh",
                         "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]
-
-            df = pd.DataFrame(columns=columns1+columns2+columns3)
-            count = 0
-            for k, v in d.items():
-                print(f"processing UPAS {count+1} out of {len(d)}")
-                v = v.dropna(subset="PM2_5MC")
-                identifier = k
-                start = v.start
-                end = v.end
-                length = v.length
-                filterid = v.m["filter"].filterid
-                grav_not = v.m["filter"].concentration * \
-                    1000 if v.m["filter"].concentration != None else ""
-                grav = v.m["filter"].concentration_corrected * \
-                    1000 if v.m["filter"].concentration_corrected != None else ""
-                vmean = (a*v["PM2_5MC"]+b*v["AtmoRH"]+c).mean()
-                for i in range(len(v)):
-                    app = []
-                    app.append(identifier)
-                    app.append(start)
-                    app.append(end)
-                    app.append(length)
-                    app.append(v.index[i])
-                    for m in columns2:
-                        app.append(v.m[m] if v.m[m] != None else "")
-                    app.append(v["PM2_5MC"].iloc[i])
-                    xx = (a*v["PM2_5MC"].iloc[i])+(b*v["AtmoRH"].iloc[i])+c
-                    app.append(xx)
-                    if grav != "":
-                        app.append(xx*grav/vmean)
-                    else:
-                        if grav_not != "":
-                            app.append(xx*grav_not/vmean)
+            buffer = StringIO()
+            with buffer as file:
+                df = writer(file, delimiter=",")
+                df.writerow(columns1+columns2+columns3)
+                count = 0
+                for k, v in d.items():
+                    print(f"processing UPAS {count+1} out of {len(d)}")
+                    v = v.dropna(subset="PM2_5MC")
+                    identifier = k
+                    start = v.start
+                    end = v.end
+                    length = v.length
+                    filterid = v.m["filter"].filterid
+                    grav_not = v.m["filter"].concentration * \
+                        1000 if v.m["filter"].concentration != None else ""
+                    grav = v.m["filter"].concentration_corrected * \
+                        1000 if v.m["filter"].concentration_corrected != None else ""
+                    vmean = (a*v["PM2_5MC"]+b*v["AtmoRH"]+c).mean()
+                    for i in range(len(v)):
+                        app = []
+                        app.append(identifier)
+                        app.append(start)
+                        app.append(end)
+                        app.append(length)
+                        app.append(v.index[i])
+                        for m in columns2:
+                            app.append(v.m[m] if v.m[m] != None else "")
+                        app.append(v["PM2_5MC"].iloc[i])
+                        xx = (a*v["PM2_5MC"].iloc[i])+(b*v["AtmoRH"].iloc[i])+c
+                        app.append(xx)
+                        if grav != "":
+                            app.append(xx*grav/vmean)
                         else:
-                            app.append("")
-                    app.append(filterid)
-                    app.append(grav_not)
-                    app.append(grav)
-                    df.loc[len(df)] = app
-                count += 1
-            return df
+                            if grav_not != "":
+                                app.append(xx*grav_not/vmean)
+                            else:
+                                app.append("")
+                        app.append(filterid)
+                        app.append(grav_not)
+                        app.append(grav)
+                        df.writerow((list(map(str, app))))
+                    count += 1
+                file.seek(0)
+                return pd.read_csv(file)
 
         def run_lascar():
             d = self.subset(condition=lambda x: match_monitor(x) == "Lascar")
@@ -543,28 +563,32 @@ class Dataset(DictionaryPlus):
             columns2 = list(set(d.meta()))
             columns3 = ["CO(ppm)"]
 
-            df = pd.DataFrame(columns=columns1+columns2+columns3)
-            count = 0
-            for k, v in d.items():
-                print(f"processing Lascar {count+1} out of {len(d)}")
-                v = v.dropna(subset="CO(ppm)")
-                identifier = k
-                start = v.start
-                end = v.end
-                length = v.length
-                for i in range(len(v)):
-                    app = []
-                    app.append(identifier)
-                    app.append(start)
-                    app.append(end)
-                    app.append(length)
-                    app.append(v.index[i])
-                    for m in columns2:
-                        app.append(v.m[m] if v.m[m] != None else "")
-                    app.append(v["CO(ppm)"].iloc[i])
-                    df.loc[len(df)] = app
-                count += 1
-            return df
+            buffer = StringIO()
+            with buffer as file:
+                df = writer(file, delimiter=",")
+                df.writerow(columns1+columns2+columns3)
+                count = 0
+                for k, v in d.items():
+                    print(f"processing Lascar {count+1} out of {len(d)}")
+                    v = v.dropna(subset="CO(ppm)")
+                    identifier = k
+                    start = v.start
+                    end = v.end
+                    length = v.length
+                    for i in range(len(v)):
+                        app = []
+                        app.append(identifier)
+                        app.append(start)
+                        app.append(end)
+                        app.append(length)
+                        app.append(v.index[i])
+                        for m in columns2:
+                            app.append(v.m[m] if v.m[m] != None else "")
+                        app.append(v["CO(ppm)"].iloc[i])
+                        df.writerow(list(map(str, app)))
+                    count += 1
+                file.seek(0)
+                return pd.read_csv(file)
 
         def run_purple():
             d = self.subset(condition=lambda x: match_monitor(x) == "Purple")
@@ -572,34 +596,40 @@ class Dataset(DictionaryPlus):
             columns2 = list(set(d.meta()))
             columns3 = ["pm2_5", "pm2_5_adj"]
 
-            df = pd.DataFrame(columns=columns1+columns2+columns3)
-            count = 0
-            for k, v in d.items():
-                print(f"processing Purple {count+1} out of {len(d)}")
-                v = v.dropna(subset="pm_adj")
-                identifier = k
-                start = v.start
-                end = v.end
-                length = v.length
-                for i in range(len(v)):
-                    app = []
-                    app.append(identifier)
-                    app.append(start)
-                    app.append(end)
-                    app.append(length)
-                    app.append(v.index[i])
-                    for m in columns2:
-                        app.append(v.m[m] if v.m[m] != None else "")
-                    app.append(((v["pm2_5_cf_1"]+v["pm2_5_cf_1_b"])/2).iloc[i])
-                    app.append(v["pm_adj"].iloc[i])
-                    df.loc[len(df)] = app
-                count += 1
-            return df
+            buffer = StringIO()
+            with buffer as file:
+                df = writer(file, delimiter=",")
+                df.writerow(columns1+columns2+columns3)
+                count = 0
+                for k, v in d.items():
+                    print(f"processing Purple {count+1} out of {len(d)}")
+                    v = v.dropna(subset="pm_adj")
+                    identifier = k
+                    start = v.start
+                    end = v.end
+                    length = v.length
+                    for i in range(len(v)):
+                        app = []
+                        app.append(identifier)
+                        app.append(start)
+                        app.append(end)
+                        app.append(length)
+                        app.append(v.index[i])
+                        for m in columns2:
+                            app.append(v.m[m] if v.m[m] != None else "")
+                        app.append(
+                            ((v["pm2_5_cf_1"]+v["pm2_5_cf_1_b"])/2).iloc[i])
+                        app.append(v["pm_adj"].iloc[i])
+                        df.writerow(list(map(str, app)))
+                    count += 1
+                file.seek(0)
+                return pd.read_csv(file)
         out = {}
         for cl in types_in:
             z = match_class(cl)
             if save_csv:
-                z[1].to_csv(f"{z[0]}.csv", index=False)
+                with open(f"{filename if filename != "./" else z[0]+".csv"}", "w", encoding="utf-8") as output:
+                    z[1].to_csv(output, index=False)
             out[z[0]] = z[1]
         return out
 
@@ -610,8 +640,13 @@ class Dataset(DictionaryPlus):
             pass
         for k, v in self.items():
             for i in range(len(levels)):
-                folder = [v.m[levels[j]]
-                          for j in range(0, i+1) if levels[j] in v.m.keys()]
+                folder = []
+                for j in range(0, i+1):
+                    if hasattr(v, levels[j]):
+                        folder.append(getattr(v, levels[j]))
+                    else:
+                        if levels[j] in v.m.keys():
+                            folder.append(v.m[levels[j]])
                 folder = "/".join(folder)
                 try:
                     os.mkdir(f"{directory}/{folder}")
