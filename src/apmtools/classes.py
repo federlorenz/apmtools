@@ -628,7 +628,7 @@ class Dataset(DictionaryPlus):
         for cl in types_in:
             z = match_class(cl)
             if save_csv:
-                with open(f"{filename if filename != "./" else z[0]+".csv"}", "w", encoding="utf-8") as output:
+                with open(f"{z[0]+"_"+filename if filename != "./" else z[0]+".csv"}", "w", encoding="utf-8") as output:
                     z[1].to_csv(output, index=False)
             out[z[0]] = z[1]
         return out
