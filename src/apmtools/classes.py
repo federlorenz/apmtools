@@ -697,12 +697,17 @@ class Dataset(DictionaryPlus):
                 app.append(v.length)
                 for m in columns2:
                     app.append(v.m[m] if v.m[m] != None else "")
-                app.append("")
-                app.append("")
-                app.append("")
-                app.append("")
-                app.append("")
-                app.append("")
+                app.append(f"{v.m["filter"].filterid if v.m["filter"].filterid!=None else ""}")
+                app.append(
+                    f"{v.m["filter"].pre_weight if v.m["filter"].pre_weight != None else ""}")
+                app.append(
+                    f"{v.m["filter"].pre_weightsd if v.m["filter"].pre_weightsd != None else ""}")
+                app.append(
+                    f"{v.m["filter"].post_weight if v.m["filter"].post_weight != None else ""}")
+                app.append(
+                    f"{v.m["filter"].post_weightsd if v.m["filter"].post_weightsd != None else ""}")
+                app.append(
+                    f"{v.m["filter"].blanks if v.m["filter"].blanks != None else ""}")
                 app.append(float(v.m["parameters"]["SampledVolumeOffset"].strip(
                 ))/1000 if "SampledVolumeOffset" in v.m["parameters"].keys() else float(v.m["parameters"]["SampledVolume"].strip())/1000)
                 df.loc[len(df)] = app
