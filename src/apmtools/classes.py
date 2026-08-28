@@ -470,7 +470,7 @@ class Dataset(DictionaryPlus):
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
                                      level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate, add_m=add_m)
 
-    def save_summary(self, save_csv=True, filename="./"):
+    def save_summary(self, save_csv=True, filename="./", columns=None):
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -510,12 +510,18 @@ class Dataset(DictionaryPlus):
             columns1 = ["identifier", "start", "end", "length", "time"]
             columns2 = list(set(d.meta()).difference(
                 set(["filter", "header", "parameters"])))
-            columns3 = ["pm25", "pm25correctedrh",
+            if columns == "None": 
+                columns3 = ["pm25"]
+            elif "upas" not in columns.keys():
+                columns3 = ["pm25"]
+            else:
+                columns3 = columns["upas"]
+            columns4 = ["pm25correctedrh",
                         "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]
             buffer = StringIO()
             with buffer as file:
                 df = writer(file, delimiter=",")
-                df.writerow(columns1+columns2+columns3)
+                df.writerow(columns1+columns2+columns3+columns4)
                 count = 0
                 for k, v in d.items():
                     print(f"processing UPAS {count+1} out of {len(d)}")
@@ -539,7 +545,13 @@ class Dataset(DictionaryPlus):
                         app.append(v.index[i])
                         for m in columns2:
                             app.append(v.m[m] if v.m[m] != None else "")
-                        app.append(v["PM2_5MC"].iloc[i])
+                        if columns == "None":
+                            app.append(v["PM2_5MC"].iloc[i])
+                        elif "upas" not in columns.keys():
+                            app.append(v["PM2_5MC"].iloc[i])
+                        else:
+                            for col in columns3:
+                                app.append(v[col].iloc[i])
                         xx = (a*v["PM2_5MC"].iloc[i])+(b*v["AtmoRH"].iloc[i])+c
                         app.append(xx)
                         if grav != "":
@@ -599,7 +611,11 @@ class Dataset(DictionaryPlus):
             buffer = StringIO()
             with buffer as file:
                 df = writer(file, delimiter=",")
-                df.writerow(columns1+columns2+columns3)
+                if columns != None:
+                    if "purple" in columns.keys():
+                        df.writerow(columns1+columns2+columns3+columns["purple"])
+                else:
+                    df.writerow(columns1+columns2+columns3])
                 count = 0
                 for k, v in d.items():
                     print(f"processing Purple {count+1} out of {len(d)}")
@@ -620,6 +636,9 @@ class Dataset(DictionaryPlus):
                         app.append(
                             ((v["pm2_5_cf_1"]+v["pm2_5_cf_1_b"])/2).iloc[i])
                         app.append(v["pm_adj"].iloc[i])
+                        if columns != None and "purple" in columns.keys():
+                            for col in columns["purple"]:
+                                app.append(v[col].iloc[i])
                         df.writerow(list(map(str, app)))
                     count += 1
                 file.seek(0)
