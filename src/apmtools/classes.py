@@ -562,7 +562,7 @@ class Dataset(DictionaryPlus):
                                 app.append("")
                         app.append(filterid)
                         app.append(grav_not)
-                        app.append(grav)d
+                        app.append(grav)
                         df.writerow((list(map(str, app))))
                     count += 1
                 file.seek(0)
