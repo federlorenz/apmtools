@@ -615,7 +615,7 @@ class Dataset(DictionaryPlus):
                     if "purple" in columns.keys():
                         df.writerow(columns1+columns2+columns3+columns["purple"])
                 else:
-                    df.writerow(columns1+columns2+columns3])
+                    df.writerow(columns1+columns2+columns3)
                 count = 0
                 for k, v in d.items():
                     print(f"processing Purple {count+1} out of {len(d)}")
