@@ -470,7 +470,7 @@ class Dataset(DictionaryPlus):
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
                                      level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate, add_m=add_m)
 
-    def save_summary(self, save_csv=True, filename="./", columns=None):
+    def save_summary(self, save_csv=True, filename="./", columns={}):
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -510,12 +510,10 @@ class Dataset(DictionaryPlus):
             columns1 = ["identifier", "start", "end", "length", "time"]
             columns2 = list(set(d.meta()).difference(
                 set(["filter", "header", "parameters"])))
-            if columns == "None": 
-                columns3 = ["pm25"]
-            elif "upas" not in columns.keys():
+            if "upas" not in columns.keys():
                 columns3 = ["pm25"]
             else:
-                columns3 = columns["upas"]
+                columns3 = columns["upas"] if columns["upas"]!="all" else list(d.set_attrib("columns"))
             columns4 = ["pm25correctedrh",
                         "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]
             buffer = StringIO()
@@ -545,13 +543,14 @@ class Dataset(DictionaryPlus):
                         app.append(v.index[i])
                         for m in columns2:
                             app.append(v.m[m] if v.m[m] != None else "")
-                        if columns == "None":
-                            app.append(v["PM2_5MC"].iloc[i])
-                        elif "upas" not in columns.keys():
+                        if "upas" not in columns.keys():
                             app.append(v["PM2_5MC"].iloc[i])
                         else:
                             for col in columns3:
-                                app.append(v[col].iloc[i])
+                                if col in v.columns:
+                                    app.append(v[col].iloc[i])
+                                else:
+                                    app.append(None)
                         xx = (a*v["PM2_5MC"].iloc[i])+(b*v["AtmoRH"].iloc[i])+c
                         app.append(xx)
                         if grav != "":
@@ -563,7 +562,7 @@ class Dataset(DictionaryPlus):
                                 app.append("")
                         app.append(filterid)
                         app.append(grav_not)
-                        app.append(grav)
+                        app.append(grav)d
                         df.writerow((list(map(str, app))))
                     count += 1
                 file.seek(0)
@@ -636,9 +635,19 @@ class Dataset(DictionaryPlus):
                         app.append(
                             ((v["pm2_5_cf_1"]+v["pm2_5_cf_1_b"])/2).iloc[i])
                         app.append(v["pm_adj"].iloc[i])
-                        if columns != None and "purple" in columns.keys():
-                            for col in columns["purple"]:
-                                app.append(v[col].iloc[i])
+                        if "purple" in columns.keys():
+                            if columns["purple"] == "all":
+                                for col in list(d.set_attrib("columns")):
+                                    if col in v.columns:
+                                        app.append(v[col].iloc[i])
+                                    else:
+                                        app.append(None)
+                            else:
+                                for col in columns["purple"]:
+                                    if col in v.columns:
+                                        app.append(v[col].iloc[i])
+                                    else:
+                                        app.append(None)
                         df.writerow(list(map(str, app)))
                     count += 1
                 file.seek(0)
