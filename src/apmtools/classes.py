@@ -235,6 +235,22 @@ class Dataset(DictionaryPlus):
     def _constructor(self):
         return Dataset
 
+    def show(self, number=0, key=None):
+        """
+        return an element of a dictionary
+        If number is not specified, returns the values associated with the first key
+        """
+        try:
+            if key != None:
+                return (self.subset({self.filter_key: [key]}).show())
+            else:
+                if type(number) == type(""):
+                    return (self.subset({self.filter_key: [number]}).show())
+                else:
+                    return (self[list(self.keys())[number]])
+        except:
+            print("something's wrong")
+
     def apply_func(self, func, verbose=False):
         a = Dataset()
         for key, value in self.items():
