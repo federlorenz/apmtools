@@ -491,11 +491,11 @@ class Dataset(DictionaryPlus):
 
         def match_class(x):
             if x is Upas:
-                return ("Upas", run_upas())
+                return ("upas", run_upas())
             elif x is Lascar:
-                return ("Lascar", run_lascar())
+                return ("lascar", run_lascar())
             elif x is Purple:
-                return ("Purple", run_purple())
+                return ("purple", run_purple())
             # elif x is Apm:
             #     return "Apm"
             # elif x is PolarH10:
@@ -529,7 +529,8 @@ class Dataset(DictionaryPlus):
             if "upas" not in columns.keys():
                 columns3 = ["pm25"]
             else:
-                columns3 = columns["upas"] if columns["upas"]!="all" else list(d.set_attrib("columns"))
+                columns3 = columns["upas"] if columns["upas"] != "all" else list(
+                    d.set_attrib("columns"))
             columns4 = ["pm25correctedrh",
                         "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]
             buffer = StringIO()
@@ -558,7 +559,10 @@ class Dataset(DictionaryPlus):
                         app.append(length)
                         app.append(v.index[i])
                         for m in columns2:
-                            app.append(v.m[m] if v.m[m] != None else "")
+                            if m in v.m.keys():
+                                app.append(v.m[m] if v.m[m] != None else "")
+                            else:
+                                app.append("")
                         if "upas" not in columns.keys():
                             app.append(v["PM2_5MC"].iloc[i])
                         else:
@@ -582,7 +586,12 @@ class Dataset(DictionaryPlus):
                         df.writerow((list(map(str, app))))
                     count += 1
                 file.seek(0)
-                return pd.read_csv(file)
+                out = pd.read_csv(file)
+                out["start"] = pd.to_datetime(out["start"])
+                out["end"] = pd.to_datetime(out["end"])
+                out["length"] = pd.to_timedelta(out["length"])
+                out["time"] = pd.to_datetime(out["time"])
+                return (out)
 
         def run_lascar():
             d = self.subset(condition=lambda x: match_monitor(x) == "Lascar")
@@ -610,27 +619,36 @@ class Dataset(DictionaryPlus):
                         app.append(length)
                         app.append(v.index[i])
                         for m in columns2:
-                            app.append(v.m[m] if v.m[m] != None else "")
+                            if m in v.m.keys():
+                                app.append(v.m[m] if v.m[m] != None else "")
+                            else:
+                                app.append("")
                         app.append(v["CO(ppm)"].iloc[i])
                         df.writerow(list(map(str, app)))
                     count += 1
                 file.seek(0)
-                return pd.read_csv(file)
+                out = pd.read_csv(file)
+                out["start"] = pd.to_datetime(out["start"])
+                out["end"] = pd.to_datetime(out["end"])
+                out["length"] = pd.to_timedelta(out["length"])
+                out["time"] = pd.to_datetime(out["time"])
+                return (out)
 
         def run_purple():
             d = self.subset(condition=lambda x: match_monitor(x) == "Purple")
             columns1 = ["identifier", "start", "end", "length", "time"]
             columns2 = list(set(d.meta()))
             columns3 = ["pm2_5", "pm2_5_adj"]
-
+            columns4 = []
+            if "purple" not in columns.keys():
+                columns4 = []
+            else:
+                columns4 = columns["purple"] if columns["purple"] != "all" else list(
+                    d.set_attrib("columns"))
             buffer = StringIO()
             with buffer as file:
                 df = writer(file, delimiter=",")
-                if columns != None:
-                    if "purple" in columns.keys():
-                        df.writerow(columns1+columns2+columns3+columns["purple"])
-                else:
-                    df.writerow(columns1+columns2+columns3)
+                df.writerow(columns1+columns2+columns3+columns4)
                 count = 0
                 for k, v in d.items():
                     print(f"processing Purple {count+1} out of {len(d)}")
@@ -647,7 +665,10 @@ class Dataset(DictionaryPlus):
                         app.append(length)
                         app.append(v.index[i])
                         for m in columns2:
-                            app.append(v.m[m] if v.m[m] != None else "")
+                            if m in v.m.keys():
+                                app.append(v.m[m] if v.m[m] != None else "")
+                            else:
+                                app.append("")
                         app.append(
                             ((v["pm2_5_cf_1"]+v["pm2_5_cf_1_b"])/2).iloc[i])
                         app.append(v["pm_adj"].iloc[i])
@@ -667,7 +688,13 @@ class Dataset(DictionaryPlus):
                         df.writerow(list(map(str, app)))
                     count += 1
                 file.seek(0)
-                return pd.read_csv(file)
+                out = pd.read_csv(file)
+                out["start"] = pd.to_datetime(out["start"])
+                out["end"] = pd.to_datetime(out["end"])
+                out["length"] = pd.to_timedelta(out["length"])
+                out["time"] = pd.to_datetime(out["time"])
+                return (out)
+
         out = {}
         for cl in types_in:
             z = match_class(cl)
