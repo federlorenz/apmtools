@@ -705,10 +705,19 @@ class Dataset(DictionaryPlus):
         return out
 
     def save_data(self, directory="./saved/", levels=[]):
+        def get_specific_level(v, j):
+            if hasattr(v, j):
+                return getattr(v, j)
+            else:
+                if j in v.m.keys():
+                    return v.m[j]
+                else:
+                    return None
         try:
             os.mkdir(directory)
         except FileExistsError:
-            pass
+            if input(f"Directory {directory} exists already. Do you want to overwrite? Press enter to continue, or any other key plus enter to stop") != "":
+                return
         for k, v in self.items():
             for i in range(len(levels)):
                 folder = []
@@ -722,12 +731,11 @@ class Dataset(DictionaryPlus):
                 try:
                     os.mkdir(f"{directory}/{folder}")
                 except FileExistsError:
-                    print(folder)
-            filename = "_".join([v.m[level]
-                                for level in levels if level in v.m.keys()])+"_"+str(v.start.date())+"_"+k
-            v.to_csv(
-                f"{directory}{"/".join([v.m[levels[j]] for j in range(0, len(levels)) if levels[j] in v.m.keys()])}/{filename}.csv")
-
+                    pass
+            filename = "_".join([get_specific_level(v, level) for level in levels if get_specific_level(v, level) != None])+"_"+str(v.start.date())+"_"+k
+            v.to_csv( f"{directory}{"/".join([get_specific_level(v, levels[j]) for j in range(0, len(levels)) if get_specific_level(v, levels[j]) != None])}/{filename}.csv")
+            
+            
     def save_upas_filter_summary(self, directory="./"):
 
         from .data_processing import upas_processing, lascar_processing, purple_processing
