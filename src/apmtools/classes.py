@@ -226,7 +226,7 @@ class DictionaryPlus(dict):
         return pd.concat(a)
 
 class Dataset(DictionaryPlus):
-    
+
     def __init__(self, *args, **kwargs):
         DictionaryPlus.__init__(self, *args, **kwargs)
         self.filter_key = None
@@ -529,7 +529,7 @@ class Dataset(DictionaryPlus):
             if "upas" not in columns.keys():
                 columns3 = ["pm25"]
             else:
-                columns3 = columns["upas"] if columns["upas"] != "all" else list(
+                columns3 = ["pm25"]+columns["upas"] if columns["upas"] != "all" else ["pm25"]+list(
                     d.set_attrib("columns"))
             columns4 = ["pm25correctedrh",
                         "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]
@@ -591,7 +591,7 @@ class Dataset(DictionaryPlus):
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
                 out["time"] = pd.to_datetime(out["time"])
-                return (out)
+                return (Summary(out, metadata=set(columns2)))
 
         def run_lascar():
             d = self.subset(condition=lambda x: match_monitor(x) == "Lascar")
@@ -632,7 +632,7 @@ class Dataset(DictionaryPlus):
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
                 out["time"] = pd.to_datetime(out["time"])
-                return (out)
+                return (Summary(out, metadata=set(columns2)))
 
         def run_purple():
             d = self.subset(condition=lambda x: match_monitor(x) == "Purple")
@@ -693,7 +693,7 @@ class Dataset(DictionaryPlus):
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
                 out["time"] = pd.to_datetime(out["time"])
-                return (out)
+                return (Summary(out, metadata=set(columns2)))
 
         out = {}
         for cl in types_in:
@@ -732,10 +732,11 @@ class Dataset(DictionaryPlus):
                     os.mkdir(f"{directory}/{folder}")
                 except FileExistsError:
                     pass
-            filename = "_".join([get_specific_level(v, level) for level in levels if get_specific_level(v, level) != None])+"_"+str(v.start.date())+"_"+k
-            v.to_csv( f"{directory}{"/".join([get_specific_level(v, levels[j]) for j in range(0, len(levels)) if get_specific_level(v, levels[j]) != None])}/{filename}.csv")
-            
-            
+            filename = "_".join([get_specific_level(v, level) for level in levels if get_specific_level(
+                v, level) != None])+"_"+str(v.start.date())+"_"+k
+            v.to_csv(
+                f"{directory}{"/".join([get_specific_level(v, levels[j]) for j in range(0, len(levels)) if get_specific_level(v, levels[j]) != None])}/{filename}.csv")
+
     def save_upas_filter_summary(self, directory="./"):
 
         from .data_processing import upas_processing, lascar_processing, purple_processing
@@ -776,7 +777,8 @@ class Dataset(DictionaryPlus):
                 app.append(v.length)
                 for m in columns2:
                     app.append(v.m[m] if v.m[m] != None else "")
-                app.append(f"{v.m["filter"].filterid if v.m["filter"].filterid!=None else ""}")
+                app.append(
+                    f"{v.m["filter"].filterid if v.m["filter"].filterid != None else ""}")
                 app.append(
                     f"{v.m["filter"].pre_weight if v.m["filter"].pre_weight != None else ""}")
                 app.append(
@@ -827,16 +829,426 @@ class Dataset(DictionaryPlus):
             except:
                 print("loading data failed. Check that the file is filled in correctly")
 
-    def add_metadata(self,metadata={}):
-        for k,v in metadata.items():
+    def add_metadata(self, metadata={}):
+        for k, v in metadata.items():
             for value in self.values():
                 value.m[k] = v
 
-    def remove_metadata(self, metadata= {}):
+    def remove_metadata(self, metadata={}):
         for k, v in metadata.items():
             for value in self.values():
                 if (k in value.m.keys()) and (value.m[k] == v):
                     value.m[k] = None
+
+class Summary(pd.DataFrame):
+
+    _metadata = ['metadata']
+
+    @property
+    def _constructor(self):
+        return Summary
+
+    def __init__(self, *args, metadata=set(), variable=None, **kwargs):
+        pd.DataFrame.__init__(self, *args, **kwargs)
+
+        self.metadata = metadata
+        self.variable = variable
+
+    def __finalize__(self, other, method=None, **kwargs):
+        if isinstance(other, Summary):
+            self.variable = other.variable
+            self.metadata = other.metadata.copy()
+
+        return self
+
+    def subset(self, filter_dict={}, filter_style='all'):
+        """
+        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
+        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
+            attrib is an attribute of the elements of dictionary, and attrib_value is a list
+            of the values of such attrib that the elements of returned dictionary can have
+        specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
+        """
+        if type(filter_dict) != type(dict()):
+            print("subset function error: type filter_dict should be dict")
+            return
+        return_dict = copy.deepcopy(self)
+        a = {}
+
+        if filter_style == 'all':
+            filtering_list = [False]*(len(return_dict))
+            for i, j in filter_dict.items():
+                if (i in return_dict.columns):
+                    for z in range(len(return_dict)):
+                        if return_dict.loc[z, i] in j:
+                            filtering_list[z] = True
+                        else:
+                            filtering_list[z] = False
+            return_dict = return_dict.loc[filtering_list]
+
+        if filter_style == 'any':
+            filtering_list = [False]*(len(return_dict))
+            for i, j in filter_dict.items():
+                if (i in return_dict.columns):
+                    for z in range(len(return_dict)):
+                        if return_dict.loc[z, i] in j:
+                            filtering_list[z] = True
+            return_dict = return_dict.loc[filtering_list]
+
+        if filter_style == 'negative all':
+            filtering_list = [True]*(len(return_dict))
+            for i, j in filter_dict.items():
+                if (i in return_dict.columns):
+                    for z in range(len(return_dict)):
+                        if return_dict.loc[z, i] in j:
+                            filtering_list[z] = False
+                        else:
+                            filtering_list[z] = True
+            return_dict = return_dict.loc[filtering_list]
+
+        if filter_style == 'negative any':
+            filtering_list = [True]*(len(return_dict))
+            for i, j in filter_dict.items():
+                if (i in return_dict.columns):
+                    for z in range(len(return_dict)):
+                        if return_dict.loc[z, i] in j:
+                            filtering_list[z] = False
+            return_dict = return_dict.loc[filtering_list]
+
+        return return_dict
+
+    def show(self, number=0, key=None):
+        """
+        return an element of a dictionary
+        If number is not specified, returns the values associated with the first key
+        """
+        try:
+            if key != None:
+                return self.subset({"identifier": [key]})
+            else:
+                if type(number) == type(""):
+                    return self.subset({"identifier": list(set(self["identifier"]))[0]})
+                else:
+                    return self.subset({"identifier": list(set(self["identifier"]))[number]})
+        except:
+            print("something's wrong")
+
+    def set_attrib(self, attribute):
+        """
+        returns the set of attribute values for Summary
+        """
+        if attribute in self.columns:
+            return set(self[attribute])
+
+    def group_stat(self, value_cols, frequency=None, grouping_by=["identifier"], time_col='time', id_col='identifier',
+                   min_completeness=1.0, only_complete=True, flooring_timestamp=True):
+        """
+        Filter a DataFrame down to only the (monitor, hour) groups that have
+        a full hour of data, then it's ready for an hourly groupby/mean.
+
+        - Infers each monitor's sampling interval from its own median gap
+        between readings (handles monitors with different cadences, e.g.
+        5-min vs 2-min logging).
+        - An hour is "complete" if its reading count is >= min_completeness
+        * expected_count_for_that_monitor. Use 1.0 for strict full hours,
+        or e.g. 0.9 to tolerate the odd dropped reading.
+
+        Returns the filtered row-level DataFrame (not yet aggregated), so you
+        can still group/aggregate however you like afterwards.
+        """
+        df = self.dropna(subset=[time_col]).copy()
+
+        if frequency != None:
+
+            if only_complete:
+                def median_interval(g):
+                    return g.sort_values().diff().dropna().median()
+
+                def sorting_frequency(x):
+                    if len(list(filter(lambda z: True if "week" in z else False, x))) > 0:
+                        return list(filter(lambda z: True if "week" in z else False, x))[0]
+                    if len(list(filter(lambda z: True if "weekday" in z else False, x))) > 0:
+                        return list(filter(lambda z: True if "weekday" in z else False, x))[0]
+                    if len(list(filter(lambda z: True if "day" in z else False, x))) > 0:
+                        return list(filter(lambda z: True if "day" in z else False, x))[0]
+                    if len(list(filter(lambda z: True if "hour" in z else False, x))) > 0:
+                        return list(filter(lambda z: True if "hour" in z else False, x))[0]
+                    if len(list(filter(lambda z: True if "minute" in z else False, x))) > 0:
+                        return list(filter(lambda z: True if "minute" in z else False, x))[0]
+
+                def freq_ranked():
+                    if isinstance(frequency, str):
+                        return frequency
+                    if isinstance(frequency, list):
+                        return sorting_frequency(frequency)
+
+                intervals = df.groupby(id_col)[time_col].apply(median_interval)
+                if isinstance(frequency, str):
+                    if len(frequency.split(" ")) == 1:
+                        match frequency:
+                            case "hour":
+                                expected = (pd.Timedelta(1, "hour") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("h")
+                            case "day":
+                                expected = (pd.Timedelta(1, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("d")
+                            case "minute":
+                                expected = (pd.Timedelta(1, "minute") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("min")
+                            case "week":
+                                expected = (pd.Timedelta(1, "W") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("w")
+                            case "weekday":
+                                expected = (pd.Timedelta(1, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].map(
+                                    lambda x: (x.weekday()))
+                    if len(frequency.split(" ")) == 2:
+                        mult = float(frequency.split(" ")[0])
+                        match frequency.split(" ")[1]:
+                            case "hour":
+                                expected = (pd.Timedelta(mult, "hour") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}h")
+                            case "day":
+                                expected = (pd.Timedelta(mult, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}d")
+                            case "minute":
+                                expected = (pd.Timedelta(mult, "minute") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}m")
+                            case "week":
+                                expected = (pd.Timedelta(mult, "W") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}w")
+                            case "weekday":
+                                expected = (pd.Timedelta(mult, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].map(
+                                    lambda x: (x.weekday//mult))*mult
+
+                    counts = df.groupby([id_col, "xxxyyyxxx"])[
+                        value_cols].count()
+                    expe = counts.index.get_level_values(id_col).map(expected)
+                    completeness = counts.div(expe, axis=0)
+                    complete_hours = completeness[completeness >= min_completeness].dropna(
+                    ).index
+                    mask = pd.MultiIndex.from_arrays(
+                        [df[id_col], df["xxxyyyxxx"]]).isin(complete_hours)
+                    df = df.loc[mask]
+
+                if isinstance(frequency, list):
+                    freq = freq_ranked()
+                    if len(freq.split(" ")) == 1:
+                        match freq:
+                            case "hour":
+                                expected = (pd.Timedelta(1, "hour") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("h")
+                            case "day":
+                                expected = (pd.Timedelta(1, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("d")
+                            case "minute":
+                                expected = (pd.Timedelta(1, "minute") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("min")
+                            case "week":
+                                expected = (pd.Timedelta(1, "W") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("w")
+                            case "weekday":
+                                expected = (pd.Timedelta(1, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].map(
+                                    lambda x: (x.weekday()))
+                    if len(freq.split(" ")) == 2:
+                        mult = float(freq.split(" ")[0])
+                        match freq.split(" ")[1]:
+                            case "hour":
+                                expected = (pd.Timedelta(mult, "hour") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}h")
+                            case "day":
+                                expected = (pd.Timedelta(mult, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}d")
+                            case "minute":
+                                expected = (pd.Timedelta(mult, "minute") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}m")
+                            case "week":
+                                expected = (pd.Timedelta(mult, "W") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}w")
+                            case "weekday":
+                                expected = (pd.Timedelta(mult, "day") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].map(
+                                    lambda x: (x.weekday//mult))*mult
+
+                    counts = df.groupby([id_col, "xxxyyyxxx"])[
+                        value_cols].count()
+                    expe = counts.index.get_level_values(id_col).map(expected)
+                    completeness = counts.div(expe, axis=0)
+                    complete_hours = completeness[completeness >= min_completeness].dropna(
+                    ).index
+                    mask = pd.MultiIndex.from_arrays(
+                        [df[id_col], df["xxxyyyxxx"]]).isin(complete_hours)
+                    df = df.loc[mask]
+
+            if isinstance(frequency, str):
+                if len(frequency.split(" ")) == 1:
+                    match frequency:
+                        case "hour":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor("h")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.hour))
+                        case "day":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor("d")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.day))
+                        case "minute":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor("min")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.minute))
+                        case "week":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor("w")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.week))
+                        case "weekday":
+                            df[frequency] = df["time"].map(
+                                lambda x: (x.weekday()))
+
+                if len(frequency.split(" ")) == 2:
+                    mult = float(frequency.split(" ")[0])
+                    match frequency.split(" ")[1]:
+                        case "hour":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor(f"{mult}h")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.hour//mult))*mult
+                        case "day":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor(
+                                    f"{mult}d")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.day//mult))*mult
+                        case "minute":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor(
+                                    f"{mult}min")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.minute//mult))*mult
+                        case "week":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor(
+                                    f"{mult}w")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.week//mult))*mult
+                        case "weekday":
+                            df[frequency] = df["time"].map(
+                                lambda x: (x.weekday//mult))*mult
+
+            if isinstance(frequency, list):
+                for freq in frequency:
+                    if len(freq.split(" ")) == 1:
+                        match freq:
+                            case "hour":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor("h")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.hour))
+                            case "day":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor("d")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.day))
+                            case "minute":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor("min")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.minute))
+                            case "week":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor("w")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.week))
+                            case "weekday":
+                                df[freq] = df["time"].map(
+                                    lambda x: (x.weekday()))
+
+                    if len(freq.split(" ")) == 2:
+                        mult = float(freq.split(" ")[0])
+                        match freq.split(" ")[1]:
+                            case "hour":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor(f"{mult}h")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.hour//mult))*mult
+                            case "day":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor(
+                                        f"{mult}d")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.day//mult))*mult
+                            case "minute":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor(
+                                        f"{mult}min")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.minute//mult))*mult
+                            case "week":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor(
+                                        f"{mult}w")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.week//mult))*mult
+                            case "weekday":
+                                df[freq] = df["time"].map(
+                                    lambda x: (x.weekday//mult))*mult
+
+        if isinstance(frequency, str):
+            output = df.groupby(grouping_by+[frequency])
+        if isinstance(frequency, list):
+            output = df.groupby(grouping_by+frequency)
+        if frequency == None:
+            output = df.groupby(grouping_by)
+
+        return output
 
 class Apm(pd.DataFrame):
     monitor = "apm"
