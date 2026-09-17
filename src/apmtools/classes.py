@@ -566,6 +566,7 @@ class Dataset(DictionaryPlus):
                         if "upas" not in columns.keys():
                             app.append(v["PM2_5MC"].iloc[i])
                         else:
+                            app.append(v["PM2_5MC"].iloc[i])
                             for col in columns3:
                                 if col in v.columns:
                                     app.append(v[col].iloc[i])
