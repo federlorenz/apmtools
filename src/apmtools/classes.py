@@ -987,7 +987,7 @@ class Summary(pd.DataFrame):
         if day is not None:
             self = self.loc[[a in day for a in [self["time"].map(lambda x: x.date().isoweekday())
                                                 for i in range(len(self["time"]))]]]
-        return self
+        return self.reset_index()
 
     def set_attrib(self, attribute):
         """
