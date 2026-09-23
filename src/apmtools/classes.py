@@ -1100,7 +1100,7 @@ class Summary(pd.DataFrame):
                                 expected = (pd.Timedelta(mult, "minute") /
                                             intervals).round().astype(int)
                                 df["xxxyyyxxx"] = df["time"].dt.floor(
-                                    f"{mult}m")
+                                    f"{mult}min")
                             case "second":
                                 expected = (pd.Timedelta(mult, "second") /
                                             intervals).round().astype(int)
