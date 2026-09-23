@@ -947,7 +947,7 @@ class Summary(pd.DataFrame):
         except:
             print("something's wrong")
 
-    def dt_filter(
+    def dtfilter(
             self,
             time_start=None,
             time_end=None,
@@ -1429,7 +1429,7 @@ class Apm(pd.DataFrame):
         else:
             return len(self)*(self.index[1]-self.index[0])
 
-    def dt_filter(
+    def dtfilter(
             self,
             time_start=None,
             time_end=None,
@@ -1511,7 +1511,7 @@ class ApmSeries(pd.Series):
         else:
             return len(self)*(self.index[1]-self.index[0])
 
-    def dt_filter(
+    def dtfilter(
             self,
             time_start=None,
             time_end=None,
@@ -1775,7 +1775,7 @@ class PolarH10(dict):
         else:
             return {key: value.length for key, value in self.items() if type(value) != type(None)}
 
-    def dt_filter(
+    def dtfilter(
             self,
             time_start=None,
             time_end=None,
@@ -1792,7 +1792,7 @@ class PolarH10(dict):
 
         for key, value in out.items():
             if type(value) != type(None):
-                out[key] = value.dt_filter(
+                out[key] = value.dtfilter(
                     time_start=time_start, time_end=time_end, date_start=date_start, date_end=date_end, day=day)
 
         return out
