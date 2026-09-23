@@ -1,18 +1,7 @@
 import os as os
 import uuid as uuid
 from .classes import DictionaryPlus
-from .data_processing import upas_processing, lascar_processing, purple_processing
-from typing import Dict, Tuple, List
-import math
-import bokeh.plotting as bopl
-import numpy as np
 import copy
-from bokeh.layouts import column
-from bokeh.models import ColumnDataSource, RangeTool
-from bokeh.models import (LinearAxis, Range1d)
-from bokeh.palettes import Dark2_5 as palette
-import itertools
-from datetime import timedelta
 
 def show(dictionary, number=0):
     """

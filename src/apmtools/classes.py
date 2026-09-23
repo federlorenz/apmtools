@@ -1,20 +1,12 @@
 import pandas as pd
 import numpy as np
 import copy
-
-import itertools
-from bokeh.palettes import Dark2_5 as palette
-from bokeh.models import ColumnDataSource, DataRange1d
-from bokeh.layouts import column, layout
-import bokeh.plotting as bopl
-from bokeh.models.axes import DatetimeAxis, MercatorAxis
 import os as os
 import uuid as uuid
 from datetime import timedelta
 from io import StringIO
 from csv import writer
-
-import xyzservices.providers as xyz
+from dateutil.parser import parse
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
@@ -212,10 +204,6 @@ class DictionaryPlus(dict):
             if verbose:
                 print(key)
         a.filter_key = self.filter_key
-        return a
-
-    def len(self):
-        a = len(self)
         return a
 
     def concat_var(self, variable=None):
@@ -523,7 +511,8 @@ class Dataset(DictionaryPlus):
             b = -0.0862
             c = 5.75
             d = self.subset(condition=lambda x: match_monitor(x) == "Upas")
-            columns1 = ["identifier", "start", "end", "length", "time"]
+            columns1 = ["identifier", "monitor",
+                        "start", "end", "length", "time"]
             columns2 = list(set(d.meta()).difference(
                 set(["filter", "header", "parameters"])))
             if "upas" not in columns.keys():
@@ -554,6 +543,7 @@ class Dataset(DictionaryPlus):
                     for i in range(len(v)):
                         app = []
                         app.append(identifier)
+                        app.append("upas")
                         app.append(start)
                         app.append(end)
                         app.append(length)
@@ -567,7 +557,7 @@ class Dataset(DictionaryPlus):
                             app.append(v["PM2_5MC"].iloc[i])
                         else:
                             app.append(v["PM2_5MC"].iloc[i])
-                            for col in columns3:
+                            for col in columns3[1:]:
                                 if col in v.columns:
                                     app.append(v[col].iloc[i])
                                 else:
@@ -596,7 +586,8 @@ class Dataset(DictionaryPlus):
 
         def run_lascar():
             d = self.subset(condition=lambda x: match_monitor(x) == "Lascar")
-            columns1 = ["identifier", "start", "end", "length", "time"]
+            columns1 = ["identifier", "monitor",
+                        "start", "end", "length", "time"]
             columns2 = list(set(d.meta()))
             columns3 = ["CO(ppm)"]
 
@@ -615,6 +606,7 @@ class Dataset(DictionaryPlus):
                     for i in range(len(v)):
                         app = []
                         app.append(identifier)
+                        app.append("lascar")
                         app.append(start)
                         app.append(end)
                         app.append(length)
@@ -637,7 +629,8 @@ class Dataset(DictionaryPlus):
 
         def run_purple():
             d = self.subset(condition=lambda x: match_monitor(x) == "Purple")
-            columns1 = ["identifier", "start", "end", "length", "time"]
+            columns1 = ["identifier", "monitor",
+                        "start", "end", "length", "time"]
             columns2 = list(set(d.meta()))
             columns3 = ["pm2_5", "pm2_5_adj"]
             columns4 = []
@@ -661,6 +654,7 @@ class Dataset(DictionaryPlus):
                     for i in range(len(v)):
                         app = []
                         app.append(identifier)
+                        app.append("purple")
                         app.append(start)
                         app.append(end)
                         app.append(length)
@@ -841,6 +835,25 @@ class Dataset(DictionaryPlus):
                 if (k in value.m.keys()) and (value.m[k] == v):
                     value.m[k] = None
 
+class Group(pd.DataFrame):
+
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return Group
+
+    def __init__(self, *args, metadata={}, variable=None, **kwargs):
+        pd.DataFrame.__init__(self, *args, **kwargs)
+
+        self.m = metadata
+
+    def __finalize__(self, other, method=None, **kwargs):
+        if isinstance(other, Group):
+            self.m = other.m.copy()
+
+        return self
+
 class Summary(pd.DataFrame):
 
     _metadata = ['metadata']
@@ -934,6 +947,48 @@ class Summary(pd.DataFrame):
         except:
             print("something's wrong")
 
+    def dt_filter(
+            self,
+            time_start=None,
+            time_end=None,
+            date_start=None,
+            date_end=None,
+            day=None):
+        """Filters a file by time or date\n
+            Input time as dt.time(hrs,min), and date as dt.date(year,month,day),\n
+            and day as [1,2] list of days, with 1 Monday and 7 Sunday,\n
+            if selecting a specific date interval that includes time, just specify\n
+            that as dt.datetime interval under date_start and date_end"""
+        if type(time_start) is str:
+            time_start = parse(time_start).time()
+        if type(time_end) is str:
+            time_start = parse(time_end).time()
+        if type(date_start) is str:
+            date_start = parse(date_start)
+        if type(date_end) is str:
+            date_end = parse(date_end)
+
+        if date_start is not None:
+            self = self.loc[self["time"] >= date_start]
+        if date_end is not None:
+            self = self.loc[self["time"] < date_end]
+        if (time_start is not None) & (time_end is not None):
+            if time_start > time_end:
+                self = self.loc[(self["time"].map(lambda x:x.time()) >= time_start)
+                                | (self["time"].map(lambda x: x.time()) < time_end)]
+            else:
+                self = self.loc[(self["time"].map(lambda x: x.time()) >= time_start)
+                                & (self["time"].map(lambda x: x.time()) < time_end)]
+        if (time_start is not None) & (time_end is None):
+            self = self.loc[self["time"].map(lambda x: x.time()) >= time_start]
+        if (time_start is None) & (time_end is not None):
+            self = self.loc[self["time"].map(lambda x: x.time()) <= time_end]
+
+        if day is not None:
+            self = self.loc[[a in day for a in [self["time"].map(lambda x: x.date().isoweekday())
+                                                for i in range(len(self["time"]))]]]
+        return self
+
     def set_attrib(self, attribute):
         """
         returns the set of attribute values for Summary
@@ -942,7 +997,7 @@ class Summary(pd.DataFrame):
             return set(self[attribute])
 
     def group_stat(self, value_cols, frequency=None, grouping_by=["identifier"], time_col='time', id_col='identifier',
-                   min_completeness=1.0, only_complete=True, flooring_timestamp=True):
+                   min_completeness=1.0, only_complete=True, flooring_timestamp=True, aggregate=["mean"]):
         """
         Filter a DataFrame down to only the (monitor, hour) groups that have
         a full hour of data, then it's ready for an hourly groupby/mean.
@@ -957,6 +1012,20 @@ class Summary(pd.DataFrame):
         Returns the filtered row-level DataFrame (not yet aggregated), so you
         can still group/aggregate however you like afterwards.
         """
+
+        if len(self) < 1:
+            print("Summary of no length")
+            return None
+        for v in value_cols:
+            if v not in self.columns:
+                print(f"{v} not in  Summary columns")
+                return None
+        if grouping_by != None:
+            for v in grouping_by:
+                if v not in self.columns:
+                    print(f"{v} not in  Summary columns")
+                    return None
+
         df = self.dropna(subset=[time_col]).copy()
 
         if frequency != None:
@@ -976,6 +1045,8 @@ class Summary(pd.DataFrame):
                         return list(filter(lambda z: True if "hour" in z else False, x))[0]
                     if len(list(filter(lambda z: True if "minute" in z else False, x))) > 0:
                         return list(filter(lambda z: True if "minute" in z else False, x))[0]
+                    if len(list(filter(lambda z: True if "second" in z else False, x))) > 0:
+                        return list(filter(lambda z: True if "second" in z else False, x))[0]
 
                 def freq_ranked():
                     if isinstance(frequency, str):
@@ -999,6 +1070,10 @@ class Summary(pd.DataFrame):
                                 expected = (pd.Timedelta(1, "minute") /
                                             intervals).round().astype(int)
                                 df["xxxyyyxxx"] = df["time"].dt.floor("min")
+                            case "second":
+                                expected = (pd.Timedelta(1, "second") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("s")
                             case "week":
                                 expected = (pd.Timedelta(1, "W") /
                                             intervals).round().astype(int)
@@ -1026,6 +1101,11 @@ class Summary(pd.DataFrame):
                                             intervals).round().astype(int)
                                 df["xxxyyyxxx"] = df["time"].dt.floor(
                                     f"{mult}m")
+                            case "second":
+                                expected = (pd.Timedelta(mult, "second") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}s")
                             case "week":
                                 expected = (pd.Timedelta(mult, "W") /
                                             intervals).round().astype(int)
@@ -1063,6 +1143,10 @@ class Summary(pd.DataFrame):
                                 expected = (pd.Timedelta(1, "minute") /
                                             intervals).round().astype(int)
                                 df["xxxyyyxxx"] = df["time"].dt.floor("min")
+                            case "second":
+                                expected = (pd.Timedelta(1, "second") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor("s")
                             case "week":
                                 expected = (pd.Timedelta(1, "W") /
                                             intervals).round().astype(int)
@@ -1090,6 +1174,11 @@ class Summary(pd.DataFrame):
                                             intervals).round().astype(int)
                                 df["xxxyyyxxx"] = df["time"].dt.floor(
                                     f"{mult}m")
+                            case "second":
+                                expected = (pd.Timedelta(mult, "second") /
+                                            intervals).round().astype(int)
+                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                    f"{mult}s")
                             case "week":
                                 expected = (pd.Timedelta(mult, "W") /
                                             intervals).round().astype(int)
@@ -1132,6 +1221,12 @@ class Summary(pd.DataFrame):
                             else:
                                 df[frequency] = df["time"].map(
                                     lambda x: (x.minute))
+                        case "second":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor("s")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.second))
                         case "week":
                             if flooring_timestamp:
                                 df[frequency] = df["time"].dt.floor("w")
@@ -1165,6 +1260,13 @@ class Summary(pd.DataFrame):
                             else:
                                 df[frequency] = df["time"].map(
                                     lambda x: (x.minute//mult))*mult
+                        case "second":
+                            if flooring_timestamp:
+                                df[frequency] = df["time"].dt.floor(
+                                    f"{mult}s")
+                            else:
+                                df[frequency] = df["time"].map(
+                                    lambda x: (x.second//mult))*mult
                         case "week":
                             if flooring_timestamp:
                                 df[frequency] = df["time"].dt.floor(
@@ -1198,6 +1300,12 @@ class Summary(pd.DataFrame):
                                 else:
                                     df[freq] = df["time"].map(
                                         lambda x: (x.minute))
+                            case "second":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor("s")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.second))
                             case "week":
                                 if flooring_timestamp:
                                     df[freq] = df["time"].dt.floor("w")
@@ -1231,6 +1339,13 @@ class Summary(pd.DataFrame):
                                 else:
                                     df[freq] = df["time"].map(
                                         lambda x: (x.minute//mult))*mult
+                            case "second":
+                                if flooring_timestamp:
+                                    df[freq] = df["time"].dt.floor(
+                                        f"{mult}s")
+                                else:
+                                    df[freq] = df["time"].map(
+                                        lambda x: (x.second//mult))*mult
                             case "week":
                                 if flooring_timestamp:
                                     df[freq] = df["time"].dt.floor(
@@ -1243,11 +1358,37 @@ class Summary(pd.DataFrame):
                                     lambda x: (x.weekday//mult))*mult
 
         if isinstance(frequency, str):
-            output = df.groupby(grouping_by+[frequency])
+            if grouping_by != None:
+                output = df.groupby(grouping_by+[frequency])
+            else:
+                output = df.groupby([frequency])
         if isinstance(frequency, list):
-            output = df.groupby(grouping_by+frequency)
+            if grouping_by != None:
+                output = df.groupby(grouping_by+frequency)
+            else:
+                output = df.groupby(frequency)
         if frequency == None:
-            output = df.groupby(grouping_by)
+            if grouping_by != None:
+                output = df.groupby(grouping_by)
+            else:
+                output = df
+
+        output = output[value_cols].agg(aggregate)
+
+        if frequency != None or grouping_by != None:
+            output.columns = [
+                "_".join(str(x) for x in col if pd.notna(x) and x != "")
+                for col in output.columns.to_flat_index()
+            ]
+
+        output = output.reset_index()
+
+        output = Group(output)
+
+        output.m["value_cols"] = value_cols
+        output.m["frequency"] = frequency
+        output.m["grouping_by"] = grouping_by
+        output.m["aggregate"] = aggregate
 
         return output
 
@@ -1288,7 +1429,7 @@ class Apm(pd.DataFrame):
         else:
             return len(self)*(self.index[1]-self.index[0])
 
-    def date_time_filter(
+    def dt_filter(
             self,
             time_start=None,
             time_end=None,
@@ -1300,6 +1441,15 @@ class Apm(pd.DataFrame):
             and day as [1,2] list of days, with 1 Monday and 7 Sunday,\n
             if selecting a specific date interval that includes time, just specify\n
             that as dt.datetime interval under date_start and date_end"""
+        if type(time_start) is str:
+            time_start = parse(time_start).time()
+        if type(time_end) is str:
+            time_start = parse(time_end).time()
+        if type(date_start) is str:
+            date_start = parse(date_start)
+        if type(date_end) is str:
+            date_end = parse(date_end)
+
         if date_start is not None:
             self = self.loc[self.index >= date_start]
         if date_end is not None:
@@ -1315,7 +1465,6 @@ class Apm(pd.DataFrame):
             self = self.loc[self.index.time >= time_start]
         if (time_start is None) & (time_end is not None):
             self = self.loc[self.index.time <= time_end]
-
         if day is not None:
             self = self.loc[[a in day for a in [self.index[i].date().isoweekday()
                                                 for i in range(len(self.index))]]]
@@ -1362,7 +1511,7 @@ class ApmSeries(pd.Series):
         else:
             return len(self)*(self.index[1]-self.index[0])
 
-    def date_time_filter(
+    def dt_filter(
             self,
             time_start=None,
             time_end=None,
@@ -1374,6 +1523,15 @@ class ApmSeries(pd.Series):
             and day as [1,2] list of days, with 1 Monday and 7 Sunday,\n
             if selecting a specific date interval that includes time, just specify\n
             that as dt.datetime interval under date_start and date_end"""
+        if type(time_start) is str:
+            time_start = parse(time_start).time()
+        if type(time_end) is str:
+            time_start = parse(time_end).time()
+        if type(date_start) is str:
+            date_start = parse(date_start)
+        if type(date_end) is str:
+            date_end = parse(date_end)
+            
         if date_start is not None:
             self = self.loc[self.index >= date_start]
         if date_end is not None:
@@ -1617,7 +1775,7 @@ class PolarH10(dict):
         else:
             return {key: value.length for key, value in self.items() if type(value) != type(None)}
 
-    def date_time_filter(
+    def dt_filter(
             self,
             time_start=None,
             time_end=None,
@@ -1634,182 +1792,7 @@ class PolarH10(dict):
 
         for key, value in out.items():
             if type(value) != type(None):
-                out[key] = value.date_time_filter(
+                out[key] = value.dt_filter(
                     time_start=time_start, time_end=time_end, date_start=date_start, date_end=date_end, day=day)
 
         return out
-
-class Plot():
-    def __init__(self):
-        self.all_figures = []
-        self.colors = itertools.cycle(palette)
-        self.range_start = None
-        self.range_end = None
-
-    def add_figure(self, title=None, figure_sizes=(800, 1400), x_axis_type="datetime"):
-        """
-        x_axis_type = 'datetime' (default)
-        x_axis_type = 'mercator'
-
-        """
-        if x_axis_type == "datetime":
-            self.all_figures.append(bopl.figure(height=figure_sizes[0], width=figure_sizes[1], tools=["box_zoom", 'reset', 'wheel_zoom', "pan", "box_select"],
-                                                x_axis_type=x_axis_type, x_axis_location="below",
-                                                background_fill_color="#efefef"))
-        if x_axis_type == "mercator":
-            self.all_figures.append(bopl.figure(height=figure_sizes[0], width=figure_sizes[1], tools=["box_zoom", 'reset', 'wheel_zoom', "pan", "box_select"],
-                                                x_axis_type=x_axis_type, y_axis_type=x_axis_type,
-                                                background_fill_color="#efefef"))
-            self.all_figures[-1].add_tile(xyz.OpenStreetMap.Mapnik)
-        if title == None:
-            self.all_figures[-1].title.text = f"Figure {len(self.add_figures)}"
-            self.all_figures[-1].title.align = "center"
-            self.all_figures[-1].title.text_font_size = "25px"
-        else:
-            self.all_figures[-1].title.text = title
-            self.all_figures[-1].title.align = "center"
-            self.all_figures[-1].title.text_font_size = "25px"
-
-    def add_data_time(self, datain: DictionaryPlus, variable, plotn=None, filterdict=None, label="", color=None):
-        datain = datain.subset(filterdict) if filterdict != None else datain
-        if len(datain) == 0:
-            pass
-        else:
-            if color == None:
-                color = next(self.colors)
-            if self.range_start == None:
-                self.range_start = min(datain.set_attrib('start'))
-            else:
-                self.range_start = min(
-                    min(datain.set_attrib('start')), self.range_start)
-            if self.range_end == None:
-                self.range_end = max(datain.set_attrib('end'))
-            else:
-                self.range_end = max(
-                    max(datain.set_attrib('end')), self.range_end)
-
-            for value in datain.values():
-                dates = np.array(value.index, dtype=np.datetime64)
-                source = ColumnDataSource(data=dict(date=dates, close=value[variable]))
-                if plotn == None:
-                    x = self.all_figures[-1].line('date', 'close', source=source, alpha=0.7,
-                                                  muted_alpha=0.05, legend_label=label, color=color)
-                else:
-                    x = self.all_figures[plotn].line('date', 'close', source=source, alpha=0.7,
-                                                     muted_alpha=0.05, legend_label=label, color=color)
-
-    def add_data_vertical(self, datain: DictionaryPlus, variable, range_variable,plotn=None, filterdict=None, label="", color=None, line_width=0.3):
-        datain = datain.subset(filterdict) if filterdict != None else datain
-        if len(datain) == 0:
-            pass
-        else:
-            if color == None:
-                color = next(self.colors)
-            if self.range_start == None:
-                self.range_start = min(datain.set_attrib('start'))
-            else:
-                self.range_start = min(
-                    min(datain.set_attrib('start')), self.range_start)
-            if self.range_end == None:
-                self.range_end = max(datain.set_attrib('end'))
-            else:
-                self.range_end = max(
-                    max(datain.set_attrib('end')), self.range_end)
-
-            maximus = max([value[range_variable].max() for value in datain.values()])
-            minimum = 0 if (0 < min([value[range_variable].min() for value in datain.values(
-            )])) else min([value[range_variable].min() for value in datain.values()])
-
-            for value in datain.values():
-                if plotn == None:                
-                    for s in value[variable].value_counts().index:
-                        left = value.loc[value[variable]==s].index[0]
-                        right = value.loc[value[variable]== s].index[-1]
-                        x = self.all_figures[-1].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.02,
-                                                  muted_alpha=0.2, legend_label=label, fill_color=color, line_alpha=0)
-                else:
-                    for s in value[variable].value_counts().index:
-                        left = value.loc[value[variable]==s].index[0]
-                        right = value.loc[value[variable]== s].index[-1]
-                        x = self.all_figures[plotn].quad(left=left,right=right, top=maximus,bottom=minimum, alpha=0.02,
-                                                  muted_alpha=0.2, legend_label=label, fill_color=color, line_alpha=0)
-
-    def lnglat_to_meters(self, longitude, latitude):
-        """
-        Projects the given (longitude, latitude) values into Web Mercator
-        coordinates (meters East of Greenwich and meters North of the Equator).
-
-        Longitude and latitude can be provided as scalars, Pandas columns,
-        or Numpy arrays, and will be returned in the same form.  Lists
-        or tuples will be converted to Numpy arrays.
-
-        Examples:
-        easting, northing = lnglat_to_meters(-40.71,74)
-
-        easting, northing = lnglat_to_meters(np.array([-74]),np.array([40.71]))
-
-        df=pandas.DataFrame(dict(longitude=np.array([-74]),latitude=np.array([40.71])))
-        df.loc[:, 'longitude'], df.loc[:, 'latitude'] = lnglat_to_meters(df.longitude,df.latitude)
-        """
-        if isinstance(longitude, (list, tuple)):
-            longitude = np.array(longitude)
-        if isinstance(latitude, (list, tuple)):
-            latitude = np.array(latitude)
-
-        origin_shift = np.pi * 6378137
-        easting = longitude * origin_shift / 180.0
-        northing = np.log(np.tan((90 + latitude) * np.pi / 360.0)
-                          ) * origin_shift / np.pi
-        return (easting, northing)
-
-    def add_data_geo(self, datain: DictionaryPlus, lat, lon, plotn=None, filterdict=None, label="", color=None, linked_timeseries=True):
-        if color == None:
-            color = next(self.colors)
-        if len(datain) == 0:
-            pass
-        else:
-            for value in datain.values():
-                dates = np.array(value.index, dtype=np.datetime64)
-                longitude, latitude = self.lnglat_to_meters(
-                    value[lon], value[lat])
-                source = ColumnDataSource(
-                    data=dict(date=dates, lat=latitude, lon=longitude, dummy=[np.nan for i in range(len(dates))]))
-                if plotn == None:
-                    x = self.all_figures[-1].scatter(x='lon', y='lat', source=source, alpha=0.7,
-                                                     muted_alpha=0.05, legend_label=label, color=color, size=10)
-                else:
-                    x = self.all_figures[plotn].scatter(x='lon', y='lat', source=source, alpha=0.7,
-                                                        muted_alpha=0.05, legend_label=label, color=color)
-        # if linked_timeseries:
-        #     self.all_figures[0].line('date', 'dummy', source=source, alpha=0,
-        #                                      muted_alpha=0)
-
-    def finalize(self, axis_labels=False, plot_layout=None):
-        datarange = DataRange1d(start=self.range_start-(self.range_end-self.range_start)/20,
-                                end=self.range_end+(self.range_end-self.range_start)/20)
-        for j in range(len(self.all_figures)):
-            self.all_figures[j].add_layout(
-                self.all_figures[j].legend[0], 'right')
-            self.all_figures[j].legend.click_policy = "mute"
-        self.all_figures[0].x_range = datarange
-        for key, value in enumerate(self.all_figures):
-            if key > 0:
-                if type(value.xaxis[0]) == type(DatetimeAxis()):
-                    self.all_figures[key].x_range = self.all_figures[0].x_range
-        if axis_labels:
-            for key, value in enumerate(self.all_figures):
-                if type(value.xaxis[0]) == type(DatetimeAxis()):
-                    self.all_figures[key].yaxis.axis_label = axis_labels[key]
-                    self.all_figures[key].yaxis.axis_label_orientation = 'vertical'
-                    self.all_figures[key].yaxis.axis_label_text_font_size = '10px'
-
-        if plot_layout == None:
-            self.layout = column(self.all_figures)
-        else:
-            self.layout = layout(plot_layout)
-
-    def show(self):
-        bopl.show(self.layout)
-
-    def save(self, filename=os.getcwd()+'/interactive_plots.html'):
-        bopl.save(self.layout, filename=filename)
