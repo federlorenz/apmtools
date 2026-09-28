@@ -1694,7 +1694,6 @@ class Upas(Apm):
         self.m = {}
         self.m["filter"] = Grav_Filter()
         self.variable = "PM2_5MC"
-        self.units = upas_units
     _metadata = ['m']
 
     @property
@@ -1720,7 +1719,6 @@ class Lascar(Apm):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
         self.variable = "CO(ppm)"
-        self.units = lascar_units
     _metadata = ['m']
     
 
@@ -1747,7 +1745,6 @@ class Purple(Apm):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
         self.variable = "pm_adj"
-        self.units = purple_units
     _metadata = ['m']
 
     @property
