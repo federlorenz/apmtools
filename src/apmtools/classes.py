@@ -6,7 +6,13 @@ import uuid as uuid
 from datetime import timedelta
 from io import StringIO
 from csv import writer
+<<<<<<< HEAD
 from dateutil.parser import parse
+=======
+from .units import upas_units, lascar_units, purple_units
+
+import xyzservices.providers as xyz
+>>>>>>> f4892ac (qdqdqd)
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
@@ -1559,6 +1565,7 @@ class Sum(Apm):
     def __init__(self, *args, **kwargs):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
+        self.sampling_rate = pd.Timedelta(seconds=300)
     _metadata = ['m']
 
     @property
@@ -1581,21 +1588,30 @@ class Sum(Apm):
         if len(self) == 0:
             return np.nan
         else:
-            return (self["cooking_counter"].value_counts().max())*((self.index[1]-self.index[0]))
+            return (self["cooking_counter"].value_counts().max())*((self.sampling_rate))
 
     @property
     def min_event_length(self):
         if len(self) == 0:
             return np.nan
         else:
-            return (self["cooking_counter"].value_counts().min())*((self.index[1]-self.index[0]))
+            return (self["cooking_counter"].value_counts().min())*((self.sampling_rate))
 
     @property
     def mean_event_length(self):
         if len(self) == 0:
             return np.nan
         else:
-            return (self["cooking_counter"].value_counts().mean())*((self.index[1]-self.index[0]))
+            return (self["cooking_counter"].value_counts().mean())*((self.sampling_rate))
+
+    @property
+    def cooking_time(self):
+        if len(self) == 0:
+            return np.nan
+        elif len(self["cooking_counter"].value_counts()) == 0:
+            return pd.Timedelta("00:00:00")
+        else:
+            return (self["cooking_counter"].value_counts().sum())*((self.sampling_rate))
 
     @property
     def cooking_time_per_day(self):
@@ -1604,8 +1620,17 @@ class Sum(Apm):
         elif len(self["cooking_counter"].value_counts()) == 0:
             return pd.Timedelta("00:00:00")
         else:
-            return ((self["cooking_counter"].value_counts().sum())*((self.index[1]-self.index[0])) / self.length) * \
+            return ((self["cooking_counter"].value_counts().sum())*((self.sampling_rate)) / self.length) * \
                 pd.Timedelta("24:00:00")
+
+    @property
+    def cooking_events(self):
+        if len(self) == 0:
+            return np.nan
+        elif len(self["cooking_counter"].value_counts()) == 0:
+            return 0
+        else:
+            return self.number_of_events
 
     @property
     def cooking_events_per_day(self):
@@ -1673,6 +1698,7 @@ class Upas(Apm):
         self.m = {}
         self.m["filter"] = Grav_Filter()
         self.variable = "PM2_5MC"
+        self.units = upas_units
     _metadata = ['m']
 
     @property
@@ -1698,6 +1724,7 @@ class Lascar(Apm):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
         self.variable = "CO(ppm)"
+        self.units = lascar_units
     _metadata = ['m']
     
 
@@ -1724,6 +1751,7 @@ class Purple(Apm):
         Apm.__init__(self, *args, **kwargs)
         self.m = {}
         self.variable = "pm_adj"
+        self.units = purple_units
     _metadata = ['m']
 
     @property
