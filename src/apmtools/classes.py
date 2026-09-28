@@ -6,13 +6,9 @@ import uuid as uuid
 from datetime import timedelta
 from io import StringIO
 from csv import writer
-<<<<<<< HEAD
 from dateutil.parser import parse
-=======
-from .units import upas_units, lascar_units, purple_units
 
-import xyzservices.providers as xyz
->>>>>>> f4892ac (qdqdqd)
+from .units import upas_units,lascar_units,purple_units
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
