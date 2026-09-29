@@ -837,6 +837,9 @@ class Dataset(DictionaryPlus):
                 if (k in value.m.keys()) and (value.m[k] == v):
                     value.m[k] = None
 
+    def monitor(self,value):
+        return self.subset({"monitor":[value]})
+
 class Group(pd.DataFrame):
 
     _metadata = ['m']
