@@ -837,7 +837,7 @@ class Dataset(DictionaryPlus):
                 if (k in value.m.keys()) and (value.m[k] == v):
                     value.m[k] = None
 
-    def monitor(self,value):
+    def get_monitor(self,value):
         return self.subset({"monitor":[value]})
 
 class Group(pd.DataFrame):
@@ -1397,6 +1397,9 @@ class Summary(pd.DataFrame):
 
         return output
 
+    def get_monitor(self, value):
+        return self.subset({"monitor": [value]})
+
     def plot_app(
         self,
         x=None,
@@ -1775,6 +1778,10 @@ class Upas(Apm):
     def _constructor_sliced(self):
         return UpasSeries
 
+    @property
+    def units(self):
+        return upas_units
+
 class UpasSeries(ApmSeries):
     def __init__(self, *args, **kwargs):
         ApmSeries.__init__(self, *args, **kwargs)
@@ -1801,6 +1808,10 @@ class Lascar(Apm):
     def _constructor_sliced(self):
         return LascarSeries
 
+    @property
+    def units(self):
+        return lascar_units
+
 class LascarSeries(ApmSeries):
     def __init__(self, *args, **kwargs):
         ApmSeries.__init__(self, *args, **kwargs)
@@ -1825,6 +1836,10 @@ class Purple(Apm):
     @property
     def _constructor_sliced(self):
         return PurpleSeries
+
+    @property
+    def units(self):
+        return purple_units
 
 class PurpleSeries(ApmSeries):
     def __init__(self, *args, **kwargs):
