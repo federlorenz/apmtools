@@ -1397,6 +1397,74 @@ class Summary(pd.DataFrame):
 
         return output
 
+    def plot_app(
+        self,
+        x=None,
+        y=None,
+        group_by=None,
+        plot_type="line",
+        title="Summary plot",
+        host="127.0.0.1",
+        port=0,
+        launch_browser=True,
+        daemon=True,
+    ):
+        """
+        Launch an interactive Shiny plotting application for this Summary.
+
+        Parameters
+        ----------
+        x : str, optional
+            Initial X-axis or categorical column.
+        y : str or sequence of str, optional
+            Initial numeric variable or variables.
+        group_by : str, optional
+            Initial grouping column.
+        plot_type : {"line", "bar", "histogram", "box"}, default="line"
+            Initial plot type. The user can change the plot type in the app.
+        title : str, default="Summary plot"
+            Initial plot title.
+        host : str, default="127.0.0.1"
+            Server host.
+        port : int, default=0
+            Server port. Zero selects an available port.
+        launch_browser : bool, default=True
+            Open the app in the default browser.
+        daemon : bool, default=True
+            Run the server thread as a daemon.
+
+        Returns
+        -------
+        threading.Thread
+            Background thread running the Shiny server.
+
+        Notes
+        -----
+        Install the optional dependencies with:
+
+            pip install "apmtools[shiny]"
+        """
+        try:
+            from .shiny import run_summary_app
+        except ImportError as exc:
+            raise ImportError(
+                "Summary.plot_app() requires the optional Shiny dependencies. "
+                'Install them with: pip install "apmtools[shiny]"'
+            ) from exc
+
+        return run_summary_app(
+            self,
+            x=x,
+            y=y,
+            group_by=group_by,
+            plot_type=plot_type,
+            title=title,
+            host=host,
+            port=port,
+            launch_browser=launch_browser,
+            daemon=daemon,
+        )
+
 class Apm(pd.DataFrame):
     monitor = "apm"
     def __init__(self, *args, **kwargs):
