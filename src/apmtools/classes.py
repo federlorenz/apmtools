@@ -476,7 +476,7 @@ class Dataset(DictionaryPlus):
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
                                      level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate, add_m=add_m)
 
-    def save_summary(self, save_csv=True, filename="./", columns={}):
+    def save_summary(self, save_csv=True, filename="./", columns={}, merged=True):
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -699,7 +699,10 @@ class Dataset(DictionaryPlus):
                 with open(f"{z[0]+"_"+filename if filename != "./" else z[0]+".csv"}", "w", encoding="utf-8") as output:
                     z[1].to_csv(output, index=False)
             out[z[0]] = z[1]
+        if merged:
+            return pd.concat([out[k] for k in out.keys()]).reset_index()
         return out
+
 
     def save_data(self, directory="./saved/", levels=[]):
         def get_specific_level(v, j):
