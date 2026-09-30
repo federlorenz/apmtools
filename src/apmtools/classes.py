@@ -252,7 +252,7 @@ class Dataset(DictionaryPlus):
 
     def subset(self, filter_dict={}, filter_style='all', condition=None):
         """
-        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
+        Return a subset of a Dataset, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
         filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
             attrib is an attribute of the elements of dictionary, and attrib_value is a list
             of the values of such attrib that the elements of returned dictionary can have
@@ -885,7 +885,7 @@ class Summary(pd.DataFrame):
 
     def subset(self, filter_dict={}, filter_style='all'):
         """
-        Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
+        Return a subset of a Summary, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
         filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
             attrib is an attribute of the elements of dictionary, and attrib_value is a list
             of the values of such attrib that the elements of returned dictionary can have
@@ -1401,7 +1401,10 @@ class Summary(pd.DataFrame):
         return output
 
     def get_monitor(self, value):
-        return self.subset({"monitor": [value]})
+        
+        out = self.subset({"monitor": [value]})
+        out = out.dropna(axis=1,how="all")
+        return out
 
     def plot_app(
         self,
