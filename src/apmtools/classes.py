@@ -970,7 +970,7 @@ class Summary(pd.DataFrame):
         if type(time_start) is str:
             time_start = parse(time_start).time()
         if type(time_end) is str:
-            time_start = parse(time_end).time()
+            time_end = parse(time_end).time()
         if type(date_start) is str:
             date_start = parse(date_start)
         if type(date_end) is str:
@@ -1526,7 +1526,7 @@ class Apm(pd.DataFrame):
         if type(time_start) is str:
             time_start = parse(time_start).time()
         if type(time_end) is str:
-            time_start = parse(time_end).time()
+            time_end = parse(time_end).time()
         if type(date_start) is str:
             date_start = parse(date_start)
         if type(date_end) is str:
