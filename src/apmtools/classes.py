@@ -884,60 +884,57 @@ class Summary(pd.DataFrame):
         return self
 
     def subset(self, filter_dict={}, filter_style='all'):
+        """Return rows matching values specified in ``filter_dict``.
+
+        Parameters
+        ----------
+        filter_dict : dict
+            Mapping of column names to iterables of accepted values.
+        filter_style : {'all', 'any', 'negative all', 'negative any'}
+            ``all`` keeps rows matching every supplied condition; ``any`` keeps
+            rows matching at least one condition. ``negative all`` keeps rows
+            that match none of the supplied conditions, and ``negative any``
+            keeps rows that do not match any individual condition.
+
+        Notes
+        -----
+        Filtering is performed positionally rather than assuming that the
+        DataFrame index is ``0..n-1``.  This is important because ``Summary``
+        objects commonly acquire non-contiguous indices after previous
+        filtering operations.
         """
-        Return a subset of a Summary, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
-        filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
-            attrib is an attribute of the elements of dictionary, and attrib_value is a list
-            of the values of such attrib that the elements of returned dictionary can have
-        specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
-        """
-        if type(filter_dict) != type(dict()):
+        
+        if not isinstance(filter_dict, dict):
             print("subset function error: type filter_dict should be dict")
             return
+
         return_dict = copy.deepcopy(self)
         a = {}
 
+        if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
+            return return_dict
+
+        # Only conditions referring to existing columns can be evaluated.
+        conditions = []
+        for column, values in filter_dict.items():
+            if column in return_dict.columns:
+                conditions.append(return_dict[column].isin(values).to_numpy())
+
+        if not conditions:
+            return return_dict
+
+        conditions = pd.DataFrame(conditions, dtype=bool)
+
         if filter_style == 'all':
-            filtering_list = [False]*(len(return_dict))
-            for i, j in filter_dict.items():
-                if (i in return_dict.columns):
-                    for z in range(len(return_dict)):
-                        if return_dict.loc[z, i] in j:
-                            filtering_list[z] = True
-                        else:
-                            filtering_list[z] = False
-            return_dict = return_dict.loc[filtering_list]
+            mask = conditions.all(axis=0).to_numpy()
+        elif filter_style == 'any':
+            mask = conditions.any(axis=0).to_numpy()
+        elif filter_style == 'negative all':
+            mask = (~conditions).all(axis=0).to_numpy()
+        else:  # negative any
+            mask = (~conditions).any(axis=0).to_numpy()
 
-        if filter_style == 'any':
-            filtering_list = [False]*(len(return_dict))
-            for i, j in filter_dict.items():
-                if (i in return_dict.columns):
-                    for z in range(len(return_dict)):
-                        if return_dict.loc[z, i] in j:
-                            filtering_list[z] = True
-            return_dict = return_dict.loc[filtering_list]
-
-        if filter_style == 'negative all':
-            filtering_list = [True]*(len(return_dict))
-            for i, j in filter_dict.items():
-                if (i in return_dict.columns):
-                    for z in range(len(return_dict)):
-                        if return_dict.loc[z, i] in j:
-                            filtering_list[z] = False
-                        else:
-                            filtering_list[z] = True
-            return_dict = return_dict.loc[filtering_list]
-
-        if filter_style == 'negative any':
-            filtering_list = [True]*(len(return_dict))
-            for i, j in filter_dict.items():
-                if (i in return_dict.columns):
-                    for z in range(len(return_dict)):
-                        if return_dict.loc[z, i] in j:
-                            filtering_list[z] = False
-            return_dict = return_dict.loc[filtering_list]
-
-        return return_dict
+        return return_dict.loc[mask]
 
     def show(self, number=0, key=None):
         """
