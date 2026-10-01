@@ -570,15 +570,19 @@ def create_summary_app(
                 if group_columns:
                     group_column = "__plot_group"
                     line_columns = [x_column, group_column, *y_columns]
-                    if identifier_column is not None:
-                        line_columns.append(identifier_column)
+                    line_group_column = identifier_column or section_column
+                    if line_group_column is not None:
+                        line_columns.append(line_group_column)
+
+                    # Keep whichever column controls line segmentation as an
+                    # id_var during melt(). Otherwise pandas drops it and
+                    # Plotly cannot resolve line_group (e.g. __line_section).
+                    id_vars = [x_column, group_column]
+                    if line_group_column is not None:
+                        id_vars.append(line_group_column)
+
                     long_df = plot_df[line_columns].melt(
-                        id_vars=[
-                            x_column,
-                            group_column,
-                            *([identifier_column]
-                              if identifier_column is not None else []),
-                        ],
+                        id_vars=id_vars,
                         var_name="variable",
                         value_name="value",
                     )
@@ -587,7 +591,7 @@ def create_summary_app(
                         x=x_column,
                         y="value",
                         color=group_column,
-                        line_group=identifier_column or section_column,
+                        line_group=line_group_column,
                         facet_row="variable" if len(y_columns) > 1 else None,
                     )
                 elif identifier_column is not None:
