@@ -83,15 +83,22 @@ def _subset_choices(data: pd.DataFrame, column: str) -> tuple[dict[str, str], di
     return choices, value_map
 
 
-def _apply_filters(data, subset_column, subset_values, datetime_start, datetime_end):
-    """Apply Summary.subset() and Summary.dtfilter() in that order."""
+def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None):
+    """Apply multiple ``Summary.subset()`` filters and datetime filtering.
+
+    Parameters
+    ----------
+    subset_filters : dict
+        Mapping of column names to the original values that should be retained.
+        Conditions for different columns are combined with ``filter_style="all"``.
+        Values within one column are OR'd by :meth:`Summary.subset`.
+    """
     filtered = data
 
-    if subset_column != "None" and subset_values:
-        choices, value_map = _subset_choices(filtered, subset_column)
-        values = [value_map[key] for key in subset_values if key in value_map]
-        if values:
-            filtered = filtered.subset({subset_column: values})
+    if subset_filters:
+        # Summary.subset() handles non-contiguous DataFrame indices
+        # positionally, so no index manipulation is required here.
+        filtered = filtered.subset(subset_filters, filter_style="all")
 
     if datetime_start or datetime_end:
         filtered = filtered.dtfilter(
@@ -182,7 +189,7 @@ def create_summary_app(
         raise ValueError(
             f"Unknown plot_type {plot_type!r}. Choose one of: {', '.join(PLOT_TYPES)}")
 
-    subset_columns = ["None", *columns]
+    subset_columns = columns
 
     app_ui = ui.page_sidebar(
         ui.sidebar(
@@ -214,12 +221,12 @@ def create_summary_app(
             ),
             ui.hr(),
             ui.h5("Subset"),
-            ui.input_select("subset_column", "Column",
-                            choices=subset_columns, selected="None"),
             ui.input_selectize(
-                "subset_values", "Values", choices={}, selected=[], multiple=True,
-                options={"placeholder": "Select values"},
+                "subset_columns", "Columns", choices={c: c for c in subset_columns},
+                selected=[], multiple=True,
+                options={"placeholder": "Select one or more columns"},
             ),
+            ui.output_ui("subset_filters"),
             ui.hr(),
             ui.h5("Datetime filter"),
             ui.input_text(
@@ -246,29 +253,59 @@ def create_summary_app(
     )
 
     def server(input, output, session):
-        @reactive.effect
-        def _update_subset_values():
-            selected_column = input.subset_column()
-            if selected_column == "None":
-                choices = {}
-            else:
+        @render.ui
+        def subset_filters():
+            """Render one value selector for every selected subset column."""
+            selected_columns = list(input.subset_columns())
+            if not selected_columns:
+                return ui.help_text(
+                    "Select one or more columns above to choose their values."
+                )
+
+            controls = []
+            for i, selected_column in enumerate(selected_columns):
+                if selected_column not in column_map:
+                    continue
                 choices, _ = _subset_choices(
                     summary, column_map[selected_column])
-            ui.update_selectize("subset_values", choices=choices, selected=[])
+                input_id = f"subset_values_{i}"
+                controls.append(
+                    ui.input_selectize(
+                        input_id,
+                        f"{selected_column} values",
+                        choices=choices,
+                        selected=[],
+                        multiple=True,
+                        options={
+                            "placeholder": f"Select {selected_column} values"},
+                    )
+                )
+            return ui.div(*controls)
 
         @reactive.calc
         def filtered_summary():
-            subset_column = input.subset_column()
-            subset_values = list(input.subset_values())
+            selected_columns = list(input.subset_columns())
+            subset_filters = {}
+
+            for i, selected_column in enumerate(selected_columns):
+                if selected_column not in column_map:
+                    continue
+                selected_keys = list(input[f"subset_values_{i}"]())
+                if not selected_keys:
+                    # An explicitly selected column with no selected values
+                    # should not remove all data; it simply contributes no
+                    # filtering condition until values are chosen.
+                    continue
+                _, value_map = _subset_choices(
+                    summary, column_map[selected_column])
+                values = [value_map[key]
+                          for key in selected_keys if key in value_map]
+                if values:
+                    subset_filters[column_map[selected_column]] = values
+
             start = input.datetime_start().strip()
             end = input.datetime_end().strip()
-            return _apply_filters(
-                summary,
-                column_map[subset_column] if subset_column != "None" else "None",
-                subset_values,
-                start,
-                end,
-            )
+            return _apply_filters(summary, subset_filters, start, end)
 
         @reactive.calc
         def selected_data():
@@ -415,17 +452,72 @@ def create_summary_app(
                         facet_row="variable" if len(y_columns) > 1 else None, barmode="group",
                     )
             else:
-                if not group_columns:
-                    fig = px.line(plot_df, x=x_column, y=y_columns)
-                else:
+                # ``identifier`` identifies an individual input monitor.  It
+                # must therefore be used as Plotly's line-group key even when
+                # it is not one of the user-selected colour/group columns.
+                # This prevents observations from two different monitors
+                # being connected by a line merely because they share the
+                # same selected group.  The identifier is deliberately NOT
+                # used for colour, so monitors in the same selected group
+                # retain the same colour.
+                identifier_column = (
+                    column_map["identifier"]
+                    if "identifier" in column_map
+                    else None
+                )
+
+                if group_columns:
                     group_column = "__plot_group"
-                    long_df = plot_df[[x_column, group_column, *y_columns]].melt(
-                        id_vars=[x_column, group_column], var_name="variable", value_name="value",
+                    line_columns = [x_column, group_column, *y_columns]
+                    if identifier_column is not None:
+                        line_columns.append(identifier_column)
+                    long_df = plot_df[line_columns].melt(
+                        id_vars=[
+                            x_column,
+                            group_column,
+                            *([identifier_column]
+                              if identifier_column is not None else []),
+                        ],
+                        var_name="variable",
+                        value_name="value",
                     )
                     fig = px.line(
-                        long_df, x=x_column, y="value", color=group_column,
+                        long_df,
+                        x=x_column,
+                        y="value",
+                        color=group_column,
+                        line_group=identifier_column if identifier_column is not None else None,
                         facet_row="variable" if len(y_columns) > 1 else None,
                     )
+                elif identifier_column is not None:
+                    # With no explicit grouping, retain the normal Y-variable
+                    # colouring while using identifier to keep each monitor's
+                    # time series separate.
+                    if len(y_columns) == 1:
+                        fig = px.line(
+                            plot_df,
+                            x=x_column,
+                            y=y_columns[0],
+                            line_group=identifier_column,
+                        )
+                    else:
+                        line_columns = [
+                            x_column, identifier_column, *y_columns]
+                        long_df = plot_df[line_columns].melt(
+                            id_vars=[x_column, identifier_column],
+                            var_name="variable",
+                            value_name="value",
+                        )
+                        fig = px.line(
+                            long_df,
+                            x=x_column,
+                            y="value",
+                            color="variable",
+                            line_group=identifier_column,
+                            facet_row="variable",
+                        )
+                else:
+                    fig = px.line(plot_df, x=x_column, y=y_columns)
 
             fig.update_layout(
                 title=input.title(),
