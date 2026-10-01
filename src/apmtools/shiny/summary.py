@@ -351,12 +351,43 @@ def create_summary_app(
                 )
 
             if selected_plot == "histogram":
-                long_df = plot_df[y_columns].melt(
-                    var_name="variable", value_name="value")
-                fig = px.histogram(
-                    long_df, x="value", color="variable", nbins=int(input.bins()),
-                    barmode="overlay" if len(y_columns) > 1 else "relative",
-                )
+                if group_columns:
+                    # With grouping, overlay one histogram per group on the
+                    # same axes.  ``group`` is the color dimension rather
+                    # than the selected variable, so each group gets its own
+                    # histogram.  Transparency makes overlapping groups
+                    # directly comparable.
+                    group_column = "__plot_group"
+                    long_df = plot_df[[group_column, *y_columns]].melt(
+                        id_vars=[group_column],
+                        var_name="variable",
+                        value_name="value",
+                    )
+                    fig = px.histogram(
+                        long_df,
+                        x="value",
+                        color=group_column,
+                        nbins=int(input.bins()),
+                        barmode="overlay",
+                        opacity=0.45,
+                        facet_row=("variable" if len(y_columns) > 1 else None),
+                    )
+                    # Keep the groups as the legend entries rather than the
+                    # selected Y variables.
+                    fig.update_traces(marker_line_width=0)
+                else:
+                    long_df = plot_df[y_columns].melt(
+                        var_name="variable", value_name="value"
+                    )
+                    fig = px.histogram(
+                        long_df,
+                        x="value",
+                        color="variable",
+                        nbins=int(input.bins()),
+                        barmode="overlay" if len(
+                            y_columns) > 1 else "relative",
+                        opacity=0.65 if len(y_columns) > 1 else 1.0,
+                    )
             elif selected_plot == "box":
                 if not group_columns:
                     long_df = plot_df[y_columns].melt(
