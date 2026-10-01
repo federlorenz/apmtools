@@ -142,6 +142,91 @@ def _aggregated_value_columns(data, value_columns, aggregate):
     return columns
 
 
+def _frequency_timedelta(frequency: str) -> pd.Timedelta | None:
+    """Convert a timestamp aggregation frequency to its expected spacing."""
+    if not frequency or frequency == "weekday":
+        return None
+
+    parts = frequency.split()
+    if len(parts) == 1:
+        multiplier = 1.0
+        unit = parts[0]
+    elif len(parts) == 2:
+        try:
+            multiplier = float(parts[0])
+        except ValueError:
+            return None
+        unit = parts[1]
+    else:
+        return None
+
+    units = {
+        "second": "s",
+        "minute": "min",
+        "hour": "h",
+        "day": "d",
+        "week": "W",
+    }
+    if unit not in units:
+        return None
+    return pd.to_timedelta(multiplier, unit=units[unit])
+
+
+def _add_gap_sections(
+    data: pd.DataFrame,
+    *,
+    x_column: str,
+    group_columns: list[str],
+    frequency: str,
+    section_column: str = "__line_section",
+) -> pd.DataFrame:
+    """Assign separate line sections when aggregated observations have gaps.
+
+    Rows remain in the same section while adjacent timestamps are no farther
+    apart than the selected aggregation frequency.  Section numbering restarts
+    independently inside every selected plotting group.
+
+    This is primarily used when ``identifier`` was not included in
+    ``group_stat(grouping_by=...)`` and is therefore no longer available after
+    aggregation.
+    """
+    result = data.copy()
+    if result.empty:
+        result[section_column] = pd.Series(dtype="string")
+        return result
+
+    step = _frequency_timedelta(frequency)
+    if step is None or x_column not in result.columns:
+        # Frequencies such as weekday do not preserve enough chronological
+        # information to infer discontinuities reliably.
+        result[section_column] = "0"
+        return result
+
+    result[x_column] = pd.to_datetime(result[x_column], errors="coerce")
+    sort_columns = [*group_columns, x_column]
+    result = result.sort_values(sort_columns, kind="stable").copy()
+
+    if group_columns:
+        gap = result.groupby(group_columns, dropna=False)[x_column].diff()
+        new_section = gap.gt(step) | gap.isna()
+        section_number = (
+            new_section.astype(int)
+            .groupby([result[c] for c in group_columns], dropna=False)
+            .cumsum()
+            .sub(1)
+        )
+        group_label = result[group_columns].astype(str).agg(" | ".join, axis=1)
+        result[section_column] = group_label + \
+            " | section " + section_number.astype(str)
+    else:
+        gap = result[x_column].diff()
+        section_number = (gap.gt(step) | gap.isna()
+                          ).astype(int).cumsum().sub(1)
+        result[section_column] = "section " + section_number.astype(str)
+
+    return result
+
+
 def create_summary_app(
     data: pd.DataFrame,
     *,
@@ -459,12 +544,28 @@ def create_summary_app(
                 # being connected by a line merely because they share the
                 # same selected group.  The identifier is deliberately NOT
                 # used for colour, so monitors in the same selected group
-                # retain the same colour.
+                # retain the same colour.  After frequency aggregation,
+                # identifier is only available if it was selected as a
+                # grouping variable.  If it is absent, discontinuous runs are
+                # inferred from gaps larger than the selected frequency.
                 identifier_column = (
                     column_map["identifier"]
-                    if "identifier" in column_map
+                    if (
+                        "identifier" in column_map
+                        and column_map["identifier"] in plot_df.columns
+                    )
                     else None
                 )
+
+                section_column = None
+                if frequency is not None and identifier_column is None:
+                    plot_df = _add_gap_sections(
+                        plot_df,
+                        x_column=x_column,
+                        group_columns=group_columns,
+                        frequency=frequency,
+                    )
+                    section_column = "__line_section"
 
                 if group_columns:
                     group_column = "__plot_group"
@@ -486,7 +587,7 @@ def create_summary_app(
                         x=x_column,
                         y="value",
                         color=group_column,
-                        line_group=identifier_column if identifier_column is not None else None,
+                        line_group=identifier_column or section_column,
                         facet_row="variable" if len(y_columns) > 1 else None,
                     )
                 elif identifier_column is not None:
@@ -514,6 +615,29 @@ def create_summary_app(
                             y="value",
                             color="variable",
                             line_group=identifier_column,
+                            facet_row="variable",
+                        )
+                elif section_column is not None:
+                    if len(y_columns) == 1:
+                        fig = px.line(
+                            plot_df,
+                            x=x_column,
+                            y=y_columns[0],
+                            line_group=section_column,
+                        )
+                    else:
+                        line_columns = [x_column, section_column, *y_columns]
+                        long_df = plot_df[line_columns].melt(
+                            id_vars=[x_column, section_column],
+                            var_name="variable",
+                            value_name="value",
+                        )
+                        fig = px.line(
+                            long_df,
+                            x=x_column,
+                            y="value",
+                            color="variable",
+                            line_group=section_column,
                             facet_row="variable",
                         )
                 else:
