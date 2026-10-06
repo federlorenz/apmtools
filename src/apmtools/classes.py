@@ -792,6 +792,8 @@ class Dataset(DictionaryPlus):
                 app.append(float(v.m["parameters"]["SampledVolumeOffset"].strip(
                 ))/1000 if "SampledVolumeOffset" in v.m["parameters"].keys() else float(v.m["parameters"]["SampledVolume"].strip())/1000)
                 df.loc[len(df)] = app
+                
+            df = df.sort_values(axis=1,by="identifier")
             df.to_csv(f"{directory}filter_summary.csv", index=False)
         else:
             print("No Upas files detected in Dataset")
