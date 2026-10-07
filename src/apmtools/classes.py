@@ -39,9 +39,9 @@ class DictionaryPlus(dict):
         """
         Return a subset of a DictionaryPlus, specified in the parameter filter_dict (itself a dictionary) or condition (a function that takes at minimum a value from the dictionary as an input parameter, and return True/False if some condition specified in the function is met. Typically a lambda function of the form lambda x: True if condition else False)
         filter_dict is {attrib:["attrib_value_x","attrib_value_y",..]}, where 
-            attrib is an attribute of the elements of dictionary, and attrib_value is a list
+            attrib is an attribute of the elements of dictionary, and attrib_value is a value or list
             of the values of such attrib that the elements of returned dictionary can have
-        specify filter_style='all' if all conditions should be met to be included in the return dictionary, specify filter_style='any' for including when any condition is met. Default is 'all'.
+        specify filter_style='all' if all conditions should be met to be included in the return dictionary, other filters allowed are 'any', 'negative all', 'negative any'.
         """
         if type(filter_dict) != type(dict()):
             print("subset function error: type filter_dict should be dict")
@@ -49,14 +49,17 @@ class DictionaryPlus(dict):
         return_dict = copy.deepcopy(self)
         a = {}
 
+        if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
+            return return_dict
+
         if filter_style == 'all':
             a = {key: value for key, value in return_dict.items()}
             for key, value in return_dict.items():
                 for i, j in filter_dict.items():
                     if hasattr(value, i):
                         try:
-                            if type(j) == type(""):
-                                if not eval("value.__getattr__(\""+i+"\")" + j):
+                            if type(j) is not list:
+                                if getattr(value, i) not in [j]:
                                     del a[key]
                                     break
                             else:
@@ -67,8 +70,8 @@ class DictionaryPlus(dict):
                             pass
                     elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
-                            if type(j) == type(""):
-                                if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] not in [j]:
                                     del a[key]
                                     break
                             else:
@@ -86,8 +89,8 @@ class DictionaryPlus(dict):
                 for i, j in filter_dict.items():
                     if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] in [j]:
                                     a[key] = value
                                     break
                             else:
@@ -98,8 +101,8 @@ class DictionaryPlus(dict):
                             pass
                     else:
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__(\""+i+"\")" + j):
+                            if type(j) is not list:
+                                if getattr(value, i) in [j]:
                                     a[key] = value
                                     break
                             else:
@@ -109,14 +112,14 @@ class DictionaryPlus(dict):
                         except:
                             pass
 
-        if filter_style == 'negative':
+        if filter_style == 'negative all':
             a = {key: value for key, value in return_dict.items()}
             for key, value in return_dict.items():
                 for i, j in filter_dict.items():
                     if hasattr(value, i):
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__(\""+i+"\")" + j):
+                            if type(j) is not list:
+                                if getattr(value, i) in [j]:
                                     del a[key]
                                     break
                             else:
@@ -127,8 +130,8 @@ class DictionaryPlus(dict):
                             pass
                     elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] in [j]:
                                     del a[key]
                                     break
                             else:
@@ -139,6 +142,40 @@ class DictionaryPlus(dict):
                             pass
                     else:
                         break
+
+        if filter_style == 'negative any':
+            b = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) is not list:
+                                if getattr(value, i) not in [j]:
+                                    del b[key]
+                                    break
+                            else:
+                                if getattr(value, i) not in j:
+                                    del b[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] not in [j]:
+                                    del b[key]
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] not in j:
+                                    del b[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        del b[key]
+                        break
+            a = {key: value for key, value in return_dict.items()
+                 if key not in b.keys()}
 
         if condition != None:
             if a == {}:
@@ -264,14 +301,17 @@ class Dataset(DictionaryPlus):
         return_dict = copy.deepcopy(self)
         a = {}
 
+        if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
+            return return_dict
+
         if filter_style == 'all':
             a = {key: value for key, value in return_dict.items()}
             for key, value in return_dict.items():
                 for i, j in filter_dict.items():
                     if hasattr(value, i):
                         try:
-                            if type(j) == type(""):
-                                if not eval("value.__getattr__(\""+i+"\")" + j):
+                            if type(j) is not list:
+                                if getattr(value, i) not in [j]:
                                     del a[key]
                                     break
                             else:
@@ -282,8 +322,8 @@ class Dataset(DictionaryPlus):
                             pass
                     elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
-                            if type(j) == type(""):
-                                if not eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] not in [j]:
                                     del a[key]
                                     break
                             else:
@@ -301,8 +341,8 @@ class Dataset(DictionaryPlus):
                 for i, j in filter_dict.items():
                     if hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] in [j]:
                                     a[key] = value
                                     break
                             else:
@@ -313,8 +353,8 @@ class Dataset(DictionaryPlus):
                             pass
                     else:
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__(\""+i+"\")" + j):
+                            if type(j) is not list:
+                                if getattr(value, i) in [j]:
                                     a[key] = value
                                     break
                             else:
@@ -324,14 +364,14 @@ class Dataset(DictionaryPlus):
                         except:
                             pass
 
-        if filter_style == 'negative':
+        if filter_style == 'negative all':
             a = {key: value for key, value in return_dict.items()}
             for key, value in return_dict.items():
                 for i, j in filter_dict.items():
                     if hasattr(value, i):
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__(\""+i+"\")" + j):
+                            if type(j) is not list:
+                                if getattr(value, i) in [j]:
                                     del a[key]
                                     break
                             else:
@@ -342,8 +382,8 @@ class Dataset(DictionaryPlus):
                             pass
                     elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
                         try:
-                            if type(j) == type(""):
-                                if eval("value.__getattr__('m')[\""+i+"\"]" + j):
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] in [j]:
                                     del a[key]
                                     break
                             else:
@@ -354,6 +394,39 @@ class Dataset(DictionaryPlus):
                             pass
                     else:
                         break
+
+        if filter_style == 'negative any':
+            b = {key: value for key, value in return_dict.items()}
+            for key, value in return_dict.items():
+                for i, j in filter_dict.items():
+                    if hasattr(value, i):
+                        try:
+                            if type(j) is not list:
+                                if getattr(value, i) not in [j]:
+                                    del b[key]
+                                    break
+                            else:
+                                if getattr(value, i) not in j:
+                                    del b[key]
+                                    break
+                        except:
+                            pass
+                    elif hasattr(value, 'm') & (type(value.m) == type({})) & (i in value.m.keys()):
+                        try:
+                            if type(j) is not list:
+                                if getattr(value, 'm')[i] not in [j]:
+                                    del b[key]
+                                    break
+                            else:
+                                if getattr(value, 'm')[i] not in j:
+                                    del b[key]
+                                    break
+                        except:
+                            pass
+                    else:
+                        del b[key]
+                        break
+            a = {key:value for key,value in return_dict.items() if key not in b.keys()}
 
         if condition != None:
             if a == {}:
@@ -918,6 +991,8 @@ class Summary(pd.DataFrame):
         # Only conditions referring to existing columns can be evaluated.
         conditions = []
         for column, values in filter_dict.items():
+            if type(values) is not list:
+                values = [values]
             if column in return_dict.columns:
                 conditions.append(return_dict[column].isin(values).to_numpy())
 
