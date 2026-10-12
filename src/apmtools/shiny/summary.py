@@ -16,7 +16,6 @@ PLOT_TYPES = {
     "scatter": "Scatter",
 }
 
-
 # ``None`` means row-level plotting.  The other values are passed directly to
 # Summary.group_stat(frequency=...).
 FREQUENCIES = {
@@ -100,7 +99,8 @@ def _timedelta_columns(data: pd.DataFrame) -> list[str]:
         key=str.casefold,
     )
 
-def _default_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
+
+def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
     """Validate and normalise an initial Y selection."""
     numeric = _numeric_columns(data)
     if y is None:
@@ -177,16 +177,6 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate):
             "grouping columns, frequency, and completeness settings."
         )
     return result
-
-
-def _aggregated_value_columns(data, value_columns, aggregate):
-    """Return the columns produced by Summary.group_stat()."""
-    columns = []
-    for column in value_columns:
-        aggregated = f"{column}_{aggregate}"
-        if aggregated in data.columns:
-            columns.append(aggregated)
-    return columns
 
 
 def _frequency_timedelta(frequency: str) -> pd.Timedelta | None:
@@ -300,16 +290,17 @@ def create_summary_app(
     columns = _alphabetical(summary.columns)
     column_map = {str(c): c for c in summary.columns}
     numeric_columns = _alphabetical(_numeric_columns(summary))
-    categorical_columns = _alphabetical(_categorical_columns(summary))
-    datetime_columns = _alphabetical(_datetime_columns(summary))
-    timedelta_columns = _alphabetical(_timedelta_columns(summary))
-
+    categorical_columns = _categorical_columns(summary)
+    datetime_columns = _datetime_columns(summary)
+    group_columns = _alphabetical(
+        c for c in columns if not pd.api.types.is_numeric_dtype(summary[column_map[c]])
+    )
 
     x = _default_x(summary) if x is None else str(x)
     if x not in column_map:
         raise ValueError(f"Unknown x column: {x!r}")
 
-    initial_y = _default_y(summary, x, y)
+    initial_y = _normalise_y(summary, x, y)
     if group_by is None:
         initial_groups = [_default_group(summary)] if _default_group(
             summary) is not None else []
@@ -320,6 +311,8 @@ def create_summary_app(
     unknown_groups = [c for c in initial_groups if c not in column_map]
     if unknown_groups:
         raise ValueError(f"Unknown group_by column(s): {unknown_groups!r}")
+    # Numeric columns are not offered by the Group by selector.
+    initial_groups = [c for c in initial_groups if c in group_columns]
 
     if plot_type not in PLOT_TYPES:
         raise ValueError(
@@ -336,7 +329,7 @@ def create_summary_app(
             ui.output_ui("y_control"),
             ui.input_selectize(
                 "group_by", "Group by",
-                choices={c: c for c in columns},
+                choices={c: c for c in group_columns},
                 selected=initial_groups,
                 multiple=True,
                 options={"placeholder": "Select one or more grouping columns"},
