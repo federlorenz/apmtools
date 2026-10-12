@@ -9,11 +9,13 @@ import pandas as pd
 
 
 PLOT_TYPES = {
-    "line": "Line",
     "bar": "Bar",
-    "histogram": "Histogram",
     "box": "Boxplot",
+    "histogram": "Histogram",
+    "line": "Line",
+    "scatter": "Scatter",
 }
+
 
 # ``None`` means row-level plotting.  The other values are passed directly to
 # Summary.group_stat(frequency=...).
@@ -28,13 +30,13 @@ FREQUENCIES = {
 }
 
 AGGREGATES = {
+    "Count": "count",
+    "Maximum": "max",
     "Mean": "mean",
     "Median": "median",
-    "Sum": "sum",
     "Minimum": "min",
-    "Maximum": "max",
-    "Count": "count",
     "Standard deviation": "std",
+    "Sum": "sum",
 }
 
 def _default_x(data: pd.DataFrame) -> str:
@@ -98,7 +100,7 @@ def _timedelta_columns(data: pd.DataFrame) -> list[str]:
         key=str.casefold,
     )
 
-def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
+def _default_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
     """Validate and normalise an initial Y selection."""
     numeric = _numeric_columns(data)
     if y is None:
@@ -298,13 +300,16 @@ def create_summary_app(
     columns = _alphabetical(summary.columns)
     column_map = {str(c): c for c in summary.columns}
     numeric_columns = _alphabetical(_numeric_columns(summary))
-    categorical_columns = _categorical_columns(summary)
+    categorical_columns = _alphabetical(_categorical_columns(summary))
+    datetime_columns = _alphabetical(_datetime_columns(summary))
+    timedelta_columns = _alphabetical(_timedelta_columns(summary))
+
 
     x = _default_x(summary) if x is None else str(x)
     if x not in column_map:
         raise ValueError(f"Unknown x column: {x!r}")
 
-    initial_y = _normalise_y(summary, x, y)
+    initial_y = _default_y(summary, x, y)
     if group_by is None:
         initial_groups = [_default_group(summary)] if _default_group(
             summary) is not None else []
@@ -364,8 +369,11 @@ def create_summary_app(
                 "datetime_end", "End datetime",
                 value="", placeholder="YYYY-MM-DD or YYYY-MM-DD HH:MM:SS",
             ),
-            ui.input_numeric("bins", "Histogram bins",
-                             value=30, min=1, max=200, step=1),
+            ui.panel_conditional(
+                "input.plot_type === 'histogram'",
+                ui.input_numeric("bins", "Histogram bins",
+                                 value=30, min=1, max=200, step=1),
+            ),
             ui.input_text("title", "Plot title", value=title),
             ui.help_text(
                 "Subset and datetime filters are applied before aggregation. "
@@ -382,39 +390,53 @@ def create_summary_app(
     def server(input, output, session):
         @render.ui
         def x_control():
-            """Use categorical X choices for boxplots; all columns otherwise."""
-            if input.plot_type() == "box":
-                if not categorical_columns:
-                    return ui.help_text(
-                        "Boxplots require at least one categorical column for the X axis."
-                    )
-                selected = x if x in categorical_columns else categorical_columns[0]
-                return ui.input_select(
-                    "x", "X-axis / category",
-                    choices={c: c for c in categorical_columns},
-                    selected=selected,
+            kind = input.plot_type()
+            if kind in ("box", "bar"):
+                choices = categorical_columns
+                multiple = True
+            elif kind == "line":
+                choices = datetime_columns
+                multiple = False
+            else:
+                choices = numeric_columns
+                multiple = False
+
+            if not choices:
+                return ui.help_text(f"No compatible X variables for {kind}.")
+            selected = [x] if x in choices else [choices[0]]
+            if multiple:
+                return ui.input_selectize(
+                    "x", "X-axis / categories",
+                    choices={c: c for c in choices},
+                    selected=selected, multiple=True,
                 )
             return ui.input_select(
-                "x", "X-axis / category",
-                choices={c: c for c in columns},
-                selected=x,
+                "x", "X-axis / variable",
+                choices={c: c for c in choices},
+                selected=selected[0],
             )
 
         @render.ui
         def y_control():
-            """Boxplots accept one numeric Y variable; other plots accept many."""
-            if input.plot_type() == "box":
-                selected = initial_y[0] if initial_y else (
-                    numeric_columns[0] if numeric_columns else None)
+            kind = input.plot_type()
+            if kind == "histogram":
+                return ui.div()
+            if not numeric_columns:
+                return ui.help_text("No numeric Y variables available.")
+            selected = next(
+                (v for v in initial_y if v in numeric_columns), numeric_columns[0])
+            if kind in ("box", "bar", "scatter"):
                 return ui.input_select(
                     "y", "Y-axis / variable",
                     choices={c: c for c in numeric_columns},
                     selected=selected,
                 )
             return ui.input_selectize(
-                "y", "Y-axis / variable",
+                "y", "Y-axis / variables",
                 choices={c: c for c in numeric_columns},
-                selected=initial_y, multiple=True,
+                selected=[v for v in initial_y if v in numeric_columns] or [
+                    selected],
+                multiple=True,
             )
 
         @render.ui
@@ -474,89 +496,92 @@ def create_summary_app(
         @reactive.calc
         def selected_data():
             current = filtered_summary()
-            y_input = input.y()
-            selected_y = ([y_input] if isinstance(
-                y_input, str) else list(y_input or []))
-            if not selected_y:
+            kind = input.plot_type()
+            x_input = input.x()
+            selected_x = ([x_input] if isinstance(
+                x_input, str) else list(x_input or []))
+            if not selected_x:
                 return pd.DataFrame()
 
-            y_columns = [column_map[c] for c in selected_y]
+            if kind == "histogram":
+                value_names = selected_x
+            else:
+                y_input = input.y()
+                value_names = ([y_input] if isinstance(
+                    y_input, str) else list(y_input or []))
+            if not value_names:
+                return pd.DataFrame()
+
             selected_groups = list(input.group_by())
             grouping_by = [column_map[c] for c in selected_groups]
             frequency = FREQUENCIES[input.frequency()]
             aggregate = AGGREGATES[input.aggregate()]
+            value_columns = [column_map[c] for c in value_names]
 
-            # A boxplot's categorical X must survive group_stat(). Include it
-            # as a statistical grouping key when frequency aggregation is used,
-            # without turning it into a colour/group selection in the UI.
-            if input.plot_type() == "box":
-                selected_x = input.x()
-                if selected_x in column_map:
-                    box_x = column_map[selected_x]
-                    if box_x not in grouping_by:
-                        grouping_by = [*grouping_by, box_x]
-
-            # All selected grouping columns are passed directly to
-            # Summary.group_stat() when a frequency is selected.
+            if kind in ("box", "bar"):
+                for c in selected_x:
+                    if column_map[c] not in grouping_by:
+                        grouping_by.append(column_map[c])
+            if kind == "scatter" and frequency is not None:
+                # Both numerical axes must be aggregated on the same rows.
+                value_columns = list(dict.fromkeys(
+                    [column_map[selected_x[0]], *value_columns]
+                ))
             if frequency is not None:
-                current = _aggregate(current, y_columns,
-                                     frequency, grouping_by, aggregate)
-
+                current = _aggregate(
+                    current, value_columns, frequency, grouping_by, aggregate
+                )
             return current
 
         @render_plotly
         def plot():
             plot_df = selected_data()
             selected_plot = input.plot_type()
-            selected_x = input.x()
-            y_input = input.y()
+            x_input = input.x()
+            selected_x = ([x_input] if isinstance(
+                x_input, str) else list(x_input or []))
+            y_input = None if selected_plot == "histogram" else input.y()
             selected_y = ([y_input] if isinstance(
                 y_input, str) else list(y_input or []))
             selected_groups = list(input.group_by())
             frequency = FREQUENCIES[input.frequency()]
 
-            if plot_df.empty or not selected_y:
+            if plot_df.empty or not selected_x or (
+                selected_plot != "histogram" and not selected_y
+            ):
                 return px.scatter(title="No data for the selected filters")
 
-            # Keep the original selected Y columns separate from the columns
-            # produced by group_stat().  For example, selecting ``pm25`` and
-            # hourly means produces ``pm25_mean`` in the aggregated result.
-            selected_y_columns = [column_map[c] for c in selected_y]
+            aggregate = AGGREGATES[input.aggregate()]
 
-            # Summary.group_stat() creates the frequency column itself.
-            # For example, frequency="hour" creates an ``hour`` column,
-            # while an aggregate such as mean creates ``pm25_mean``.
-            # Therefore the aggregated frequency column replaces the
-            # originally selected X-axis column.
-            if frequency is not None:
-                aggregate = AGGREGATES[input.aggregate()]
-                y_columns = _aggregated_value_columns(
-                    plot_df, selected_y_columns, aggregate
-                )
-                if selected_plot == "box":
-                    if selected_x not in column_map:
-                        return px.scatter(title="Select a categorical X variable for the boxplot")
-                    x_column = column_map[selected_x]
-                else:
-                    x_column = frequency
+            def mapped(column):
+                original = column_map[column]
+                return f"{original}_{aggregate}" if frequency is not None else original
 
-                if x_column not in plot_df.columns:
-                    return px.scatter(
-                        title=(
-                            f"Aggregation did not produce the expected "
-                            f"'{x_column}' column"
-                        )
-                    )
+            if selected_plot == "histogram":
+                x_column = mapped(selected_x[0])
+                y_columns = []
+            elif selected_plot in ("box", "bar"):
+                x_columns = [column_map[c] for c in selected_x]
+                x_column = x_columns[0]
+                y_columns = [mapped(selected_y[0])]
+            elif selected_plot == "scatter":
+                x_column = mapped(selected_x[0])
+                y_columns = [mapped(selected_y[0])]
             else:
-                y_columns = [
-                    c for c in selected_y_columns if c in plot_df.columns
-                ]
-                x_column = column_map[selected_x]
+                x_column = frequency if frequency is not None else column_map[selected_x[0]]
+                y_columns = [mapped(c) for c in selected_y]
 
-            if not y_columns:
-                return px.scatter(
-                    title="Selected variables are not available after aggregation"
-                )
+            required = [x_column, *y_columns]
+            if selected_plot in ("box", "bar"):
+                required.extend(x_columns)
+            if any(c not in plot_df.columns for c in required):
+                return px.scatter(title="Selected variables are unavailable after aggregation")
+
+            if selected_plot in ("box", "bar"):
+                plot_df = plot_df.copy()
+                plot_df["__plot_category"] = plot_df[x_columns].astype(
+                    str).agg(" | ".join, axis=1)
+                x_column = "__plot_category"
 
             # Multiple grouping columns are supported by group_stat(). For
             # plotting, Plotly needs one color/category column, so combine the
@@ -570,74 +595,31 @@ def create_summary_app(
                 )
 
             if selected_plot == "histogram":
-                if group_columns:
-                    # With grouping, overlay one histogram per group on the
-                    # same axes.  ``group`` is the color dimension rather
-                    # than the selected variable, so each group gets its own
-                    # histogram.  Transparency makes overlapping groups
-                    # directly comparable.
-                    group_column = "__plot_group"
-                    long_df = plot_df[[group_column, *y_columns]].melt(
-                        id_vars=[group_column],
-                        var_name="variable",
-                        value_name="value",
-                    )
-                    fig = px.histogram(
-                        long_df,
-                        x="value",
-                        color=group_column,
-                        nbins=int(input.bins()),
-                        barmode="overlay",
-                        opacity=0.45,
-                        facet_row=("variable" if len(y_columns) > 1 else None),
-                    )
-                    # Keep the groups as the legend entries rather than the
-                    # selected Y variables.
-                    fig.update_traces(marker_line_width=0)
-                else:
-                    long_df = plot_df[y_columns].melt(
-                        var_name="variable", value_name="value"
-                    )
-                    fig = px.histogram(
-                        long_df,
-                        x="value",
-                        color="variable",
-                        nbins=int(input.bins()),
-                        barmode="overlay" if len(
-                            y_columns) > 1 else "relative",
-                        opacity=0.65 if len(y_columns) > 1 else 1.0,
-                    )
+                fig = px.histogram(
+                    plot_df,
+                    x=x_column,
+                    color="__plot_group" if group_columns else None,
+                    nbins=int(input.bins()),
+                    barmode="overlay",
+                    opacity=0.45 if group_columns else 1.0,
+                )
             elif selected_plot == "box":
-                # Boxplots are distributions of one numerical variable across
-                # categories. X is therefore always the selected categorical
-                # column and Y is exactly one numerical variable.
-                if x_column not in categorical_columns:
-                    return px.scatter(
-                        title="Boxplots require a categorical variable on the X axis"
-                    )
-                y_column = y_columns[0]
-                if group_columns:
-                    fig = px.box(
-                        plot_df, x=x_column, y=y_column,
-                        color="__plot_group", points="outliers",
-                    )
-                else:
-                    fig = px.box(
-                        plot_df, x=x_column, y=y_column, points="outliers"
-                    )
+                fig = px.box(
+                    plot_df, x=x_column, y=y_columns[0],
+                    color="__plot_group" if group_columns else None,
+                    points="outliers",
+                )
             elif selected_plot == "bar":
-                if not group_columns:
-                    fig = px.bar(plot_df, x=x_column,
-                                 y=y_columns, barmode="group")
-                else:
-                    group_column = "__plot_group"
-                    long_df = plot_df[[x_column, group_column, *y_columns]].melt(
-                        id_vars=[x_column, group_column], var_name="variable", value_name="value",
-                    )
-                    fig = px.bar(
-                        long_df, x=x_column, y="value", color=group_column,
-                        facet_row="variable" if len(y_columns) > 1 else None, barmode="group",
-                    )
+                fig = px.bar(
+                    plot_df, x=x_column, y=y_columns[0],
+                    color="__plot_group" if group_columns else None,
+                    barmode="group",
+                )
+            elif selected_plot == "scatter":
+                fig = px.scatter(
+                    plot_df, x=x_column, y=y_columns[0],
+                    color="__plot_group" if group_columns else None,
+                )
             else:
                 # ``identifier`` identifies an individual input monitor.  It
                 # must therefore be used as Plotly's line-group key even when
