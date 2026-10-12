@@ -55,11 +55,48 @@ def _default_group(data: pd.DataFrame) -> str | None:
 
 def _numeric_columns(data: pd.DataFrame) -> list[str]:
     """Return numeric column names as strings."""
-    return [
+    return sorted([
         str(column)
         for column in data.columns
         if pd.api.types.is_numeric_dtype(data[column])
-    ]
+    ])
+
+
+def _categorical_columns(data: pd.DataFrame) -> list[str]:
+    """Return categorical column names as strings."""
+    return sorted(
+        [
+            str(column)
+            for column in data.columns
+            if not pd.api.types.is_numeric_dtype(data[column])
+            and not pd.api.types.is_datetime64_any_dtype(data[column])
+        ],
+        key=str.casefold,
+    )
+
+
+def _datetime_columns(data: pd.DataFrame) -> list[str]:
+    """Return datetime column names as strings."""
+    return sorted(
+        [
+            str(column)
+            for column in data.columns
+            if pd.api.types.is_datetime64_any_dtype(data[column])
+        ],
+        key=str.casefold,
+    )
+
+
+def _timedelta_columns(data: pd.DataFrame) -> list[str]:
+    """Return timedelta column names as strings."""
+    return sorted(
+        [
+            str(column)
+            for column in data.columns
+            if pd.api.types.is_timedelta64_dtype(data[column])
+        ],
+        key=str.casefold,
+    )
 
 def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
     """Validate and normalise an initial Y selection."""
@@ -71,19 +108,6 @@ def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> l
     if missing:
         raise ValueError(f"Unknown y column(s): {missing}")
     return [str(column) for column in values]
-
-
-def _categorical_columns(data: pd.DataFrame) -> list[str]:
-    """Return columns suitable for a boxplot categorical X axis."""
-    return sorted(
-        [
-            str(column)
-            for column in data.columns
-            if not pd.api.types.is_numeric_dtype(data[column])
-            and not pd.api.types.is_datetime64_any_dtype(data[column])
-        ],
-        key=str.casefold,
-    )
 
 
 def _alphabetical(values) -> list[str]:
