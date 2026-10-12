@@ -44,7 +44,10 @@ def _default_x(data: pd.DataFrame) -> str:
         for column in data.columns
         if pd.api.types.is_datetime64_any_dtype(data[column])
     ]
-    return str(datetime_columns[0] if datetime_columns else data.columns[0])
+    if "time" in datetime_columns:
+        return "time"
+    else:
+        return str(datetime_columns[0] if datetime_columns else data.columns[0])
 
 def _default_group(data: pd.DataFrame) -> str | None:
     """Return ``identifier`` when available."""
@@ -58,7 +61,6 @@ def _numeric_columns(data: pd.DataFrame) -> list[str]:
         if pd.api.types.is_numeric_dtype(data[column])
     ]
 
-
 def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
     """Validate and normalise an initial Y selection."""
     numeric = _numeric_columns(data)
@@ -69,6 +71,25 @@ def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> l
     if missing:
         raise ValueError(f"Unknown y column(s): {missing}")
     return [str(column) for column in values]
+
+
+def _categorical_columns(data: pd.DataFrame) -> list[str]:
+    """Return columns suitable for a boxplot categorical X axis."""
+    return sorted(
+        [
+            str(column)
+            for column in data.columns
+            if not pd.api.types.is_numeric_dtype(data[column])
+            and not pd.api.types.is_datetime64_any_dtype(data[column])
+        ],
+        key=str.casefold,
+    )
+
+
+def _alphabetical(values) -> list[str]:
+    """Return string values sorted alphabetically, case-insensitively."""
+    return sorted((str(value) for value in values), key=str.casefold)
+
 
 
 def _subset_choices(data: pd.DataFrame, column: str) -> tuple[dict[str, str], dict[str, object]]:
@@ -250,9 +271,10 @@ def create_summary_app(
         raise ValueError(
             "Cannot create a Shiny application from an empty Summary.")
 
-    columns = [str(c) for c in summary.columns]
+    columns = _alphabetical(summary.columns)
     column_map = {str(c): c for c in summary.columns}
-    numeric_columns = _numeric_columns(summary)
+    numeric_columns = _alphabetical(_numeric_columns(summary))
+    categorical_columns = _categorical_columns(summary)
 
     x = _default_x(summary) if x is None else str(x)
     if x not in column_map:
@@ -281,12 +303,8 @@ def create_summary_app(
             ui.h4("Plot controls"),
             ui.input_select("plot_type", "Plot type",
                             choices=PLOT_TYPES, selected=plot_type),
-            ui.input_select("x", "X-axis / category",
-                            choices=columns, selected=x),
-            ui.input_selectize(
-                "y", "Y-axis / variable", choices=numeric_columns,
-                selected=initial_y, multiple=True,
-            ),
+            ui.output_ui("x_control"),
+            ui.output_ui("y_control"),
             ui.input_selectize(
                 "group_by", "Group by",
                 choices={c: c for c in columns},
@@ -338,6 +356,43 @@ def create_summary_app(
     )
 
     def server(input, output, session):
+        @render.ui
+        def x_control():
+            """Use categorical X choices for boxplots; all columns otherwise."""
+            if input.plot_type() == "box":
+                if not categorical_columns:
+                    return ui.help_text(
+                        "Boxplots require at least one categorical column for the X axis."
+                    )
+                selected = x if x in categorical_columns else categorical_columns[0]
+                return ui.input_select(
+                    "x", "X-axis / category",
+                    choices={c: c for c in categorical_columns},
+                    selected=selected,
+                )
+            return ui.input_select(
+                "x", "X-axis / category",
+                choices={c: c for c in columns},
+                selected=x,
+            )
+
+        @render.ui
+        def y_control():
+            """Boxplots accept one numeric Y variable; other plots accept many."""
+            if input.plot_type() == "box":
+                selected = initial_y[0] if initial_y else (
+                    numeric_columns[0] if numeric_columns else None)
+                return ui.input_select(
+                    "y", "Y-axis / variable",
+                    choices={c: c for c in numeric_columns},
+                    selected=selected,
+                )
+            return ui.input_selectize(
+                "y", "Y-axis / variable",
+                choices={c: c for c in numeric_columns},
+                selected=initial_y, multiple=True,
+            )
+
         @render.ui
         def subset_filters():
             """Render one value selector for every selected subset column."""
@@ -395,7 +450,9 @@ def create_summary_app(
         @reactive.calc
         def selected_data():
             current = filtered_summary()
-            selected_y = list(input.y())
+            y_input = input.y()
+            selected_y = ([y_input] if isinstance(
+                y_input, str) else list(y_input or []))
             if not selected_y:
                 return pd.DataFrame()
 
@@ -405,9 +462,18 @@ def create_summary_app(
             frequency = FREQUENCIES[input.frequency()]
             aggregate = AGGREGATES[input.aggregate()]
 
+            # A boxplot's categorical X must survive group_stat(). Include it
+            # as a statistical grouping key when frequency aggregation is used,
+            # without turning it into a colour/group selection in the UI.
+            if input.plot_type() == "box":
+                selected_x = input.x()
+                if selected_x in column_map:
+                    box_x = column_map[selected_x]
+                    if box_x not in grouping_by:
+                        grouping_by = [*grouping_by, box_x]
+
             # All selected grouping columns are passed directly to
-            # Summary.group_stat() when a frequency is selected.  With raw
-            # data they remain plotting-only grouping columns.
+            # Summary.group_stat() when a frequency is selected.
             if frequency is not None:
                 current = _aggregate(current, y_columns,
                                      frequency, grouping_by, aggregate)
@@ -419,7 +485,9 @@ def create_summary_app(
             plot_df = selected_data()
             selected_plot = input.plot_type()
             selected_x = input.x()
-            selected_y = list(input.y())
+            y_input = input.y()
+            selected_y = ([y_input] if isinstance(
+                y_input, str) else list(y_input or []))
             selected_groups = list(input.group_by())
             frequency = FREQUENCIES[input.frequency()]
 
@@ -441,7 +509,12 @@ def create_summary_app(
                 y_columns = _aggregated_value_columns(
                     plot_df, selected_y_columns, aggregate
                 )
-                x_column = frequency
+                if selected_plot == "box":
+                    if selected_x not in column_map:
+                        return px.scatter(title="Select a categorical X variable for the boxplot")
+                    x_column = column_map[selected_x]
+                else:
+                    x_column = frequency
 
                 if x_column not in plot_df.columns:
                     return px.scatter(
@@ -511,18 +584,23 @@ def create_summary_app(
                         opacity=0.65 if len(y_columns) > 1 else 1.0,
                     )
             elif selected_plot == "box":
-                if not group_columns:
-                    long_df = plot_df[y_columns].melt(
-                        var_name="variable", value_name="value")
-                    fig = px.box(long_df, x="variable",
-                                 y="value", points="outliers")
-                else:
-                    group_column = "__plot_group"
-                    long_df = plot_df[[group_column, *y_columns]].melt(
-                        id_vars=[group_column], var_name="variable", value_name="value",
+                # Boxplots are distributions of one numerical variable across
+                # categories. X is therefore always the selected categorical
+                # column and Y is exactly one numerical variable.
+                if x_column not in categorical_columns:
+                    return px.scatter(
+                        title="Boxplots require a categorical variable on the X axis"
                     )
-                    fig = px.box(long_df, x="variable", y="value",
-                                 color=group_column, points="outliers")
+                y_column = y_columns[0]
+                if group_columns:
+                    fig = px.box(
+                        plot_df, x=x_column, y=y_column,
+                        color="__plot_group", points="outliers",
+                    )
+                else:
+                    fig = px.box(
+                        plot_df, x=x_column, y=y_column, points="outliers"
+                    )
             elif selected_plot == "bar":
                 if not group_columns:
                     fig = px.bar(plot_df, x=x_column,
