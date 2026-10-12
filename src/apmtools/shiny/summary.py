@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
-
+import numpy as np
 import pandas as pd
 
 
@@ -178,6 +178,121 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate):
         )
     return result
 
+
+def _histogram_figure(
+    data: pd.DataFrame,
+    x_column: str,
+    *,
+    group_column: str | None = None,
+    bins: int = 30,
+    density: bool = False,
+    stacked: bool = False,
+    histtype: str = "bar",
+    cumulative: int = 0,
+):
+    """Build a Matplotlib-compatible histogram using shared bin boundaries.
+
+    ``cumulative`` is 0 (off), 1 (forward), or -1 (reverse).
+    Density for stacked data is normalized across all groups; otherwise each
+    group's histogram is normalized independently.
+    """
+    import plotly.graph_objects as go
+
+    if histtype not in {"bar", "barstacked", "step", "stepfilled"}:
+        raise ValueError(f"Unknown histtype: {histtype}")
+    if cumulative not in {-1, 0, 1}:
+        raise ValueError("cumulative must be -1, 0 or 1")
+    if bins < 1:
+        raise ValueError("bins must be positive")
+
+    stacked = bool(stacked or histtype == "barstacked")
+    labels = (
+        list(pd.unique(data[group_column].dropna()))
+        if group_column is not None
+        else ["All observations"]
+    )
+    arrays = []
+    for label in labels:
+        rows = data.loc[data[group_column] == label] if group_column else data
+        values = pd.to_numeric(
+            rows[x_column], errors="coerce").to_numpy(dtype=float)
+        arrays.append(values[np.isfinite(values)])
+
+    all_values = np.concatenate(arrays) if arrays else np.array([])
+    fig = go.Figure()
+    if not len(all_values):
+        fig.update_layout(title="No numerical observations")
+        return fig
+
+    edges = np.histogram_bin_edges(all_values, bins=bins)
+    widths = np.diff(edges)
+    counts = np.array([np.histogram(v, bins=edges)[0]
+                      for v in arrays], dtype=float)
+    totals = counts.sum(axis=1)
+    grand_total = totals.sum()
+
+    if density:
+        if stacked:
+            heights = counts / (grand_total * widths)
+        else:
+            heights = np.divide(
+                counts, totals[:, None] * widths[None, :],
+                out=np.zeros_like(counts),
+                where=(totals[:, None] > 0),
+            )
+    else:
+        heights = counts.copy()
+
+    if cumulative:
+        # Cumulative density is a CDF/survival curve, not the sum of
+        # bin-wise probability densities. It must integrate bin mass.
+        mass = counts / grand_total if (density and stacked) else counts.copy()
+        if density and not stacked:
+            mass = np.divide(
+                counts, totals[:, None],
+                out=np.zeros_like(counts),
+                where=(totals[:, None] > 0),
+            )
+        heights = (
+            np.cumsum(mass, axis=1)
+            if cumulative == 1
+            else np.flip(np.cumsum(np.flip(mass, axis=1), axis=1), axis=1)
+        )
+
+    for index, label in enumerate(labels):
+        values = heights[index]
+        if histtype in ("bar", "barstacked"):
+            fig.add_trace(go.Bar(
+                name=str(label),
+                x=(edges[:-1] + edges[1:]) / 2,
+                y=values,
+                width=widths,
+                marker_line_width=0,
+            ))
+        else:
+            # Horizontal steps start/end at the shared bin boundaries.
+            xx = np.repeat(edges, 2)[1:-1]
+            yy = np.repeat(values, 2)
+            fig.add_trace(go.Scatter(
+                name=str(label),
+                x=xx,
+                y=yy,
+                mode="lines",
+                fill="tozeroy" if histtype == "stepfilled" else None,
+                stackgroup="histogram" if stacked and histtype == "stepfilled" else None,
+            ))
+
+    fig.update_layout(
+        barmode="stack" if stacked else "group",
+        xaxis_title=x_column,
+        yaxis_title=(
+            "Cumulative probability" if cumulative and density
+            else "Cumulative count" if cumulative
+            else "Probability density" if density
+            else "Count"
+        ),
+    )
+    return fig
 
 def _frequency_timedelta(frequency: str) -> pd.Timedelta | None:
     """Convert a timestamp aggregation frequency to its expected spacing."""
@@ -366,6 +481,17 @@ def create_summary_app(
                 "input.plot_type === 'histogram'",
                 ui.input_numeric("bins", "Histogram bins",
                                  value=30, min=1, max=200, step=1),
+                ui.input_select("hist_density", "Density", choices={
+                                "False": "False", "True": "True"}, selected="False"),
+                ui.input_select("hist_stacked", "Stacked", choices={
+                                "False": "False", "True": "True"}, selected="False"),
+                ui.input_select("hist_type", "Histogram type", choices={
+                    "bar": "bar", "barstacked": "barstacked",
+                    "step": "step", "stepfilled": "stepfilled",
+                }, selected="bar"),
+                ui.input_select("hist_cumulative", "Cumulative", choices={
+                    "0": "False", "1": "True (ascending)", "-1": "-1 (descending)",
+                }, selected="0"),
             ),
             ui.input_text("title", "Plot title", value=title),
             ui.help_text(
@@ -588,13 +714,15 @@ def create_summary_app(
                 )
 
             if selected_plot == "histogram":
-                fig = px.histogram(
+                fig = _histogram_figure(
                     plot_df,
-                    x=x_column,
-                    color="__plot_group" if group_columns else None,
-                    nbins=int(input.bins()),
-                    barmode="overlay",
-                    opacity=0.45 if group_columns else 1.0,
+                    x_column,
+                    group_column="__plot_group" if group_columns else None,
+                    bins=int(input.bins()),
+                    density=input.hist_density() == "True",
+                    stacked=input.hist_stacked() == "True",
+                    histtype=input.hist_type(),
+                    cumulative=int(input.hist_cumulative()),
                 )
             elif selected_plot == "box":
                 fig = px.box(
