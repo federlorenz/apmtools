@@ -500,10 +500,13 @@ def create_summary_app(
                 "Summary.group_stat()."
             ),
         ),
-        ui.card(
-            ui.card_header("Interactive plot"),
-            output_widget("plot", height="75vh"),
-        ),
+        ui.div(
+                    output_widget("plot", height="100%", width="100%"),
+                    style=(
+                        "width: 100%; max-width: 100%; aspect-ratio: 16 / 9; "
+                        "min-height: 0; margin: 0; padding: 0;"
+                    ),
+                ),
     )
 
     def server(input, output, session):
@@ -856,6 +859,7 @@ def create_summary_app(
                 title=input.title(),
                 hovermode="x unified" if selected_plot == "line" else "closest",
                 margin=dict(l=60, r=30, t=70, b=60),
+                autosize=True,
             )
             return fig
 
