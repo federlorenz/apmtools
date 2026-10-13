@@ -1,12 +1,12 @@
-"""Interactive Plotly/Shiny application for apmtools Summary objects."""
+"""Interactive Plotly/Shiny application for :class:`apmtools.Summary`."""
 
 from __future__ import annotations
 
 import threading
 from collections.abc import Sequence
+
 import numpy as np
 import pandas as pd
-
 
 PLOT_TYPES = {
     "bar": "Bar",
@@ -19,11 +19,11 @@ PLOT_TYPES = {
 # ``None`` means row-level plotting.  The other values are passed directly to
 # Summary.group_stat(frequency=...).
 FREQUENCIES = {
+    "Day": "day",
+    "Hour": "hour",
+    "Minute": "minute",
     "None (raw data)": None,
     "Second": "second",
-    "Minute": "minute",
-    "Hour": "hour",
-    "Day": "day",
     "Week": "week",
     "Weekday": "weekday",
 }
@@ -38,21 +38,23 @@ AGGREGATES = {
     "Sum": "sum",
 }
 
+
 def _default_x(data: pd.DataFrame) -> str:
-    """Return the first datetime column, or otherwise the first column."""
+    """Return ``time`` when available, otherwise the first column."""
+    if "time" in data.columns:
+        return "time"
     datetime_columns = [
         column
         for column in data.columns
         if pd.api.types.is_datetime64_any_dtype(data[column])
     ]
-    if "time" in datetime_columns:
-        return "time"
-    else:
-        return str(datetime_columns[0] if datetime_columns else data.columns[0])
+    return str(datetime_columns[0] if datetime_columns else data.columns[0])
+
 
 def _default_group(data: pd.DataFrame) -> str | None:
     """Return ``identifier`` when available."""
     return "identifier" if "identifier" in data.columns else None
+
 
 def _numeric_columns(data: pd.DataFrame) -> list[str]:
     """Return numeric column names as strings."""
@@ -100,6 +102,11 @@ def _timedelta_columns(data: pd.DataFrame) -> list[str]:
     )
 
 
+def _alphabetical(values) -> list[str]:
+    """Return string values sorted alphabetically, case-insensitively."""
+    return sorted((str(value) for value in values), key=str.casefold)
+
+
 def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> list[str]:
     """Validate and normalise an initial Y selection."""
     numeric = _numeric_columns(data)
@@ -112,15 +119,10 @@ def _normalise_y(data: pd.DataFrame, x: str, y: str | Sequence[str] | None) -> l
     return [str(column) for column in values]
 
 
-def _alphabetical(values) -> list[str]:
-    """Return string values sorted alphabetically, case-insensitively."""
-    return sorted((str(value) for value in values), key=str.casefold)
-
-
-
 def _subset_choices(data: pd.DataFrame, column: str) -> tuple[dict[str, str], dict[str, object]]:
     """Build stable Shiny choices and their corresponding original values."""
-    values = pd.unique(data[column].dropna())
+    values = sorted(pd.unique(data[column].dropna()),
+                    key=lambda value: str(value).casefold())
     choices: dict[str, str] = {}
     value_map: dict[str, object] = {}
     for i, value in enumerate(values):
@@ -177,6 +179,16 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate):
             "grouping columns, frequency, and completeness settings."
         )
     return result
+
+
+def _aggregated_value_columns(data, value_columns, aggregate):
+    """Return the columns produced by Summary.group_stat()."""
+    columns = []
+    for column in value_columns:
+        aggregated = f"{column}_{aggregate}"
+        if aggregated in data.columns:
+            columns.append(aggregated)
+    return columns
 
 
 def _histogram_figure(
@@ -293,6 +305,7 @@ def _histogram_figure(
         ),
     )
     return fig
+
 
 def _frequency_timedelta(frequency: str) -> pd.Timedelta | None:
     """Convert a timestamp aggregation frequency to its expected spacing."""
@@ -501,12 +514,85 @@ def create_summary_app(
             ),
         ),
         ui.div(
-                    output_widget("plot", height="100%", width="100%"),
-                    style=(
-                        "width: 100%; max-width: 100%; aspect-ratio: 16 / 9; "
-                        "min-height: 0; margin: 0; padding: 0;"
-                    ),
-                ),
+            ui.tags.style("""
+            /* Allow the main pane to consume all width remaining after the sidebar. */
+            .bslib-sidebar-layout > .main,
+            .bslib-sidebar-layout > main,
+            .bslib-sidebar-layout .main {
+                min-width: 0;
+                width: 100%;
+                max-width: none;
+            }
+            /* Remove the default Bootstrap container width limit, if present. */
+            .container, .container-fluid { max-width: none !important; }
+            .summary-plot-container {
+                width: 100%;
+                max-width: none;
+                /* Height is set from actual rendered width by ResizeObserver. */
+                height: 500px;
+                min-width: 0;
+                min-height: 0;
+                padding: 0;
+                margin: 0;
+                position: relative;
+            }
+            .summary-plot-container > .html-widget-output,
+            .summary-plot-container > .shiny-plot-output,
+            .summary-plot-container > #plot {
+                width: 100% !important;
+                height: 100% !important;
+                max-width: none !important;
+            }
+        """),
+            ui.tags.script("""
+            (() => {
+              // Calculate the actual height in pixels from the rendered width.
+              // CSS aspect-ratio alone does not reliably size shinywidgets.
+              const install = () => {
+                const container = document.querySelector('.summary-plot-container');
+                if (!container || container.dataset.aspectObserverInstalled) return !!container;
+                container.dataset.aspectObserverInstalled = '1';
+                let previousWidth = 0;
+                const resize = () => {
+                  const width = container.getBoundingClientRect().width;
+                  if (width <= 0) return;
+                  const height = Math.round(width / 2);
+                  if (width === previousWidth && container.style.height === `${height}px`) return;
+                  previousWidth = width;
+                  container.style.height = `${height}px`;
+                  const widget = container.querySelector('#plot');
+                  if (widget) {
+                    widget.style.width = '100%';
+                    widget.style.height = `${height}px`;
+                  }
+                  const graph = container.querySelector('.js-plotly-plot');
+                  if (graph && window.Plotly) {
+                    // Plotly sometimes retains a previous fixed pixel height.
+                    window.Plotly.relayout(graph, {width: Math.round(width), height: height});
+                  }
+                };
+                const observer = new ResizeObserver(resize);
+                observer.observe(container);
+                window.addEventListener('resize', resize);
+                // React to Shiny rendering a new Plotly graph.
+                const mutation = new MutationObserver(() => requestAnimationFrame(resize));
+                mutation.observe(container, {childList: true, subtree: false});
+                requestAnimationFrame(resize);
+                return true;
+              };
+              if (!install()) {
+                const startup = new MutationObserver((_, watcher) => {
+                  if (install()) watcher.disconnect();
+                });
+                startup.observe(document.documentElement, {childList: true, subtree: true});
+              }
+            })();
+        """),
+            ui.div(
+                output_widget("plot", height="100%", width="100%"),
+                class_="summary-plot-container",
+            ),
+        ),
     )
 
     def server(input, output, session):
