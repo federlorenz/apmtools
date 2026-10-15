@@ -1440,17 +1440,17 @@ class Summary(pd.DataFrame):
 
         if isinstance(frequency, str):
             if grouping_by != None:
-                output = df.groupby(grouping_by+[frequency])
+                output = df.groupby(grouping_by+[frequency], dropna=False)
             else:
-                output = df.groupby([frequency])
+                output = df.groupby([frequency], dropna=False)
         if isinstance(frequency, list):
             if grouping_by != None:
-                output = df.groupby(grouping_by+frequency)
+                output = df.groupby(grouping_by+frequency, dropna=False)
             else:
-                output = df.groupby(frequency)
+                output = df.groupby(frequency, dropna=False)
         if frequency == None:
             if grouping_by != None:
-                output = df.groupby(grouping_by)
+                output = df.groupby(grouping_by, dropna=False)
             else:
                 output = df
 
@@ -1473,6 +1473,7 @@ class Summary(pd.DataFrame):
 
         return output
 
+
     def get_monitor(self, value):
         
         out = self.subset({"monitor": [value]})
@@ -1490,6 +1491,7 @@ class Summary(pd.DataFrame):
         port=0,
         launch_browser=True,
         daemon=True,
+        backend="plotly",
     ):
         """
         Launch an interactive Shiny plotting application for this Summary.
@@ -1500,8 +1502,9 @@ class Summary(pd.DataFrame):
             Initial X-axis or categorical column.
         y : str or sequence of str, optional
             Initial numeric variable or variables.
-        group_by : str, optional
-            Initial grouping column.
+        group_by : str or sequence of str, optional
+            Initial grouping column or columns. Multiple columns are passed to
+            ``Summary.group_stat(grouping_by=[...])`` when aggregation is used.
         plot_type : {"line", "bar", "histogram", "box"}, default="line"
             Initial plot type. The user can change the plot type in the app.
         title : str, default="Summary plot"
@@ -1514,6 +1517,9 @@ class Summary(pd.DataFrame):
             Open the app in the default browser.
         daemon : bool, default=True
             Run the server thread as a daemon.
+
+        backend : {"plotly", "matplotlib"}, default="plotly"
+            Plot rendering backend.
 
         Returns
         -------
@@ -1545,6 +1551,7 @@ class Summary(pd.DataFrame):
             port=port,
             launch_browser=launch_browser,
             daemon=daemon,
+            backend=backend,
         )
 
 class Apm(pd.DataFrame):
