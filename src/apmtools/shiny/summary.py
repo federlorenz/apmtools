@@ -42,7 +42,8 @@ def _label_plot_axes(fig, plot_type, x_column, y_columns, *,
         fig.update_xaxes(title_text=_axis_label(x_column))
     elif plot_type in {"box", "bar"}:
         categories = category_columns or [x_column]
-        fig.update_xaxes(title_text=" | ".join(_axis_label(c) for c in categories))
+        fig.update_xaxes(title_text=" | ".join(_axis_label(c)
+                         for c in categories))
         fig.update_yaxes(title_text=_axis_label(y_columns[0]))
     elif plot_type == "line" and len(y_columns) > 1:
         fig.update_xaxes(title_text=_axis_label(x_column))
@@ -93,13 +94,15 @@ def _matplotlib_tick_controls(ax, *, kind, box_orientation="vertical", show_grid
         count = max(2, min(30, int(count or 6)))
         if axis.get_scale() == "linear":
             if isinstance(axis.get_major_locator(), AutoDateLocator):
-                axis.set_major_locator(AutoDateLocator(minticks=max(2, count - 2), maxticks=count))
+                axis.set_major_locator(AutoDateLocator(
+                    minticks=max(2, count - 2), maxticks=count))
             else:
                 axis.set_major_locator(MaxNLocator(nbins=count))
         if minor:
             axis.set_minor_locator(AutoMinorLocator())
         else:
-            axis.set_minor_locator(__import__("matplotlib.ticker", fromlist=["NullLocator"]).NullLocator())
+            axis.set_minor_locator(__import__(
+                "matplotlib.ticker", fromlist=["NullLocator"]).NullLocator())
         axis.grid(bool(show_grid and minor), which="minor")
 
 
@@ -119,8 +122,10 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
     fig.update_layout(title=title, template=template, font=dict(size=font_size),
                       title_font=dict(size=title_font_size),
                       legend=dict(font=dict(size=legend_font_size), title_font=dict(size=legend_font_size)))
-    fig.update_xaxes(title_font=dict(size=axis_font_size), tickfont=dict(size=tick_font_size))
-    fig.update_yaxes(title_font=dict(size=axis_font_size), tickfont=dict(size=tick_font_size))
+    fig.update_xaxes(title_font=dict(size=axis_font_size),
+                     tickfont=dict(size=tick_font_size))
+    fig.update_yaxes(title_font=dict(size=axis_font_size),
+                     tickfont=dict(size=tick_font_size))
     if x_label.strip():
         fig.update_xaxes(title_text=x_label.strip())
     if y_label.strip():
@@ -133,17 +138,20 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
         if not active:
             continue
         update = getattr(fig, f"update_{axis_name}axes")
-        update(nticks=max(2, min(30, int(count or 6))), minor=dict(ticks="inside" if minor else "", showgrid=bool(show_grid and minor)))
+        update(nticks=max(2, min(30, int(count or 6))), minor=dict(
+            ticks="inside" if minor else "", showgrid=bool(show_grid and minor)))
     for axis, lower, upper in (("x", x_min, x_max), ("y", y_min, y_max)):
         datetime_axis = axis == "x" and any(
             getattr(trace, "type", "") == "scatter" and
-            any(isinstance(v, (pd.Timestamp, datetime, np.datetime64)) for v in (trace.x[:3] if trace.x is not None else []))
+            any(isinstance(v, (pd.Timestamp, datetime, np.datetime64))
+                for v in (trace.x[:3] if trace.x is not None else []))
             for trace in fig.data
         )
         low = _parse_axis_limit(lower, datetime_axis=datetime_axis)
         high = _parse_axis_limit(upper, datetime_axis=datetime_axis)
         if low is not None or high is not None:
-            getattr(fig, f"update_{axis}axes")(range=[low, high], autorange=False)
+            getattr(fig, f"update_{axis}axes")(
+                range=[low, high], autorange=False)
     positions = {
         "right": dict(x=1.02, y=1, xanchor="left", yanchor="top"),
         "left": dict(x=-0.1, y=1, xanchor="right", yanchor="top"),
@@ -158,14 +166,17 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
             "top": dict(x=0.5, y=0.99, xanchor="center", yanchor="top", orientation="h"),
             "bottom": dict(x=0.5, y=0.01, xanchor="center", yanchor="bottom", orientation="h"),
         }.get(legend_position, {})
-        legend_settings = {**legend_settings, "bgcolor": "rgba(255,255,255,0.7)"}
-    fig.update_layout(legend={**legend_settings, "title": {"text": "Legend", "font": {"size": legend_font_size}}, "font": {"size": legend_font_size}})
+        legend_settings = {**legend_settings,
+                           "bgcolor": "rgba(255,255,255,0.7)"}
+    fig.update_layout(legend={**legend_settings, "title": {"text": "Legend", "font": {
+                      "size": legend_font_size}}, "font": {"size": legend_font_size}})
     labels = _parse_label_map(legend_labels)
     colors = _parse_label_map(trace_colors)
     alphas, styles, sizes, markers, marker_alphas = _series_style_maps(
         line_alpha, line_style, scatter_size, scatter_marker, scatter_alpha)
     histogram_alphas = _parse_label_map(hist_alpha)
-    palette_values = getattr(qualitative, palette, None) if palette != "Default" else None
+    palette_values = getattr(qualitative, palette,
+                             None) if palette != "Default" else None
     # Color keys can refer to either original or renamed trace labels.
     for i, trace in enumerate(fig.data):
         original = str(trace.name or "")
@@ -185,7 +196,8 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
             if getattr(trace, "fillcolor", None) is not None and trace.type == "histogram":
                 trace.marker.color = color
         if plot_kind == "histogram":
-            trace.opacity = _bounded_float(histogram_alphas, original, 0.65, 0, 1)
+            trace.opacity = _bounded_float(
+                histogram_alphas, original, 0.65, 0, 1)
         if plot_kind == "box":
             trace.boxpoints = "outliers" if box_showfliers else False
             if box_orientation == "horizontal":
@@ -195,13 +207,17 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
         if getattr(trace, "line", None) is not None and plot_kind == "line":
             trace.line.width = line_width
             if plot_kind == "line":
-                trace.line.dash = {"-": "solid", ":": "dot", "--": "dash"}[_line_style(styles, original)]
+                trace.line.dash = {"-": "solid", ":": "dot",
+                                   "--": "dash"}[_line_style(styles, original)]
                 trace.opacity = _bounded_float(alphas, original, 1, 0, 1)
         if getattr(trace, "marker", None) is not None and trace.type in ("scatter", "scattergl"):
             if plot_kind == "scatter":
-                trace.marker.size = _bounded_float(sizes, original, 7, 0.1, 100)
-                trace.marker.symbol = {"o": "circle", "x": "x"}[_scatter_marker(markers, original)]
-                trace.opacity = _bounded_float(marker_alphas, original, 1, 0, 1)
+                trace.marker.size = _bounded_float(
+                    sizes, original, 7, 0.1, 100)
+                trace.marker.symbol = {"o": "circle", "x": "x"}[
+                    _scatter_marker(markers, original)]
+                trace.opacity = _bounded_float(
+                    marker_alphas, original, 1, 0, 1)
             else:
                 trace.marker.size = marker_size
     if plot_kind == "box" and box_orientation == "horizontal":
@@ -357,6 +373,7 @@ def _composite_labels(data: pd.DataFrame, columns: list[str]) -> pd.Series:
     """
     if not columns:
         raise ValueError("At least one label column is required")
+
     def label(value):
         return "None" if pd.isna(value) else str(value)
     if len(columns) == 1:
@@ -371,7 +388,8 @@ def _composite_labels(data: pd.DataFrame, columns: list[str]) -> pd.Series:
 
 def _subset_choices(data: pd.DataFrame, column: str) -> tuple[dict[str, str], dict[str, object]]:
     """Build stable Shiny choices and their corresponding original values."""
-    values = sorted(pd.unique(data[column].dropna()), key=lambda value: str(value).casefold())
+    values = sorted(pd.unique(data[column].dropna()),
+                    key=lambda value: str(value).casefold())
     # Missing values receive a distinct selector key, not the literal string "None".
     has_missing = bool(data[column].isna().any())
     choices: dict[str, str] = {}
@@ -405,7 +423,8 @@ def _parse_datetime_filter(value):
             return "date", date(*(int(part) for part in match.groups()))
         if re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?", value):
             return "time", time.fromisoformat(value)
-        match = re.fullmatch(date_pattern + r"[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?", value)
+        match = re.fullmatch(
+            date_pattern + r"[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?", value)
         if match:
             year, month, day, hour, minute, second, microsecond = match.groups()
             return "datetime", datetime(
@@ -443,13 +462,15 @@ def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None)
     end_kind, end = _parse_datetime_filter(datetime_end)
     kwargs = {}
     if start_kind in ("date", "datetime"):
-        kwargs["date_start"] = datetime.combine(start, time.min) if start_kind == "date" else start
+        kwargs["date_start"] = datetime.combine(
+            start, time.min) if start_kind == "date" else start
     elif start_kind == "time":
         kwargs["time_start"] = start
     if end_kind in ("date", "datetime"):
         # dtfilter uses an exclusive upper bound. A date-only end bound
         # therefore means the end of that calendar day, not its midnight.
-        kwargs["date_end"] = datetime.combine(end + timedelta(days=1), time.min) if end_kind == "date" else end
+        kwargs["date_end"] = datetime.combine(
+            end + timedelta(days=1), time.min) if end_kind == "date" else end
     elif end_kind == "time":
         kwargs["time_end"] = end
     if kwargs:
@@ -466,7 +487,8 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
     This function is called only when aggregation is explicitly requested.
     """
     if frequency is None and not grouping_by:
-        raise ValueError("Select at least one categorical grouping variable for categorical-only aggregation.")
+        raise ValueError(
+            "Select at least one categorical grouping variable for categorical-only aggregation.")
 
     result = data.group_stat(
         value_cols=value_columns,
@@ -528,8 +550,10 @@ def _histogram_figure(
     )
     arrays = []
     for label in labels:
-        rows = data.loc[data[group_column].astype(str) == str(label)] if group_column else data
-        values = pd.to_numeric(rows[x_column], errors="coerce").to_numpy(dtype=float)
+        rows = data.loc[data[group_column].astype(
+            str) == str(label)] if group_column else data
+        values = pd.to_numeric(
+            rows[x_column], errors="coerce").to_numpy(dtype=float)
         arrays.append(values[np.isfinite(values)])
 
     all_values = np.concatenate(arrays) if arrays else np.array([])
@@ -540,7 +564,8 @@ def _histogram_figure(
 
     edges = np.histogram_bin_edges(all_values, bins=bins)
     widths = np.diff(edges)
-    counts = np.array([np.histogram(v, bins=edges)[0] for v in arrays], dtype=float)
+    counts = np.array([np.histogram(v, bins=edges)[0]
+                      for v in arrays], dtype=float)
     totals = counts.sum(axis=1)
     grand_total = totals.sum()
 
@@ -608,7 +633,6 @@ def _histogram_figure(
     return fig
 
 
-
 def _boxplot_figure(data, x_column, y_column, *, group_column=None):
     """Create a boxplot, preserving outlier-only point display."""
     import plotly.express as px
@@ -619,7 +643,8 @@ def _boxplot_figure(data, x_column, y_column, *, group_column=None):
         category_orders={x_column: categories},
     )
     # A categorical axis ensures even spacing; wide boxes fill each slot.
-    fig.update_xaxes(type="category", categoryorder="array", categoryarray=categories)
+    fig.update_xaxes(type="category", categoryorder="array",
+                     categoryarray=categories)
     fig.update_layout(boxmode="group", boxgap=0.12, boxgroupgap=0.04)
     # Plotly Express can produce unusually thin boxes when many observations
     # share a category. Allocate most of each category slot explicitly.
@@ -759,6 +784,7 @@ def _lineplot_figure(plot_df, x_column, y_columns, *, group_columns, frequency, 
         fig = px.line(plot_df, x=x_column, y=y_columns)
     return fig
 
+
 def _frequency_timedelta(frequency: str) -> pd.Timedelta | None:
     """Convert a timestamp aggregation frequency to its expected spacing."""
     if not frequency or frequency == "weekday":
@@ -840,10 +866,12 @@ def _add_gap_sections(
                               .groupby([result[c] for c in group_columns], dropna=False)
                               .cumsum().sub(1))
             group_label = _composite_labels(result, group_columns)
-            result[section_column] = group_label + " | section " + section_number.astype(str)
+            result[section_column] = group_label + \
+                " | section " + section_number.astype(str)
         else:
             gap = result[x_column].diff()
-            section_number = (gap.gt(numeric_step) | gap.isna()).astype(int).cumsum().sub(1)
+            section_number = (gap.gt(numeric_step) | gap.isna()
+                              ).astype(int).cumsum().sub(1)
             result[section_column] = "section " + section_number.astype(str)
         return result
 
@@ -865,10 +893,12 @@ def _add_gap_sections(
             .sub(1)
         )
         group_label = _composite_labels(result, group_columns)
-        result[section_column] = group_label + " | section " + section_number.astype(str)
+        result[section_column] = group_label + \
+            " | section " + section_number.astype(str)
     else:
         gap = result[x_column].diff()
-        section_number = (gap.gt(step) | gap.isna()).astype(int).cumsum().sub(1)
+        section_number = (gap.gt(step) | gap.isna()
+                          ).astype(int).cumsum().sub(1)
         result[section_column] = "section " + section_number.astype(str)
 
     return result
@@ -883,7 +913,6 @@ def _safe_csv_filename(value: str | None) -> str:
     if not name.lower().endswith(".csv"):
         name += ".csv"
     return name
-
 
 
 # Native Matplotlib renderer: never constructs or inspects a Plotly figure.
@@ -911,7 +940,8 @@ def _matplotlib_defaults(spec, *, palette="Default"):
     if not names:
         names = ["All observations"]
     palette_values = _MPL_PALETTES.get(palette, _MPL_PALETTES["Default"])
-    colors = {name: palette_values[i % len(palette_values)] for i, name in enumerate(names)}
+    colors = {name: palette_values[i % len(
+        palette_values)] for i, name in enumerate(names)}
     x_label = (" | ".join(_axis_label(c) for c in spec["categories"])
                if kind in ("box", "bar") else _axis_label(x))
     y_label = ("Probability density" if kind == "histogram" else
@@ -939,7 +969,8 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
                 bounds[f"{axis}_max"] = valid.max().isoformat(sep=" ")
         else:
             valid = pd.to_numeric(values, errors="coerce")
-            valid = valid[np.isfinite(valid.to_numpy(dtype=float, na_value=np.nan))]
+            valid = valid[np.isfinite(
+                valid.to_numpy(dtype=float, na_value=np.nan))]
             if len(valid):
                 bounds[f"{axis}_min"] = format(float(valid.min()), ".12g")
                 bounds[f"{axis}_max"] = format(float(valid.max()), ".12g")
@@ -947,7 +978,8 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
     if kind not in ("bar", "box"):
         fill("x", df[x])
     if kind == "histogram":
-        values = pd.to_numeric(df[x], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+        values = pd.to_numeric(df[x], errors="coerce").to_numpy(
+            dtype=float, na_value=np.nan)
         values = values[np.isfinite(values)]
         if len(values):
             groups = ([pd.to_numeric(part[x], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
@@ -974,7 +1006,8 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
             bounds["y_min"] = format(float(min(0, totals.min())), ".12g")
             bounds["y_max"] = format(float(max(0, totals.max())), ".12g")
     else:
-        values = pd.concat([pd.to_numeric(df[y], errors="coerce") for y in ys], ignore_index=True)
+        values = pd.concat([pd.to_numeric(df[y], errors="coerce")
+                           for y in ys], ignore_index=True)
         fill("y", values)
     return bounds
 
@@ -1005,7 +1038,9 @@ def _pad_axis_bounds(bounds, fraction=0.05):
             try:
                 low, high = pd.Timestamp(lo), pd.Timestamp(hi)
                 span = high - low
-                margin = span * fraction if span > pd.Timedelta(0) else pd.Timedelta(seconds=1)
+                margin = span * \
+                    fraction if span > pd.Timedelta(
+                        0) else pd.Timedelta(seconds=1)
                 result[lo_key] = (low - margin).isoformat(sep=" ")
                 result[hi_key] = (high + margin).isoformat(sep=" ")
             except (ValueError, TypeError, OverflowError):
@@ -1015,7 +1050,8 @@ def _pad_axis_bounds(bounds, fraction=0.05):
 
 def _panel_columns(spec, panel_by):
     """Resolve one or more selected facet columns in their selected order."""
-    selected = [panel_by] if isinstance(panel_by, str) else list(panel_by or [])
+    selected = [panel_by] if isinstance(
+        panel_by, str) else list(panel_by or [])
     return [column for column in selected
             if column in spec.get("groups", ()) and column in spec.get("data", ())]
 
@@ -1131,7 +1167,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         ax = _axes
         fig = ax.figure
     if "error" in spec:
-        ax.text(.5, .5, spec["error"], ha="center", va="center", transform=ax.transAxes)
+        ax.text(.5, .5, spec["error"], ha="center",
+                va="center", transform=ax.transAxes)
         ax.set_axis_off()
         return fig
 
@@ -1158,22 +1195,22 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               "_hide_ungrouped_legend": not bool(other_groups)}
                 panel_ax = axes.flat[idx]
                 _matplotlib_direct_figure(panel_spec, title=panel_title_map.get(panel_title, panel_title), x_label=x_label,
-                    y_label=y_label, legend_labels=legend_labels, trace_colors=trace_colors,
-                    palette=palette,
-                    x_min=_panel_limit_value(x_min, panel_title), x_max=_panel_limit_value(x_max, panel_title),
-                    y_min=_panel_limit_value(y_min, panel_title), y_max=_panel_limit_value(y_max, panel_title),
-                    template=template, legend_position=legend_position,
-                    legend_inside=legend_inside, show_grid=show_grid, font_size=font_size,
-                    line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
-                    scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
-                    hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
-                    title_font_size=panel_font_size, axis_font_size=axis_font_size,
-                    tick_font_size=tick_font_size, legend_font_size=legend_font_size,
-                    panel_font_size=panel_font_size,
-                    bins=bins, density=density,
-                    stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
-                    x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
-                    x_minor_ticks=x_minor_ticks, y_minor_ticks=y_minor_ticks)
+                                          y_label=y_label, legend_labels=legend_labels, trace_colors=trace_colors,
+                                          palette=palette,
+                                          x_min=_panel_limit_value(x_min, panel_title), x_max=_panel_limit_value(x_max, panel_title),
+                                          y_min=_panel_limit_value(y_min, panel_title), y_max=_panel_limit_value(y_max, panel_title),
+                                          template=template, legend_position=legend_position,
+                                          legend_inside=legend_inside, show_grid=show_grid, font_size=font_size,
+                                          line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
+                                          scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
+                                          hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
+                                          title_font_size=panel_font_size, axis_font_size=axis_font_size,
+                                          tick_font_size=tick_font_size, legend_font_size=legend_font_size,
+                                          panel_font_size=panel_font_size,
+                                          bins=bins, density=density,
+                                          stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
+                                          x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
+                                          x_minor_ticks=x_minor_ticks, y_minor_ticks=y_minor_ticks)
             for extra in list(axes.flat)[len(partitions):]:
                 extra.set_visible(False)
             fig.tight_layout()
@@ -1186,7 +1223,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         line_alpha, line_style, scatter_size, scatter_marker, scatter_alpha)
     histogram_alphas = _parse_label_map(hist_alpha)
     palette_values = _MPL_PALETTES.get(palette, _MPL_PALETTES["Default"])
-    labels = defaults["names"] if group_col else ([str(y) for y in ys] if len(ys) > 1 else ["All observations"])
+    labels = defaults["names"] if group_col else (
+        [str(y) for y in ys] if len(ys) > 1 else ["All observations"])
     colors = {name: overrides.get(name, defaults["colors"].get(name, palette_values[i % len(palette_values)]))
               for i, name in enumerate(labels)}
     for name, color in list(colors.items()):
@@ -1203,7 +1241,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     if kind == "histogram":
         arrays = []
         for name, rows in series():
-            vals = pd.to_numeric(rows[x], errors="coerce").to_numpy(dtype=float)
+            vals = pd.to_numeric(
+                rows[x], errors="coerce").to_numpy(dtype=float)
             arrays.append(vals[np.isfinite(vals)])
         all_vals = np.concatenate(arrays) if arrays else np.array([])
         if len(all_vals):
@@ -1241,16 +1280,19 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         id_col = "identifier" if "identifier" in df.columns else None
         section_col = None
         if spec["frequency"] is not None and id_col is None:
-            line_df = _add_gap_sections(df, x_column=x, group_columns=spec["groups"], frequency=spec["frequency"])
+            line_df = _add_gap_sections(
+                df, x_column=x, group_columns=spec["groups"], frequency=spec["frequency"])
             section_col = "__line_section"
         for y in ys:
             if group_col:
-                sets = [(n, line_df.loc[line_df[group_col] == n]) for n in labels]
+                sets = [(n, line_df.loc[line_df[group_col] == n])
+                        for n in labels]
             else:
                 sets = [(str(y) if len(ys) > 1 else "All observations", line_df)]
             for name, rows in sets:
                 segment_col = id_col or section_col
-                parts = (rows.groupby(segment_col, dropna=False, sort=False) if segment_col else [(None, rows)])
+                parts = (rows.groupby(segment_col, dropna=False,
+                         sort=False) if segment_col else [(None, rows)])
                 for _, part in parts:
                     part = part.sort_values(x)
                     ax.plot(part[x], part[y], color=colors.get(name, palette_values[0]),
@@ -1274,7 +1316,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         # median, fliers). Thousands of combinations can stall the render
         # thread for minutes. Fail fast with an actionable message rather than
         # blocking the plot output indefinitely. No data is silently omitted.
-        observed_pairs = df[[x, group_col]].drop_duplicates().shape[0] if group_col else len(cats)
+        observed_pairs = df[[x, group_col]].drop_duplicates(
+        ).shape[0] if group_col else len(cats)
         limit = 250 if kind == "box" else 1500
         if observed_pairs > limit:
             ax.text(.5, .5,
@@ -1287,8 +1330,10 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             return fig
         width = .82 / n
         values = pd.to_numeric(df[ys[0]], errors="coerce")
-        valid = values.notna() & np.isfinite(values.to_numpy(dtype=float, na_value=np.nan))
-        plot_groups = df[group_col].astype(str) if group_col else pd.Series("All observations", index=df.index)
+        valid = values.notna() & np.isfinite(
+            values.to_numpy(dtype=float, na_value=np.nan))
+        plot_groups = df[group_col].astype(str) if group_col else pd.Series(
+            "All observations", index=df.index)
         # Use integer group indices, avoiding repeated string comparisons.
         ci = category_values.map(cat_idx).to_numpy()
         gi = plot_groups.map(group_idx).to_numpy()
@@ -1305,7 +1350,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             # Derive group colour from the position's group index.
             palette_for_positions = {}
             for category_index, group_index, position in zip(ci[valid_array], names, positions):
-                palette_for_positions[float(position)] = colors.get(group_names[group_index], palette_values[0])
+                palette_for_positions[float(position)] = colors.get(
+                    group_names[group_index], palette_values[0])
             if xpos:
                 ax.bar(xpos, [totals[pos] for pos in xpos], width=width * .92,
                        color=[palette_for_positions[pos] for pos in xpos])
@@ -1316,7 +1362,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             for position, value, group_index in zip(positions, numeric, names):
                 key = float(position)
                 buckets[key].append(float(value))
-                bucket_colors[key] = colors.get(group_names[group_index], palette_values[0])
+                bucket_colors[key] = colors.get(
+                    group_names[group_index], palette_values[0])
             if buckets:
                 box_positions = sorted(buckets)
                 bp = ax.boxplot([buckets[pos] for pos in box_positions],
@@ -1352,14 +1399,16 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             ax.legend(unique.values(), unique.keys(), title="Legend")
     legend = ax.get_legend()
     if legend is not None:
-        locs = {"right":"upper right", "left":"upper left", "top":"upper center", "bottom":"lower center"}
+        locs = {"right": "upper right", "left": "upper left",
+            "top": "upper center", "bottom": "lower center"}
         if legend_inside:
             legend.set_loc(locs.get(legend_position, "upper right"))
             legend.set_bbox_to_anchor(None)
         else:
-            anchors = {"right":(1.01,1), "left":(-.01,1), "top":(.5,1.15), "bottom":(.5,-.2)}
+            anchors = {"right": (1.01, 1), "left": (-.01, 1),
+                                 "top": (.5, 1.15), "bottom": (.5, -.2)}
             legend.set_loc(locs.get(legend_position, "upper right"))
-            legend.set_bbox_to_anchor(anchors.get(legend_position, (1.01,1)))
+            legend.set_bbox_to_anchor(anchors.get(legend_position, (1.01, 1)))
     if template == "plotly_dark":
         fig.patch.set_facecolor("#111111")
         ax.set_facecolor("#222222")
@@ -1392,15 +1441,19 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                                    (y_min, y_max, ax.get_ylim, ax.set_ylim)):
         try:
             from matplotlib.dates import date2num
-            is_datetime_x = getter == ax.get_xlim and pd.api.types.is_datetime64_any_dtype(df[x])
+            is_datetime_x = getter == ax.get_xlim and pd.api.types.is_datetime64_any_dtype(
+                df[x])
             lower = _parse_axis_limit(lo, datetime_axis=is_datetime_x)
             upper = _parse_axis_limit(hi, datetime_axis=is_datetime_x)
             if is_datetime_x:
-                lower = date2num(lower.to_pydatetime()) if lower is not None else None
-                upper = date2num(upper.to_pydatetime()) if upper is not None else None
+                lower = date2num(lower.to_pydatetime()
+                                 ) if lower is not None else None
+                upper = date2num(upper.to_pydatetime()
+                                 ) if upper is not None else None
             if lower is not None or upper is not None:
                 current = getter()
-                setter(lower if lower is not None else current[0], upper if upper is not None else current[1])
+                setter(
+                    lower if lower is not None else current[0], upper if upper is not None else current[1])
         except (TypeError, ValueError):
             pass
     if _axes is None:
@@ -1423,7 +1476,8 @@ def _matplotlib_figure(plotly_figure):
 
     fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
     source = plotly_figure
-    category_labels = list(getattr(source.layout.xaxis, "categoryarray", None) or [])
+    category_labels = list(
+        getattr(source.layout.xaxis, "categoryarray", None) or [])
     categorical = (getattr(source.layout.xaxis, "type", None) == "category")
     category_map = {str(value): i for i, value in enumerate(category_labels)}
     legend_seen = set()
@@ -1474,10 +1528,12 @@ def _matplotlib_figure(plotly_figure):
             offset = (box_index - (len(box_traces) - 1) / 2) * width
             groups = [ys[np.asarray(xs) == cat] for cat in categories]
             groups = [g[np.isfinite(g)] for g in groups]
-            valid = [(cat, group) for cat, group in zip(categories, groups) if len(group)]
+            valid = [(cat, group)
+                     for cat, group in zip(categories, groups) if len(group)]
             if valid:
                 result = ax.boxplot([group for _, group in valid],
-                                    positions=[cat + offset for cat, _ in valid],
+                                    positions=[
+                                        cat + offset for cat, _ in valid],
                                     widths=width * .92, patch_artist=True,
                                     manage_ticks=False, showfliers=True)
                 for box in result["boxes"]:
@@ -1500,18 +1556,25 @@ def _matplotlib_figure(plotly_figure):
             xs = xs[np.isfinite(xs)]
             nbins = getattr(trace, "nbinsx", None) or 30
             histnorm = getattr(trace, "histnorm", None)
-            cumulative = getattr(getattr(trace, "cumulative", None), "enabled", False)
-            direction = getattr(getattr(trace, "cumulative", None), "direction", "increasing")
-            histtype = "step" if getattr(trace, "visible", True) == "legendonly" else "bar"
+            cumulative = getattr(
+                getattr(trace, "cumulative", None), "enabled", False)
+            direction = getattr(
+                getattr(trace, "cumulative", None), "direction", "increasing")
+            histtype = "step" if getattr(
+                trace, "visible", True) == "legendonly" else "bar"
             ax.hist(xs, bins=nbins, density=histnorm in ("probability density", "density"),
-                    cumulative=(-1 if direction == "decreasing" else True) if cumulative else False,
+                    cumulative=(-1 if direction ==
+                                "decreasing" else True) if cumulative else False,
                     histtype=histtype, alpha=.65, color=color, label=label)
 
     if category_map:
         ax.set_xticks(list(category_map.values()), list(category_map.keys()))
-    ax.set_xlabel(getattr(getattr(source.layout.xaxis, "title", None), "text", "") or "")
-    ax.set_ylabel(getattr(getattr(source.layout.yaxis, "title", None), "text", "") or "")
-    ax.set_title(getattr(getattr(source.layout, "title", None), "text", "") or "")
+    ax.set_xlabel(
+        getattr(getattr(source.layout.xaxis, "title", None), "text", "") or "")
+    ax.set_ylabel(
+        getattr(getattr(source.layout.yaxis, "title", None), "text", "") or "")
+    ax.set_title(
+        getattr(getattr(source.layout, "title", None), "text", "") or "")
     ax.grid(bool(getattr(source.layout.xaxis, "showgrid", True)), axis="x")
     ax.grid(bool(getattr(source.layout.yaxis, "showgrid", True)), axis="y")
     for axis, setter in ((source.layout.xaxis, ax.set_xlim), (source.layout.yaxis, ax.set_ylim)):
@@ -1530,12 +1593,14 @@ def _matplotlib_figure(plotly_figure):
         inside = (0 <= float(getattr(legend, "x", 1.02)) <= 1 and
                   0 <= float(getattr(legend, "y", 1)) <= 1)
         loc = "upper right" if inside else "upper left"
-        kwargs = {"loc": loc, "title": "Legend", "ncol": max(1, len(labels)) if orientation == "h" else 1}
+        kwargs = {"loc": loc, "title": "Legend", "ncol": max(
+            1, len(labels)) if orientation == "h" else 1}
         if not inside:
             kwargs["bbox_to_anchor"] = (1.01, 1)
         ax.legend(handles, labels, **kwargs)
     fig.tight_layout()
     return fig
+
 
 def _standalone_matplotlib_script(spec, options):
     """Create a self-contained plotting script using this renderer's source.
@@ -1566,12 +1631,15 @@ def _standalone_matplotlib_script(spec, options):
         'from pathlib import Path\n'
         'import pandas as pd\nimport numpy as np\n'
         'from datetime import datetime, date, timedelta\n\n'
-        'VARIABLE_UNITS = ' + pprint.pformat(VARIABLE_UNITS, sort_dicts=True) + '\n'
-        '_MPL_PALETTES = ' + pprint.pformat(_MPL_PALETTES, sort_dicts=True) + '\n\n'
+        'VARIABLE_UNITS = ' +
+        pprint.pformat(VARIABLE_UNITS, sort_dicts=True) + '\n'
+        '_MPL_PALETTES = ' +
+        pprint.pformat(_MPL_PALETTES, sort_dicts=True) + '\n\n'
         + source + '\n\n'
         + 'def main():\n'
         + '    csv_path = Path(__file__).resolve().parent / "plot_data.csv"\n'
-        + '    frame = pd.read_csv(csv_path, parse_dates=' + repr(date_columns) + ')\n'
+        + '    frame = pd.read_csv(csv_path, parse_dates=' +
+        repr(date_columns) + ')\n'
         + '    spec = ' + repr(metadata) + '\n'
         + '    spec["data"] = frame\n'
         + '    options = ' + repr(options) + '\n'
@@ -1604,16 +1672,23 @@ def create_summary_app(
     if not isinstance(summary, pd.DataFrame):
         raise TypeError("data must be a pandas DataFrame/Summary")
     if summary.empty:
-        raise ValueError("Cannot create a Shiny application from an empty Summary.")
+        raise ValueError(
+            "Cannot create a Shiny application from an empty Summary.")
 
     columns = _alphabetical(summary.columns)
     column_map = {str(c): c for c in summary.columns}
     numeric_columns = _alphabetical(_numeric_columns(summary))
     categorical_columns = _categorical_columns(summary)
     datetime_columns = _datetime_columns(summary)
+    time_group_columns = [f for f in FREQUENCIES.values(
+    ) if f is not None and f not in column_map]
     group_columns = _alphabetical(
-        c for c in columns if not pd.api.types.is_numeric_dtype(summary[column_map[c]])
+        [c for c in columns if not pd.api.types.is_numeric_dtype(
+            summary[column_map[c]])]
+        + time_group_columns
     )
+    for name in time_group_columns:
+        column_map[name] = name
 
     x = _default_x(summary) if x is None else str(x)
     if x not in column_map:
@@ -1621,7 +1696,8 @@ def create_summary_app(
 
     initial_y = _normalise_y(summary, x, y)
     if group_by is None:
-        initial_groups = [_default_group(summary)] if _default_group(summary) is not None else []
+        initial_groups = [_default_group(summary)] if _default_group(
+            summary) is not None else []
     elif isinstance(group_by, str):
         initial_groups = [group_by]
     else:
@@ -1633,7 +1709,8 @@ def create_summary_app(
     initial_groups = [c for c in initial_groups if c in group_columns]
 
     if plot_type not in PLOT_TYPES:
-        raise ValueError(f"Unknown plot_type {plot_type!r}. Choose one of: {', '.join(PLOT_TYPES)}")
+        raise ValueError(
+            f"Unknown plot_type {plot_type!r}. Choose one of: {', '.join(PLOT_TYPES)}")
 
     subset_columns = columns
     # Stable choices are shared across tabs. Computing unique values from the
@@ -1642,7 +1719,8 @@ def create_summary_app(
 
     def cached_subset_choices(name):
         if name not in subset_choice_cache:
-            subset_choice_cache[name] = _subset_choices(summary, column_map[name])
+            subset_choice_cache[name] = _subset_choices(
+                summary, column_map[name])
         return subset_choice_cache[name]
 
     @module.ui
@@ -1651,660 +1729,774 @@ def create_summary_app(
         return ui.div(
             ui.layout_sidebar(
                 ui.sidebar(
-                ui.card(ui.card_header("Plot filters"),
-                        ui.input_selectize("subset_columns", "Subset columns",
-                            choices={c: c for c in subset_columns},
+                    ui.card(ui.card_header("Plot filters"),
+                            ui.input_selectize("subset_columns", "Subset columns",
+                                               choices={
+                                               c: c for c in subset_columns},
                             selected=[], multiple=True),
-                        ui.output_ui("subset_filters"),
-                        ui.hr(),
-                        ui.input_text("datetime_start", "Start datetime",
-                            value="",
-                            placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
-                        ui.input_text("datetime_end", "End datetime",
-                            value="",
-                            placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
-                        ui.help_text("Filters affect this plot only. New plots start with empty selections."),
-                ),
-                ui.card(ui.card_header("Plot settings"),
-                            ui.input_select("plot_type", "Plot type", choices=PLOT_TYPES, selected=plot_type),
+                            ui.output_ui("subset_filters"),
+                            ui.hr(),
+                            ui.input_text("datetime_start", "Start datetime",
+                                          value="",
+                                          placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                            ui.input_text("datetime_end", "End datetime",
+                                          value="",
+                                          placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                            ui.help_text(
+                            "Filters affect this plot only. New plots start with empty selections."),
+                            ),
+                    ui.card(ui.card_header("Plot settings"),
+                            ui.input_select(
+                                "plot_type", "Plot type", choices=PLOT_TYPES, selected=plot_type),
                             ui.output_ui("x_control"),
                             ui.output_ui("y_control"),
                             ui.card(
-                                ui.card_header("Aggregation"),
-                                ui.input_selectize("group_by", "Group by", choices={c:c for c in group_columns}, selected=[], multiple=True),
-                                ui.output_ui("panel_controls"),
-                                ui.input_select("frequency", "Frequency / aggregation mode", choices={key: key for key in FREQUENCIES}, selected="None"),
-                                ui.input_select("aggregate", "Apply statistical function", choices={key: key for key in AGGREGATES}, selected="None"),
-                                ui.help_text("Choose a statistical function to aggregate by the selected groups, even when frequency is None."),
-                                ui.output_ui("frequency_options"),
-                            ),
-                            ui.panel_conditional("input.plot_type === 'histogram'",
-                                ui.input_numeric("bins", "Histogram bins", value=30, min=1, max=200),
-                                ui.input_select("hist_density", "Density", choices={"False":"False","True":"True"}, selected="False"),
-                                ui.input_select("hist_stacked", "Stacked", choices={"False":"False","True":"True"}, selected="False"),
-                                ui.input_select("hist_type", "Histogram type", choices={"bar":"bar","barstacked":"barstacked","step":"step","stepfilled":"stepfilled"}, selected="bar"),
-                                ui.input_select("hist_cumulative", "Cumulative", choices={"0":"False","1":"True (ascending)","-1":"True (descending)"}, selected="0"),
-                            ),
-                ),
-                title="Plot filters / settings / aggregation", position="left", open="open", width="320px",
-                ),
-                    ui.layout_sidebar(
-                        ui.sidebar(
-                            ui.input_text("title", "Plot title", value=""),
-                            ui.input_text("x_axis_label", "X-axis label", value=""),
-                            ui.input_text("y_axis_label", "Y-axis label", value=""),
-                            ui.input_text_area("legend_labels", "Legend labels (old=new; ...)", value="", rows=6),
-                            (ui.panel_conditional("input.multi_panel === true",
-                                ui.input_text_area("panel_titles", "Panel titles (old=new; ...)",
-                                    value="", rows=6)) if backend == "matplotlib" else ui.div()),
-                            ui.input_text_area("trace_colors", "Trace colors (name=#hex; ...)", value="", rows=6),
-                            ui.input_select("palette", "Color palette", choices=["Default", "Plotly", "D3", "G10", "T10", "Set1", "Set2", "Pastel", "Dark24"], selected="Default"),
-                            ui.layout_columns(
-                                (ui.input_text_area("x_min", "X minimum", value="", rows=4) if backend == "matplotlib" else ui.input_text("x_min", "X minimum", value="")),
-                                (ui.input_text_area("x_max", "X maximum", value="", rows=4) if backend == "matplotlib" else ui.input_text("x_max", "X maximum", value="")),
-                                col_widths=(6, 6),
-                            ),
-                            ui.layout_columns(
-                                (ui.input_text_area("y_min", "Y minimum", value="", rows=4) if backend == "matplotlib" else ui.input_text("y_min", "Y minimum", value="")),
-                                (ui.input_text_area("y_max", "Y maximum", value="", rows=4) if backend == "matplotlib" else ui.input_text("y_max", "Y maximum", value="")),
-                                col_widths=(6, 6),
-                            ),
-                            ui.input_select("template", "Theme", choices={"plotly":"Light", "plotly_white":"White", "plotly_dark":"Dark", "simple_white":"Minimal", "ggplot2":"GGPlot"}, selected="plotly"),
-                            ui.input_select("legend_position", "Legend position", choices={k:k.title() for k in ("right", "left", "top", "bottom")}, selected="right"),
-                            ui.input_checkbox("legend_inside", "Place legend inside plot", value=False),
-                            ui.input_checkbox("show_grid", "Show grid", value=True),
-                            ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || (input.plot_type === 'box' && input.box_orientation === 'horizontal')",
-                                ui.input_numeric("x_major_ticks", "X-axis major ticks (approximate)", value=6, min=2, max=30, step=1),
-                                ui.input_checkbox("x_minor_ticks", "X-axis minor ticks / gridlines", value=False)),
-                            ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || input.plot_type === 'bar' || (input.plot_type === 'box' && input.box_orientation !== 'horizontal')",
-                                ui.input_numeric("y_major_ticks", "Y-axis major ticks (approximate)", value=6, min=2, max=30, step=1),
-                                ui.input_checkbox("y_minor_ticks", "Y-axis minor ticks / gridlines", value=False)),
-                            ui.input_numeric("title_font_size", "Plot title font size", value=14, min=6, max=72),
-                            ui.input_numeric("axis_font_size", "Axis title font size", value=12, min=6, max=72),
-                            ui.input_numeric("tick_font_size", "Axis tick font size", value=10, min=6, max=72),
-                            ui.input_numeric("legend_font_size", "Legend font size", value=12, min=6, max=72),
-                            ui.panel_conditional("input.plot_type === 'line'",
-                                ui.input_numeric("line_width", "Line width", value=2, min=0.5, max=15, step=0.5)),
-                            (ui.input_numeric("panel_font_size", "Panel title font size", value=14, min=6, max=72) if backend == "matplotlib" else ui.div()),
-                            ui.panel_conditional("input.plot_type === 'histogram'",
-                                ui.input_text_area("hist_alpha", "Histogram alpha (name=0..1; ...)", value="", rows=4)),
-                            ui.panel_conditional("input.plot_type === 'box'",
-                                ui.input_checkbox("box_showfliers", "Show outliers (fliers)", value=True),
-                                ui.input_select("box_orientation", "Box orientation", choices={"vertical":"Vertical", "horizontal":"Horizontal"}, selected="vertical")),
-                            ui.panel_conditional("input.plot_type === 'line'",
-                                ui.input_text_area("line_alpha", "Line alpha (name=0..1; ...)", value="", rows=4),
-                                ui.input_text_area("line_style", "Line style (name=solid/dotted/dashed; ...)", value="", rows=4)),
-                            ui.panel_conditional("input.plot_type === 'scatter'",
-                                ui.input_text_area("scatter_size", "Marker size (name=size; ...)", value="", rows=4),
-                                ui.input_text_area("scatter_marker", "Marker type (name=dot/cross; ...)", value="", rows=4),
-                                ui.input_text_area("scatter_alpha", "Marker alpha (name=0..1; ...)", value="", rows=4)),
-                            title="Plot appearance", position="right", open="closed", width="320px",
-                        ),
-                        ui.card(ui.card_header("Plot"),
-                            ui.div((output_widget("plot", height="100%", width="100%") if backend == "plotly" else ui.output_plot("plot", height="100%", width="100%")),
-                                class_="summary-plot-container"),
-                            ui.input_action_button("export_csv", "Export plotted data as CSV", class_="btn-primary mt-3"),
-                            ui.input_action_button("export_plot", "Export plot", class_="btn-secondary mt-3"),
-                            (ui.download_button("export_python", "Export as a Python file and associated data",
-                                                class_="btn-secondary mt-3")
-                             if backend == "matplotlib" else ui.div())),
+                        ui.card_header("Aggregation"),
+                        ui.input_selectize("group_by", "Group by", choices={
+                                           c: c for c in group_columns}, selected=[], multiple=True),
+                        ui.output_ui("panel_controls"),
+                        ui.input_select("frequency", "Frequency / aggregation mode", choices={
+                            key: key for key in FREQUENCIES}, selected="None"),
+                        ui.input_select("aggregate", "Apply statistical function", choices={
+                            key: key for key in AGGREGATES}, selected="None"),
+                        ui.help_text(
+                            "Choose a statistical function to aggregate by the selected groups, even when frequency is None."),
+                        ui.output_ui("frequency_options"),
                     ),
+                        ui.panel_conditional("input.plot_type === 'histogram'",
+                                             ui.input_numeric(
+                                                 "bins", "Histogram bins", value=30, min=1, max=200),
+                                ui.input_select("hist_density", "Density", choices={
+                                                "False": "False", "True": "True"}, selected="False"),
+                                ui.input_select("hist_stacked", "Stacked", choices={
+                                                "False": "False", "True": "True"}, selected="False"),
+                                ui.input_select("hist_type", "Histogram type", choices={
+                                                "bar": "bar", "barstacked": "barstacked", "step": "step", "stepfilled": "stepfilled"}, selected="bar"),
+                                ui.input_select("hist_cumulative", "Cumulative", choices={
+                                                "0": "False", "1": "True (ascending)", "-1": "True (descending)"}, selected="0"),
+                                             ),
+                    ),
+                    title="Plot filters / settings / aggregation", position="left", open="open", width="320px",
+                ),
+                ui.layout_sidebar(
+                    ui.sidebar(
+                        ui.input_text("title", "Plot title", value=""),
+                        ui.input_text("x_axis_label",
+                                          "X-axis label", value=""),
+                        ui.input_text("y_axis_label",
+                                          "Y-axis label", value=""),
+                        ui.input_text_area(
+                                "legend_labels", "Legend labels (old=new; ...)", value="", rows=6),
+                        (ui.panel_conditional("input.multi_panel === true",
+                                                  ui.input_text_area("panel_titles", "Panel titles (old=new; ...)",
+                                                                     value="", rows=6)) if backend == "matplotlib" else ui.div()),
+                        ui.input_text_area(
+                                "trace_colors", "Trace colors (name=#hex; ...)", value="", rows=6),
+                        ui.input_select("palette", "Color palette", choices=[
+                                            "Default", "Plotly", "D3", "G10", "T10", "Set1", "Set2", "Pastel", "Dark24"], selected="Default"),
+                        ui.layout_columns(
+                                (ui.input_text_area("x_min", "X minimum", value="", rows=4) if backend ==
+                                 "matplotlib" else ui.input_text("x_min", "X minimum", value="")),
+                                (ui.input_text_area("x_max", "X maximum", value="", rows=4) if backend ==
+                                 "matplotlib" else ui.input_text("x_max", "X maximum", value="")),
+                                col_widths=(6, 6),
+                            ),
+                        ui.layout_columns(
+                                (ui.input_text_area("y_min", "Y minimum", value="", rows=4) if backend ==
+                                 "matplotlib" else ui.input_text("y_min", "Y minimum", value="")),
+                                (ui.input_text_area("y_max", "Y maximum", value="", rows=4) if backend ==
+                                 "matplotlib" else ui.input_text("y_max", "Y maximum", value="")),
+                                col_widths=(6, 6),
+                            ),
+                            ui.input_select("template", "Theme", choices={
+                                            "plotly": "Light", "plotly_white": "White", "plotly_dark": "Dark", "simple_white": "Minimal", "ggplot2": "GGPlot"}, selected="plotly"),
+                        ui.input_select("legend_position", "Legend position", choices={
+                                            k: k.title() for k in ("right", "left", "top", "bottom")}, selected="right"),
+                        ui.input_checkbox(
+                                "legend_inside", "Place legend inside plot", value=False),
+                        ui.input_checkbox(
+                                "show_grid", "Show grid", value=True),
+                        ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || (input.plot_type === 'box' && input.box_orientation === 'horizontal')",
+                                                 ui.input_numeric(
+                                                     "x_major_ticks", "X-axis major ticks (approximate)", value=6, min=2, max=30, step=1),
+                                                 ui.input_checkbox("x_minor_ticks", "X-axis minor ticks / gridlines", value=False)),
+                        ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || input.plot_type === 'bar' || (input.plot_type === 'box' && input.box_orientation !== 'horizontal')",
+                                                 ui.input_numeric(
+                                                     "y_major_ticks", "Y-axis major ticks (approximate)", value=6, min=2, max=30, step=1),
+                                                 ui.input_checkbox("y_minor_ticks", "Y-axis minor ticks / gridlines", value=False)),
+                        ui.input_numeric(
+                                "title_font_size", "Plot title font size", value=14, min=6, max=72),
+                        ui.input_numeric(
+                                "axis_font_size", "Axis title font size", value=12, min=6, max=72),
+                        ui.input_numeric(
+                                "tick_font_size", "Axis tick font size", value=10, min=6, max=72),
+                        ui.input_numeric(
+                                "legend_font_size", "Legend font size", value=12, min=6, max=72),
+                        ui.panel_conditional("input.plot_type === 'line'",
+                                                 ui.input_numeric("line_width", "Line width", value=2, min=0.5, max=15, step=0.5)),
+                        (ui.input_numeric("panel_font_size", "Panel title font size",
+                             value=14, min=6, max=72) if backend == "matplotlib" else ui.div()),
+                        ui.panel_conditional("input.plot_type === 'histogram'",
+                                                 ui.input_text_area("hist_alpha", "Histogram alpha (name=0..1; ...)", value="", rows=4)),
+                        ui.panel_conditional("input.plot_type === 'box'",
+                                                 ui.input_checkbox(
+                                                     "box_showfliers", "Show outliers (fliers)", value=True),
+                                                 ui.input_select("box_orientation", "Box orientation", choices={"vertical": "Vertical", "horizontal": "Horizontal"}, selected="vertical")),
+                        ui.panel_conditional("input.plot_type === 'line'",
+                                                 ui.input_text_area(
+                                                     "line_alpha", "Line alpha (name=0..1; ...)", value="", rows=4),
+                                                 ui.input_text_area("line_style", "Line style (name=solid/dotted/dashed; ...)", value="", rows=4)),
+                        ui.panel_conditional("input.plot_type === 'scatter'",
+                                                 ui.input_text_area(
+                                                     "scatter_size", "Marker size (name=size; ...)", value="", rows=4),
+                                                 ui.input_text_area(
+                                                     "scatter_marker", "Marker type (name=dot/cross; ...)", value="", rows=4),
+                                                 ui.input_text_area("scatter_alpha", "Marker alpha (name=0..1; ...)", value="", rows=4)),
+                        title="Plot appearance", position="right", open="closed", width="320px",
+                    ),
+                    ui.card(ui.card_header("Plot"),
+                            ui.div((output_widget("plot", height="100%", width="100%") if backend == "plotly" else ui.output_plot("plot", height="100%", width="100%")),
+                                       class_="summary-plot-container"),
+                            ui.input_action_button(
+                                    "export_csv", "Export plotted data as CSV", class_="btn-primary mt-3"),
+                            ui.input_action_button(
+                                    "export_plot", "Export plot", class_="btn-secondary mt-3"),
+                            (ui.download_button("export_python", "Export as a Python file and associated data",
+                                                    class_="btn-secondary mt-3")
+                                 if backend == "matplotlib" else ui.div())),
+                ),
             ),
         )
 
     @module.server
     def plot_tab_server(input, output, session, initial_filters=None):
-            initial_filters = initial_filters or {}
-            @render.ui
-            def subset_filters():
-                controls = []
-                for i, name in enumerate(list(input.subset_columns())):
-                    if name not in column_map:
-                        continue
-                    choices, _ = cached_subset_choices(name)
-                    controls.append(ui.input_selectize(
-                        f"subset_values_{i}", f"{name} values", choices=choices,
-                        selected=[],
-                        multiple=True,
-                    ))
-                return ui.div(*controls) if controls else ui.help_text("Select columns to filter this plot.")
+        initial_filters = initial_filters or {}
 
-            @reactive.calc
-            def filter_state():
-                names = list(input.subset_columns())
-                values = {}
-                for i, name in enumerate(names):
-                    if name in column_map:
-                        values[name] = list(input[f"subset_values_{i}"]())
-                return {"columns": names, "values": values,
-                        "start": input.datetime_start().strip(),
-                        "end": input.datetime_end().strip()}
-
-            @reactive.calc
-            def filtered_summary():
-                state = filter_state()
-                filters = {}
-                for name, keys in state["values"].items():
-                    _, mapping = cached_subset_choices(name)
-                    selected = [mapping[key] for key in keys if key in mapping]
-                    if selected:
-                        filters[column_map[name]] = selected
-                return _apply_filters(summary, filters, state["start"], state["end"])
-
-            @reactive.effect
-            @reactive.event(input.export_csv)
-            def show_export_dialog():
-                ui.modal_show(ui.modal(
-                    ui.input_text("export_filename", "CSV filename", value="export.csv"),
-                    ui.download_button("download_csv", "Download CSV", class_="btn-primary"),
-                    title="Export plotted dataframe",
-                    easy_close=True,
-                    footer=ui.modal_button("Cancel"),
-                ))
-
-            @reactive.effect
-            @reactive.event(input.export_plot)
-            def show_plot_export_dialog():
-                ui.modal_show(ui.modal(
-                    ui.input_numeric("plot_export_width", "Width (inches)", value=10, min=1, max=100, step=0.5),
-                    ui.input_numeric("plot_export_height", "Height (inches)", value=5, min=1, max=100, step=0.5),
-                    ui.input_numeric("plot_export_dpi", "Resolution (DPI)", value=150, min=30, max=1200, step=25),
-                    ui.download_button("download_plot_png", "Download plot.png", class_="btn-primary"),
-                    title="Export plot", easy_close=True,
-                    footer=ui.modal_button("Cancel"),
-                ))
-
-            @render.download(filename="plot.png", media_type="image/png")
-            def download_plot_png():
-                import io
-                width = float(input.plot_export_width())
-                height = float(input.plot_export_height())
-                dpi = int(input.plot_export_dpi())
-                if not (1 <= width <= 100 and 1 <= height <= 100 and 30 <= dpi <= 1200):
-                    raise ValueError("Invalid plot export dimensions or resolution")
-                if width * dpi * height * dpi > 100_000_000:
-                    raise ValueError("Export exceeds 100 megapixels; reduce size or DPI")
-                if backend == "matplotlib":
-                    import matplotlib.pyplot as plt
-                    fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
-                    try:
-                        fig.set_size_inches(width, height, forward=True)
-                        buffer = io.BytesIO()
-                        fig.savefig(buffer, format="png", dpi=dpi)
-                        yield buffer.getvalue()
-                    finally:
-                        plt.close(fig)
-                else:
-                    # Plotly static image export requires kaleido.
-                    # Use the same styled figure as the interactive plot.
-                    fig = styled_plotly_figure()
-                    try:
-                        yield fig.to_image(format="png", width=round(width * dpi),
-                                           height=round(height * dpi), scale=1)
-                    except Exception as exc:
-                        raise RuntimeError(
-                            'Plotly PNG export requires kaleido: pip install kaleido'
-                        ) from exc
-
-            @render.download(filename=lambda: _safe_csv_filename(input.export_filename()))
-            def download_csv():
-                # Use the same post-filter/post-aggregation dataframe as the plot.
-                # The original dataframe is never mutated.
-                frame = pd.DataFrame(selected_data()).reset_index(drop=True)
-                yield frame.to_csv(index=False).encode("utf-8-sig")
-
-            @render.ui
-            def x_control():
-                kind = input.plot_type()
-                if kind in ("box", "bar"):
-                    choices = categorical_columns
-                    multiple = True
-                elif kind == "line":
-                    choices = datetime_columns
-                    multiple = False
-                else:
-                    choices = numeric_columns
-                    multiple = False
-
-                if not choices:
-                    return ui.help_text(f"No compatible X variables for {kind}.")
-                selected = []
-                if multiple:
-                    return ui.input_selectize(
-                        "x", "X-axis / categories",
-                        choices={c: c for c in choices},
-                        selected=selected, multiple=True,
-                    )
-                return ui.input_select(
-                    "x", "X-axis / variable",
-                    choices={"": "None", **{c: c for c in choices}},
-                    selected="",
-                )
-
-            @render.ui
-            def y_control():
-                kind = input.plot_type()
-                if kind == "histogram":
-                    return ui.div()
-                if not numeric_columns:
-                    return ui.help_text("No numeric Y variables available.")
-                selected = ""
-                if kind in ("box", "bar", "scatter"):
-                    return ui.input_select(
-                        "y", "Y-axis / variable",
-                        choices={"": "None", **{c: c for c in numeric_columns}},
-                        selected="",
-                    )
-                return ui.input_selectize(
-                    "y", "Y-axis / variables",
-                    choices={c: c for c in numeric_columns},
+        @render.ui
+        def subset_filters():
+            controls = []
+            for i, name in enumerate(list(input.subset_columns())):
+                if name not in column_map:
+                    continue
+                choices, _ = cached_subset_choices(name)
+                controls.append(ui.input_selectize(
+                    f"subset_values_{i}", f"{name} values", choices=choices,
                     selected=[],
                     multiple=True,
-                )
+                ))
+            return ui.div(*controls) if controls else ui.help_text("Select columns to filter this plot.")
 
-            def _optional_input(name, default=None):
-                """Read a conditionally mounted Shiny input safely.
+        @reactive.calc
+        def filter_state():
+            names = list(input.subset_columns())
+            values = {}
+            for i, name in enumerate(names):
+                if name in column_map:
+                    values[name] = list(input[f"subset_values_{i}"]())
+            return {"columns": names, "values": values,
+                    "start": input.datetime_start().strip(),
+                    "end": input.datetime_end().strip()}
 
-                Dynamic controls do not exist before their UI has been mounted.
-                Their absence must not prevent the first plot from rendering.
-                """
+        @reactive.calc
+        def filtered_summary():
+            state = filter_state()
+            filters = {}
+            for name, keys in state["values"].items():
+                _, mapping = cached_subset_choices(name)
+                selected = [mapping[key] for key in keys if key in mapping]
+                if selected:
+                    filters[column_map[name]] = selected
+            return _apply_filters(summary, filters, state["start"], state["end"])
+
+        @reactive.effect
+        @reactive.event(input.export_csv)
+        def show_export_dialog():
+            ui.modal_show(ui.modal(
+                ui.input_text("export_filename",
+                                "CSV filename", value="export.csv"),
+                ui.download_button(
+                    "download_csv", "Download CSV", class_="btn-primary"),
+                title="Export plotted dataframe",
+                easy_close=True,
+                footer=ui.modal_button("Cancel"),
+            ))
+
+        @reactive.effect
+        @reactive.event(input.export_plot)
+        def show_plot_export_dialog():
+            ui.modal_show(ui.modal(
+                ui.input_numeric(
+                    "plot_export_width", "Width (inches)", value=10, min=1, max=100, step=0.5),
+                ui.input_numeric(
+                    "plot_export_height", "Height (inches)", value=5, min=1, max=100, step=0.5),
+                ui.input_numeric(
+                    "plot_export_dpi", "Resolution (DPI)", value=150, min=30, max=1200, step=25),
+                ui.download_button(
+                    "download_plot_png", "Download plot.png", class_="btn-primary"),
+                title="Export plot", easy_close=True,
+                footer=ui.modal_button("Cancel"),
+            ))
+
+        @render.download(filename="plot.png", media_type="image/png")
+        def download_plot_png():
+            import io
+            width = float(input.plot_export_width())
+            height = float(input.plot_export_height())
+            dpi = int(input.plot_export_dpi())
+            if not (1 <= width <= 100 and 1 <= height <= 100 and 30 <= dpi <= 1200):
+                raise ValueError(
+                    "Invalid plot export dimensions or resolution")
+            if width * dpi * height * dpi > 100_000_000:
+                raise ValueError(
+                    "Export exceeds 100 megapixels; reduce size or DPI")
+            if backend == "matplotlib":
+                import matplotlib.pyplot as plt
+                fig = _matplotlib_direct_figure(
+                    prepared_plot(), **matplotlib_options())
                 try:
-                    value = getattr(input, name)()
-                except (AttributeError, KeyError, TypeError):
-                    return default
-                return default if value is None else value
-
-            @render.ui
-            def panel_controls():
-                if backend != "matplotlib" or not list(input.group_by() or []):
-                    return ui.div()
-                selected = list(input.group_by() or [])
-                controls = [ui.input_checkbox("multi_panel", "Separate panels by group", value=False),
-                            ui.panel_conditional("input.multi_panel === true",
-                                ui.input_checkbox("independent_panel_limits",
-                                    "Independent axis limits for each panel", value=True))]
-                if len(selected) > 1:
-                    controls.append(ui.panel_conditional(
-                        "input.multi_panel === true",
-                        ui.input_selectize("panel_by", "Panel grouping variables",
-                            choices={name: name for name in selected},
-                            selected=selected, multiple=True)))
-                return ui.div(*controls)
-
-            @render.ui
-            def frequency_options():
-                if FREQUENCIES.get(input.frequency()) is None:
-                    return ui.div()
-                return ui.div(
-                    ui.input_checkbox("only_complete", "Only complete intervals", value=True),
-                    ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=True),
-                )
-
-            @reactive.calc
-            def selected_data():
-                current = filtered_summary()
-                kind = input.plot_type()
-                x_input = input.x()
-                selected_x = ([x_input] if isinstance(x_input, str) else list(x_input or []))
-                if not selected_x or any(c not in column_map for c in selected_x):
-                    return pd.DataFrame()
-
-                if kind == "histogram":
-                    value_names = selected_x
-                else:
-                    y_input = input.y()
-                    value_names = ([y_input] if isinstance(y_input, str) else list(y_input or []))
-                if not value_names or any(c not in column_map for c in value_names):
-                    return pd.DataFrame()
-
-                selected_groups = list(input.group_by() or [])
-                grouping_by = [column_map[c] for c in selected_groups]
-                frequency = FREQUENCIES.get(input.frequency())
-                should_aggregate = AGGREGATES.get(input.aggregate()) is not None
-                aggregate = AGGREGATES.get(input.aggregate())
-                value_columns = [column_map[c] for c in value_names]
-
-                if should_aggregate and kind in ("box", "bar"):
-                    for c in selected_x:
-                        if column_map[c] not in grouping_by:
-                            grouping_by.append(column_map[c])
-                if kind == "scatter" and should_aggregate:
-                    # Both numerical axes must be aggregated on the same rows.
-                    value_columns = list(dict.fromkeys(
-                        [column_map[selected_x[0]], *value_columns]
-                    ))
-                if should_aggregate:
-                    current = _aggregate(
-                        current, value_columns, frequency, grouping_by, aggregate,
-                        only_complete=(bool(input.only_complete()) if frequency is not None else True),
-                        flooring_timestamp=(bool(input.flooring_timestamp()) if frequency is not None else True),
-                    )
-                return current
-
-            @reactive.calc
-            def prepared_plot():
-                plot_df = selected_data()
-                selected_plot = input.plot_type()
-                x_input = input.x()
-                selected_x = ([x_input] if isinstance(x_input, str) else list(x_input or []))
-                y_input = None if selected_plot == "histogram" else input.y()
-                selected_y = ([y_input] if isinstance(y_input, str) else list(y_input or []))
-                selected_groups = list(input.group_by() or [])
-                frequency = FREQUENCIES.get(input.frequency())
-                should_aggregate = AGGREGATES.get(input.aggregate()) is not None
-
-                if plot_df.empty or not selected_x or (
-                    selected_plot != "histogram" and not selected_y
-                ):
-                    return {"error": "No data for the selected filters"}
-
-                aggregate = AGGREGATES.get(input.aggregate())
-                def mapped(column):
-                    original = column_map[column]
-                    return f"{original}_{aggregate}" if should_aggregate else original
-
-                if selected_plot == "histogram":
-                    x_column = mapped(selected_x[0])
-                    y_columns = []
-                elif selected_plot in ("box", "bar"):
-                    x_columns = [column_map[c] for c in selected_x]
-                    x_column = x_columns[0]
-                    y_columns = [mapped(selected_y[0])]
-                elif selected_plot == "scatter":
-                    x_column = mapped(selected_x[0])
-                    y_columns = [mapped(selected_y[0])]
-                else:
-                    x_column = frequency if frequency is not None else column_map[selected_x[0]]
-                    y_columns = [mapped(c) for c in selected_y]
-
-                if selected_plot == "line" and should_aggregate and frequency is None:
-                    return {"error": "Categorical-only aggregation has no datetime axis; use a bar plot or select a frequency"}
-
-                required = [x_column, *y_columns]
-                if selected_plot in ("box", "bar"):
-                    required.extend(x_columns)
-                if any(c not in plot_df.columns for c in required):
-                    return {"error": "Selected variables are unavailable after aggregation"}
-
-                if selected_plot in ("box", "bar"):
-                    plot_df = plot_df.copy(deep=False)
-                    plot_df["__plot_category"] = _composite_labels(plot_df, x_columns)
-                    x_column = "__plot_category"
-
-                # Multiple grouping columns are supported by group_stat(). For
-                # plotting, Plotly needs one color/category column, so combine the
-                # selected grouping columns into a readable composite label.
-                group_columns = [column_map[c] for c in selected_groups
-                                 if column_map[c] in plot_df.columns]
-                if group_columns:
-                    plot_df = plot_df.copy(deep=False)
-                    plot_df["__plot_group"] = (
-                        _composite_labels(plot_df, group_columns)
-                    )
-
-                return {"data": plot_df, "kind": selected_plot, "x": x_column,
-                        "ys": y_columns, "groups": group_columns,
-                        "categories": x_columns if selected_plot in ("box", "bar") else None,
-                        "frequency": frequency}
-
-            @reactive.calc
-            def base_figure():
-                import plotly.express as px
-                spec = prepared_plot()
-                if "error" in spec:
-                    return px.scatter(title=spec["error"])
-                plot_df = spec["data"]
-                selected_plot = spec["kind"]
-                x_column = spec["x"]
-                y_columns = spec["ys"]
-                group_columns = spec["groups"]
-                frequency = spec["frequency"]
-                x_columns = spec["categories"]
-                if selected_plot == "histogram":
-                    fig = _histogram_figure(
-                        plot_df, x_column,
-                        group_column="__plot_group" if group_columns else None,
-                        bins=int(input.bins()),
-                        density=input.hist_density() == "True",
-                        stacked=input.hist_stacked() == "True",
-                        histtype=input.hist_type(),
-                        cumulative=int(input.hist_cumulative()),
-                    )
-                elif selected_plot == "box":
-                    fig = _boxplot_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
-                elif selected_plot == "bar":
-                    fig = _barplot_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
-                elif selected_plot == "scatter":
-                    fig = _scatter_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
-                else:
-                    fig = _lineplot_figure(plot_df, x_column, y_columns, group_columns=group_columns, frequency=frequency, column_map=column_map)
-
-                if not group_columns:
-                    # Retain trace names/colours for appearance editing, but
-                    # suppress the redundant ungrouped legend.
-                    fig.update_traces(showlegend=False)
-                    fig.update_layout(showlegend=False)
-
-                _label_plot_axes(
-                    fig, selected_plot, x_column, y_columns,
-                    category_columns=x_columns if selected_plot in ("box", "bar") else None,
-                )
-                fig.update_layout(
-                    hovermode="x unified" if selected_plot == "line" else "closest",
-                    margin=dict(l=60, r=30, t=70, b=60),
-                    autosize=True,
-                )
-                return fig
-
-            # Populate appearance controls only after a valid plot has been
-            # prepared.  The effect depends on the plot specification, not on
-            # appearance inputs, so editing a label or colour cannot reset it.
-            @reactive.effect
-            @reactive.event(prepared_plot, lambda: _optional_input("multi_panel", False) if input.group_by() else False,
-                            lambda: tuple(_optional_input("panel_by", []) or []) if input.group_by() and len(input.group_by()) > 1 else (),
-                            lambda: _optional_input("independent_panel_limits", True) if input.group_by() and _optional_input("multi_panel", False) else True, ignore_none=False)
-            def populate_appearance_from_plot():
-                spec = prepared_plot()
-                if "error" in spec:
-                    return
-                defaults = _matplotlib_defaults(spec, palette="Default")
-                names = defaults["names"]
-                selected_groups_for_legend = list(input.group_by() or [])
-                if (backend == "matplotlib" and selected_groups_for_legend
-                        and bool(_optional_input("multi_panel", False))):
-                    panel_variables_for_legend = (
-                        (list(_optional_input("panel_by", []) or []) or selected_groups_for_legend)
-                        if len(selected_groups_for_legend) > 1
-                        else selected_groups_for_legend
-                    )
-                    if panel_variables_for_legend:
-                        trace_defaults = _panel_trace_defaults(
-                            spec, panel_variables_for_legend, palette="Default"
-                        )
-                        names = trace_defaults["names"]
-                        defaults["colors"] = trace_defaults["colors"]
-                ui.update_text("title", value="Summary plot")
-                ui.update_text("x_axis_label", value=defaults["x_label"])
-                ui.update_text("y_axis_label", value=defaults["y_label"])
-                limits = _axis_bounds_from_spec(
-                    spec,
-                    bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
-                    density=input.hist_density() == "True" if spec["kind"] == "histogram" else False,
-                    stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
-                    cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
-                )
-                limits = _pad_axis_bounds(limits)
-                selected_groups = list(input.group_by() or [])
-                if (backend == "matplotlib" and selected_groups and bool(_optional_input("multi_panel", False))
-                        and bool(_optional_input("independent_panel_limits", True))):
-                    panel_variable = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
-                                      else selected_groups)
-                    panel_bounds = _panel_axis_bounds(
-                        spec, panel_variable,
-                        bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
-                        density=input.hist_density() == "True" if spec["kind"] == "histogram" else False,
-                        stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
-                        cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
-                    )
-                    if panel_bounds:
-                        panel_bounds = {name: _pad_axis_bounds(bounds) for name, bounds in panel_bounds.items()}
-                        limits = {key: _format_panel_bounds(panel_bounds, key) for key in limits}
-                for field, value in limits.items():
-                    if backend == "matplotlib":
-                        ui.update_text_area(field, value=value)
-                    else:
-                        ui.update_text(field, value=value)
-                ui.update_text_area("legend_labels", value="; ".join(
-                    f"{name}={name}" for name in names))
-                ui.update_text_area("trace_colors", value="; ".join(
-                    f"{name}={defaults['colors'][name]}" for name in names))
-                kind = spec["kind"]
-                if kind == "line":
-                    ui.update_text_area("line_alpha", value="; ".join(f"{name}=1" for name in names))
-                    ui.update_text_area("line_style", value="; ".join(f"{name}=solid" for name in names))
-                elif kind == "histogram":
-                    ui.update_text_area("hist_alpha", value="; ".join(f"{name}=0.65" for name in names))
-                elif kind == "scatter":
-                    ui.update_text_area("scatter_size", value="; ".join(f"{name}=7" for name in names))
-                    ui.update_text_area("scatter_marker", value="; ".join(f"{name}=dot" for name in names))
-                    ui.update_text_area("scatter_alpha", value="; ".join(f"{name}=1" for name in names))
-                if backend == "matplotlib":
-                    panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
-                                       else selected_groups)
-                    panel_names = ([name for name, _, _ in _panel_partitions(spec, panel_variables)]
-                                   if selected_groups and bool(_optional_input("multi_panel", False)) else [])
-                    ui.update_text_area("panel_titles", value="; ".join(
-                        f"{name}={name}" for name in panel_names))
-
-            @reactive.effect
-            @reactive.event(input.plot_type, ignore_init=True)
-            def reset_on_plot_type_change():
-                # Reset every plot-specific selection when the plot type changes.
-                ui.update_selectize("subset_columns", selected=[])
-                ui.update_text("datetime_start", value="")
-                ui.update_text("datetime_end", value="")
-                ui.update_selectize("group_by", selected=[])
-                ui.update_checkbox("multi_panel", value=False)
-                ui.update_checkbox("independent_panel_limits", value=True)
-                ui.update_select("frequency", selected="None")
-                ui.update_select("aggregate", selected="None")
-                ui.update_text("title", value="")
-                for field in ("x_axis_label", "y_axis_label"):
-                    ui.update_text(field, value="")
-                for field in ("x_min", "x_max", "y_min", "y_max"):
-                    if backend == "matplotlib":
-                        ui.update_text_area(field, value="")
-                    else:
-                        ui.update_text(field, value="")
-                for field in ("legend_labels", "trace_colors"):
-                    ui.update_text_area(field, value="")
-                ui.update_select("palette", selected="Default")
-                ui.update_select("template", selected="plotly")
-                ui.update_select("legend_position", selected="right")
-                ui.update_checkbox("legend_inside", value=False)
-                ui.update_checkbox("show_grid", value=True)
-                for field, value in (("title_font_size", 14), ("axis_font_size", 12),
-                                     ("tick_font_size", 10), ("legend_font_size", 12),
-                                     ("panel_font_size", 14)):
-                    ui.update_numeric(field, value=value)
-                ui.update_numeric("line_width", value=2)
-                ui.update_checkbox("box_showfliers", value=True)
-                ui.update_select("box_orientation", selected="vertical")
-                ui.update_text_area("hist_alpha", value="")
-                for field in ("line_alpha", "line_style", "scatter_size", "scatter_marker", "scatter_alpha"):
-                    ui.update_text_area(field, value="")
-                ui.update_numeric("bins", value=30)
-                ui.update_select("hist_density", selected="False")
-                ui.update_select("hist_stacked", selected="False")
-                ui.update_select("hist_type", selected="bar")
-                ui.update_select("hist_cumulative", selected="0")
-                ui.update_checkbox("only_complete", value=True)
-                ui.update_checkbox("flooring_timestamp", value=True)
-
-            if backend == "plotly":
-                @reactive.calc
-                def styled_plotly_figure():
-                    import plotly.graph_objects as go
-                    fig = go.Figure(base_figure())
-                    return _apply_plot_appearance(
-                        fig, title=input.title(), x_label=input.x_axis_label(),
-                        y_label=input.y_axis_label(), legend_labels=input.legend_labels(),
-                        trace_colors=input.trace_colors(), palette=input.palette(),
-                        x_min=input.x_min(), x_max=input.x_max(),
-                        y_min=input.y_min(), y_max=input.y_max(),
-                        template=input.template(), legend_position=input.legend_position(),
-                        legend_inside=input.legend_inside(), show_grid=input.show_grid(),
-                        x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
-                        x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
-                        line_width=(input.line_width() if input.plot_type() == "line" else 2),
-                        hist_alpha=input.hist_alpha(), box_showfliers=input.box_showfliers(),
-                        box_orientation=input.box_orientation(),
-                        title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
-                        tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
-                        line_alpha=input.line_alpha(), line_style=input.line_style(),
-                        scatter_size=input.scatter_size(), scatter_marker=input.scatter_marker(),
-                        scatter_alpha=input.scatter_alpha(), plot_kind=input.plot_type(),
-                    )
-
-                @render_plotly
-                def plot():
-                    return styled_plotly_figure()
-            else:
-                @reactive.calc
-                def matplotlib_options():
-                    # Shared with the export so that all appearance options,
-                    # including per-panel overrides, are reproduced exactly.
-                    return dict(title=input.title(),
-                        x_label=input.x_axis_label(), y_label=input.y_axis_label(),
-                        legend_labels=input.legend_labels(), trace_colors=input.trace_colors(),
-                        palette=input.palette(), x_min=input.x_min(), x_max=input.x_max(),
-                        y_min=input.y_min(), y_max=input.y_max(), template=input.template(),
-                        legend_position=input.legend_position(), legend_inside=input.legend_inside(),
-                        show_grid=input.show_grid(),
-                        x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
-                        x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
-                        title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
-                        tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
-                        panel_font_size=input.panel_font_size(), hist_alpha=input.hist_alpha(),
-                        box_showfliers=input.box_showfliers(), box_orientation=input.box_orientation(),
-                        line_width=(input.line_width() if input.plot_type() == "line" else 2), line_alpha=input.line_alpha(),
-                        line_style=input.line_style(), scatter_size=input.scatter_size(),
-                        scatter_marker=input.scatter_marker(), scatter_alpha=input.scatter_alpha(),
-                        bins=int(input.bins()) if input.plot_type() == "histogram" else 30,
-                        density=input.hist_density() == "True" if input.plot_type() == "histogram" else False,
-                        stacked=input.hist_stacked() == "True" if input.plot_type() == "histogram" else False,
-                        histtype=input.hist_type() if input.plot_type() == "histogram" else "bar",
-                        cumulative=int(input.hist_cumulative()) if input.plot_type() == "histogram" else 0,
-                        panel_by=(
-                            ((list(_optional_input("panel_by", []) or []) or list(input.group_by() or [])) if len(list(input.group_by() or [])) > 1
-                             else list(input.group_by() or []))
-                            if list(input.group_by() or []) and bool(_optional_input("multi_panel", False)) else None
-                        ),
-                        independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
-                                                  if input.group_by() and _optional_input("multi_panel", False) else True),
-                        panel_titles=(_optional_input("panel_titles", "") if input.group_by() and _optional_input("multi_panel", False) else ""),                    )
-
-                @render.download(filename="plot_export.zip", media_type="application/zip")
-                def export_python():
-                    import io
-                    import zipfile
-                    spec = prepared_plot()
-                    if "error" in spec:
-                        raise ValueError(spec["error"])
-                    frame = pd.DataFrame(spec["data"])
-                    script = _standalone_matplotlib_script(spec, matplotlib_options())
+                    fig.set_size_inches(width, height, forward=True)
                     buffer = io.BytesIO()
-                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-                        archive.writestr("plot_data.csv", frame.to_csv(index=False))
-                        archive.writestr("plot_script.py", script)
+                    fig.savefig(buffer, format="png", dpi=dpi)
                     yield buffer.getvalue()
+                finally:
+                    plt.close(fig)
+            else:
+                # Plotly static image export requires kaleido.
+                # Use the same styled figure as the interactive plot.
+                fig = styled_plotly_figure()
+                try:
+                    yield fig.to_image(format="png", width=round(width * dpi),
+                                        height=round(height * dpi), scale=1)
+                except Exception as exc:
+                    raise RuntimeError(
+                        'Plotly PNG export requires kaleido: pip install kaleido'
+                    ) from exc
 
-                @render.plot
-                def plot():
-                    return _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+        @render.download(filename=lambda: _safe_csv_filename(input.export_filename()))
+        def download_csv():
+            # Use the same post-filter/post-aggregation dataframe as the plot.
+            # The original dataframe is never mutated.
+            frame = pd.DataFrame(selected_data()).reset_index(drop=True)
+            yield frame.to_csv(index=False).encode("utf-8-sig")
 
-            return filter_state
+        @render.ui
+        def x_control():
+            kind = input.plot_type()
+            if kind in ("box", "bar"):
+                choices = categorical_columns
+                multiple = True
+            elif kind == "line":
+                choices = datetime_columns
+                multiple = False
+            else:
+                choices = numeric_columns
+                multiple = False
 
+            if not choices:
+                return ui.help_text(f"No compatible X variables for {kind}.")
+            selected = []
+            if multiple:
+                return ui.input_selectize(
+                    "x", "X-axis / categories",
+                    choices={c: c for c in choices},
+                    selected=selected, multiple=True,
+                )
+            return ui.input_select(
+                "x", "X-axis / variable",
+                choices={"": "None", **{c: c for c in choices}},
+                selected="",
+            )
+
+        @render.ui
+        def y_control():
+            kind = input.plot_type()
+            if kind == "histogram":
+                return ui.div()
+            if not numeric_columns:
+                return ui.help_text("No numeric Y variables available.")
+            selected = ""
+            if kind in ("box", "bar", "scatter"):
+                return ui.input_select(
+                    "y", "Y-axis / variable",
+                    choices={"": "None", **
+                                {c: c for c in numeric_columns}},
+                    selected="",
+                )
+            return ui.input_selectize(
+                "y", "Y-axis / variables",
+                choices={c: c for c in numeric_columns},
+                selected=[],
+                multiple=True,
+            )
+
+        def _optional_input(name, default=None):
+            """Read a conditionally mounted Shiny input safely.
+
+            Dynamic controls do not exist before their UI has been mounted.
+            Their absence must not prevent the first plot from rendering.
+            """
+            try:
+                value = getattr(input, name)()
+            except (AttributeError, KeyError, TypeError):
+                return default
+            return default if value is None else value
+
+        @render.ui
+        def panel_controls():
+            if backend != "matplotlib" or not list(input.group_by() or []):
+                return ui.div()
+            selected = list(input.group_by() or [])
+            controls = [ui.input_checkbox("multi_panel", "Separate panels by group", value=False),
+                        ui.panel_conditional("input.multi_panel === true",
+                                                ui.input_checkbox("independent_panel_limits",
+                                                                "Independent axis limits for each panel", value=True))]
+            if len(selected) > 1:
+                controls.append(ui.panel_conditional(
+                    "input.multi_panel === true",
+                    ui.input_selectize("panel_by", "Panel grouping variables",
+                                        choices={
+                                            name: name for name in selected},
+                                        selected=selected, multiple=True)))
+            return ui.div(*controls)
+
+        @render.ui
+        def frequency_options():
+            if FREQUENCIES.get(input.frequency()) is None:
+                return ui.div()
+            return ui.div(
+                ui.input_checkbox(
+                    "only_complete", "Only complete intervals", value=True),
+                ui.input_checkbox("flooring_timestamp",
+                                    "Floor timestamps", value=True),
+            )
+
+        @reactive.calc
+        def selected_data():
+            current = filtered_summary()
+            kind = input.plot_type()
+            x_input = input.x()
+            selected_x = ([x_input] if isinstance(
+                x_input, str) else list(x_input or []))
+            if not selected_x or any(c not in column_map for c in selected_x):
+                return pd.DataFrame()
+
+            if kind == "histogram":
+                value_names = selected_x
+            else:
+                y_input = input.y()
+                value_names = ([y_input] if isinstance(
+                    y_input, str) else list(y_input or []))
+            if not value_names or any(c not in column_map for c in value_names):
+                return pd.DataFrame()
+
+            selected_groups = list(input.group_by() or [])
+            # Derive hour/day/etc. through group_stat without aggregation.
+            # The returned index column identifies source rows.
+            for component in selected_groups:
+                if component not in time_group_columns:
+                    continue
+                generated = current.group_stat(
+                    value_cols=value_names,
+                    frequency=component,
+                    grouping_by=None,
+                    aggregate=None,
+                    only_complete=False,
+                    flooring_timestamp=False,
+                )
+                if generated is None or component not in generated.columns:
+                    return pd.DataFrame()
+                current = current.copy()
+                if "index" in generated.columns and current.index.is_unique:
+                    values = generated.set_index("index")[component]
+                    current[component] = values.reindex(current.index)
+                else:
+                    valid = current["time"].notna().to_numpy()
+                    current[component] = pd.NA
+                    if len(generated) == int(valid.sum()):
+                        current.loc[valid,
+                                    component] = generated[component].to_numpy()
+            grouping_by = [column_map[c] for c in selected_groups]
+            frequency = FREQUENCIES.get(input.frequency())
+            should_aggregate = AGGREGATES.get(
+                input.aggregate()) is not None
+            aggregate = AGGREGATES.get(input.aggregate())
+            value_columns = [column_map[c] for c in value_names]
+
+            if should_aggregate and kind in ("box", "bar"):
+                for c in selected_x:
+                    if column_map[c] not in grouping_by:
+                        grouping_by.append(column_map[c])
+            if kind == "scatter" and should_aggregate:
+                # Both numerical axes must be aggregated on the same rows.
+                value_columns = list(dict.fromkeys(
+                    [column_map[selected_x[0]], *value_columns]
+                ))
+            if should_aggregate:
+                current = _aggregate(
+                    current, value_columns, frequency, grouping_by, aggregate,
+                    only_complete=(bool(input.only_complete())
+                                    if frequency is not None else True),
+                    flooring_timestamp=(
+                        bool(input.flooring_timestamp()) if frequency is not None else True),
+                )
+            return current
+
+        @reactive.calc
+        def prepared_plot():
+            plot_df = selected_data()
+            selected_plot = input.plot_type()
+            x_input = input.x()
+            selected_x = ([x_input] if isinstance(
+                x_input, str) else list(x_input or []))
+            y_input = None if selected_plot == "histogram" else input.y()
+            selected_y = ([y_input] if isinstance(
+                y_input, str) else list(y_input or []))
+            selected_groups = list(input.group_by() or [])
+            frequency = FREQUENCIES.get(input.frequency())
+            should_aggregate = AGGREGATES.get(
+                input.aggregate()) is not None
+
+            if plot_df.empty or not selected_x or (
+                selected_plot != "histogram" and not selected_y
+            ):
+                return {"error": "No data for the selected filters"}
+
+            aggregate = AGGREGATES.get(input.aggregate())
+
+            def mapped(column):
+                original = column_map[column]
+                return f"{original}_{aggregate}" if should_aggregate else original
+
+            if selected_plot == "histogram":
+                x_column = mapped(selected_x[0])
+                y_columns = []
+            elif selected_plot in ("box", "bar"):
+                x_columns = [column_map[c] for c in selected_x]
+                x_column = x_columns[0]
+                y_columns = [mapped(selected_y[0])]
+            elif selected_plot == "scatter":
+                x_column = mapped(selected_x[0])
+                y_columns = [mapped(selected_y[0])]
+            else:
+                x_column = frequency if frequency is not None else column_map[selected_x[0]]
+                y_columns = [mapped(c) for c in selected_y]
+
+            if selected_plot == "line" and should_aggregate and frequency is None:
+                return {"error": "Categorical-only aggregation has no datetime axis; use a bar plot or select a frequency"}
+
+            required = [x_column, *y_columns]
+            if selected_plot in ("box", "bar"):
+                required.extend(x_columns)
+            if any(c not in plot_df.columns for c in required):
+                return {"error": "Selected variables are unavailable after aggregation"}
+
+            if selected_plot in ("box", "bar"):
+                plot_df = plot_df.copy(deep=False)
+                plot_df["__plot_category"] = _composite_labels(
+                    plot_df, x_columns)
+                x_column = "__plot_category"
+
+            # Multiple grouping columns are supported by group_stat(). For
+            # plotting, Plotly needs one color/category column, so combine the
+            # selected grouping columns into a readable composite label.
+            group_columns = [column_map[c] for c in selected_groups
+                                if column_map[c] in plot_df.columns]
+            if group_columns:
+                plot_df = plot_df.copy(deep=False)
+                plot_df["__plot_group"] = (
+                    _composite_labels(plot_df, group_columns)
+                )
+
+            return {"data": plot_df, "kind": selected_plot, "x": x_column,
+                    "ys": y_columns, "groups": group_columns,
+                    "categories": x_columns if selected_plot in ("box", "bar") else None,
+                    "frequency": frequency}
+
+        @reactive.calc
+        def base_figure():
+            import plotly.express as px
+            spec = prepared_plot()
+            if "error" in spec:
+                return px.scatter(title=spec["error"])
+            plot_df = spec["data"]
+            selected_plot = spec["kind"]
+            x_column = spec["x"]
+            y_columns = spec["ys"]
+            group_columns = spec["groups"]
+            frequency = spec["frequency"]
+            x_columns = spec["categories"]
+            if selected_plot == "histogram":
+                fig = _histogram_figure(
+                    plot_df, x_column,
+                    group_column="__plot_group" if group_columns else None,
+                    bins=int(input.bins()),
+                    density=input.hist_density() == "True",
+                    stacked=input.hist_stacked() == "True",
+                    histtype=input.hist_type(),
+                    cumulative=int(input.hist_cumulative()),
+                )
+            elif selected_plot == "box":
+                fig = _boxplot_figure(
+                    plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
+            elif selected_plot == "bar":
+                fig = _barplot_figure(
+                    plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
+            elif selected_plot == "scatter":
+                fig = _scatter_figure(
+                    plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
+            else:
+                fig = _lineplot_figure(
+                    plot_df, x_column, y_columns, group_columns=group_columns, frequency=frequency, column_map=column_map)
+
+            if not group_columns:
+                # Retain trace names/colours for appearance editing, but
+                # suppress the redundant ungrouped legend.
+                fig.update_traces(showlegend=False)
+                fig.update_layout(showlegend=False)
+
+            _label_plot_axes(
+                fig, selected_plot, x_column, y_columns,
+                category_columns=x_columns if selected_plot in (
+                    "box", "bar") else None,
+            )
+            fig.update_layout(
+                hovermode="x unified" if selected_plot == "line" else "closest",
+                margin=dict(l=60, r=30, t=70, b=60),
+                autosize=True,
+            )
+            return fig
+
+        # Populate appearance controls only after a valid plot has been
+        # prepared.  The effect depends on the plot specification, not on
+        # appearance inputs, so editing a label or colour cannot reset it.
+        @reactive.effect
+        @reactive.event(prepared_plot, lambda: _optional_input("multi_panel", False) if input.group_by() else False,
+                        lambda: tuple(_optional_input("panel_by", []) or []) if input.group_by(
+        ) and len(input.group_by()) > 1 else (),
+            lambda: _optional_input("independent_panel_limits", True) if input.group_by() and _optional_input("multi_panel", False) else True, ignore_none=False)
+        def populate_appearance_from_plot():
+            spec = prepared_plot()
+            if "error" in spec:
+                return
+            defaults = _matplotlib_defaults(spec, palette="Default")
+            names = defaults["names"]
+            selected_groups_for_legend = list(input.group_by() or [])
+            if (backend == "matplotlib" and selected_groups_for_legend
+                    and bool(_optional_input("multi_panel", False))):
+                panel_variables_for_legend = (
+                    (list(_optional_input("panel_by", []) or [])
+                        or selected_groups_for_legend)
+                    if len(selected_groups_for_legend) > 1
+                    else selected_groups_for_legend
+                )
+                if panel_variables_for_legend:
+                    trace_defaults = _panel_trace_defaults(
+                        spec, panel_variables_for_legend, palette="Default"
+                    )
+                    names = trace_defaults["names"]
+                    defaults["colors"] = trace_defaults["colors"]
+            ui.update_text("title", value="Summary plot")
+            ui.update_text("x_axis_label", value=defaults["x_label"])
+            ui.update_text("y_axis_label", value=defaults["y_label"])
+            limits = _axis_bounds_from_spec(
+                spec,
+                bins=int(
+                    input.bins()) if spec["kind"] == "histogram" else 30,
+                density=input.hist_density(
+                ) == "True" if spec["kind"] == "histogram" else False,
+                stacked=(input.hist_stacked() == "True" or input.hist_type(
+                ) == "barstacked") if spec["kind"] == "histogram" else False,
+                cumulative=int(input.hist_cumulative()
+                                ) if spec["kind"] == "histogram" else 0,
+            )
+            limits = _pad_axis_bounds(limits)
+            selected_groups = list(input.group_by() or [])
+            if (backend == "matplotlib" and selected_groups and bool(_optional_input("multi_panel", False))
+                    and bool(_optional_input("independent_panel_limits", True))):
+                panel_variable = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
+                                    else selected_groups)
+                panel_bounds = _panel_axis_bounds(
+                    spec, panel_variable,
+                    bins=int(
+                        input.bins()) if spec["kind"] == "histogram" else 30,
+                    density=input.hist_density(
+                    ) == "True" if spec["kind"] == "histogram" else False,
+                    stacked=(input.hist_stacked() == "True" or input.hist_type(
+                    ) == "barstacked") if spec["kind"] == "histogram" else False,
+                    cumulative=int(input.hist_cumulative()
+                                    ) if spec["kind"] == "histogram" else 0,
+                )
+                if panel_bounds:
+                    panel_bounds = {name: _pad_axis_bounds(
+                        bounds) for name, bounds in panel_bounds.items()}
+                    limits = {key: _format_panel_bounds(
+                        panel_bounds, key) for key in limits}
+            for field, value in limits.items():
+                if backend == "matplotlib":
+                    ui.update_text_area(field, value=value)
+                else:
+                    ui.update_text(field, value=value)
+            ui.update_text_area("legend_labels", value="; ".join(
+                f"{name}={name}" for name in names))
+            ui.update_text_area("trace_colors", value="; ".join(
+                f"{name}={defaults['colors'][name]}" for name in names))
+            kind = spec["kind"]
+            if kind == "line":
+                ui.update_text_area("line_alpha", value="; ".join(
+                    f"{name}=1" for name in names))
+                ui.update_text_area("line_style", value="; ".join(
+                    f"{name}=solid" for name in names))
+            elif kind == "histogram":
+                ui.update_text_area("hist_alpha", value="; ".join(
+                    f"{name}=0.65" for name in names))
+            elif kind == "scatter":
+                ui.update_text_area("scatter_size", value="; ".join(
+                    f"{name}=7" for name in names))
+                ui.update_text_area("scatter_marker", value="; ".join(
+                    f"{name}=dot" for name in names))
+                ui.update_text_area("scatter_alpha", value="; ".join(
+                    f"{name}=1" for name in names))
+            if backend == "matplotlib":
+                panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
+                                    else selected_groups)
+                panel_names = ([name for name, _, _ in _panel_partitions(spec, panel_variables)]
+                                if selected_groups and bool(_optional_input("multi_panel", False)) else [])
+                ui.update_text_area("panel_titles", value="; ".join(
+                    f"{name}={name}" for name in panel_names))
+
+        @reactive.effect
+        @reactive.event(input.plot_type, ignore_init=True)
+        def reset_on_plot_type_change():
+            # Reset every plot-specific selection when the plot type changes.
+            ui.update_selectize("subset_columns", selected=[])
+            ui.update_text("datetime_start", value="")
+            ui.update_text("datetime_end", value="")
+            ui.update_selectize("group_by", selected=[])
+            ui.update_checkbox("multi_panel", value=False)
+            ui.update_checkbox("independent_panel_limits", value=True)
+            ui.update_select("frequency", selected="None")
+            ui.update_select("aggregate", selected="None")
+            ui.update_text("title", value="")
+            for field in ("x_axis_label", "y_axis_label"):
+                ui.update_text(field, value="")
+            for field in ("x_min", "x_max", "y_min", "y_max"):
+                if backend == "matplotlib":
+                    ui.update_text_area(field, value="")
+                else:
+                    ui.update_text(field, value="")
+            for field in ("legend_labels", "trace_colors"):
+                ui.update_text_area(field, value="")
+            ui.update_select("palette", selected="Default")
+            ui.update_select("template", selected="plotly")
+            ui.update_select("legend_position", selected="right")
+            ui.update_checkbox("legend_inside", value=False)
+            ui.update_checkbox("show_grid", value=True)
+            for field, value in (("title_font_size", 14), ("axis_font_size", 12),
+                                    ("tick_font_size", 10), ("legend_font_size", 12),
+                                    ("panel_font_size", 14)):
+                ui.update_numeric(field, value=value)
+            ui.update_numeric("line_width", value=2)
+            ui.update_checkbox("box_showfliers", value=True)
+            ui.update_select("box_orientation", selected="vertical")
+            ui.update_text_area("hist_alpha", value="")
+            for field in ("line_alpha", "line_style", "scatter_size", "scatter_marker", "scatter_alpha"):
+                ui.update_text_area(field, value="")
+            ui.update_numeric("bins", value=30)
+            ui.update_select("hist_density", selected="False")
+            ui.update_select("hist_stacked", selected="False")
+            ui.update_select("hist_type", selected="bar")
+            ui.update_select("hist_cumulative", selected="0")
+            ui.update_checkbox("only_complete", value=True)
+            ui.update_checkbox("flooring_timestamp", value=True)
+
+        if backend == "plotly":
+            @reactive.calc
+            def styled_plotly_figure():
+                import plotly.graph_objects as go
+                fig = go.Figure(base_figure())
+                return _apply_plot_appearance(
+                    fig, title=input.title(), x_label=input.x_axis_label(),
+                    y_label=input.y_axis_label(), legend_labels=input.legend_labels(),
+                    trace_colors=input.trace_colors(), palette=input.palette(),
+                    x_min=input.x_min(), x_max=input.x_max(),
+                    y_min=input.y_min(), y_max=input.y_max(),
+                    template=input.template(), legend_position=input.legend_position(),
+                    legend_inside=input.legend_inside(), show_grid=input.show_grid(),
+                    x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
+                    x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
+                    line_width=(input.line_width()
+                                if input.plot_type() == "line" else 2),
+                    hist_alpha=input.hist_alpha(), box_showfliers=input.box_showfliers(),
+                    box_orientation=input.box_orientation(),
+                    title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
+                    tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
+                    line_alpha=input.line_alpha(), line_style=input.line_style(),
+                    scatter_size=input.scatter_size(), scatter_marker=input.scatter_marker(),
+                    scatter_alpha=input.scatter_alpha(), plot_kind=input.plot_type(),
+                )
+
+            @render_plotly
+            def plot():
+                return styled_plotly_figure()
+        else:
+            @reactive.calc
+            def matplotlib_options():
+                # Shared with the export so that all appearance options,
+                # including per-panel overrides, are reproduced exactly.
+                return dict(title=input.title(),
+                            x_label=input.x_axis_label(), y_label=input.y_axis_label(),
+                            legend_labels=input.legend_labels(), trace_colors=input.trace_colors(),
+                            palette=input.palette(), x_min=input.x_min(), x_max=input.x_max(),
+                            y_min=input.y_min(), y_max=input.y_max(), template=input.template(),
+                            legend_position=input.legend_position(), legend_inside=input.legend_inside(),
+                            show_grid=input.show_grid(),
+                            x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
+                            x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
+                            title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
+                            tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
+                            panel_font_size=input.panel_font_size(), hist_alpha=input.hist_alpha(),
+                            box_showfliers=input.box_showfliers(), box_orientation=input.box_orientation(),
+                            line_width=(input.line_width() if input.plot_type() == "line" else 2), line_alpha=input.line_alpha(),
+                            line_style=input.line_style(), scatter_size=input.scatter_size(),
+                            scatter_marker=input.scatter_marker(), scatter_alpha=input.scatter_alpha(),
+                            bins=int(input.bins()) if input.plot_type(
+                    ) == "histogram" else 30,
+                            density=input.hist_density() == "True" if input.plot_type() == "histogram" else False,
+                            stacked=input.hist_stacked() == "True" if input.plot_type() == "histogram" else False,
+                            histtype=input.hist_type() if input.plot_type() == "histogram" else "bar",
+                            cumulative=int(input.hist_cumulative(
+                            )) if input.plot_type() == "histogram" else 0,
+                            panel_by=(
+                    ((list(_optional_input("panel_by", []) or []) or list(input.group_by() or [])) if len(list(input.group_by() or [])) > 1
+                        else list(input.group_by() or []))
+                    if list(input.group_by() or []) and bool(_optional_input("multi_panel", False)) else None
+                ),
+                    independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
+                                                if input.group_by() and _optional_input("multi_panel", False) else True),
+                    panel_titles=(_optional_input("panel_titles", "") if input.group_by() and _optional_input("multi_panel", False) else ""),)
+
+            @render.download(filename="plot_export.zip", media_type="application/zip")
+            def export_python():
+                import io
+                import zipfile
+                spec = prepared_plot()
+                if "error" in spec:
+                    raise ValueError(spec["error"])
+                frame = pd.DataFrame(spec["data"])
+                script = _standalone_matplotlib_script(
+                    spec, matplotlib_options())
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr(
+                        "plot_data.csv", frame.to_csv(index=False))
+                    archive.writestr("plot_script.py", script)
+                yield buffer.getvalue()
+
+            @render.plot
+            def plot():
+                return _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+
+        return filter_state
 
     app_ui = ui.page_fluid(
         ui.tags.style("""
@@ -2354,11 +2546,14 @@ def create_summary_app(
         """),
         ui.div(
             ui.div(
-                ui.input_action_button("add_tab", "+ New plot", class_="btn-primary"),
-                ui.input_action_button("close_tab", "Close selected plot", class_="btn-outline-danger"),
+                ui.input_action_button(
+                    "add_tab", "+ New plot", class_="btn-primary"),
+                ui.input_action_button(
+                    "close_tab", "Close selected plot", class_="btn-outline-danger"),
                 class_="d-flex gap-2 mb-3",
             ),
-            ui.navset_tab(ui.nav_panel("Plot 1", plot_tab_ui("plot_1", {}), value="plot_1"), id="plot_tabs"),
+            ui.navset_tab(ui.nav_panel("Plot 1", plot_tab_ui(
+                "plot_1", {}), value="plot_1"), id="plot_tabs"),
         ),
         title="Summary plots",
     )
@@ -2380,7 +2575,8 @@ def create_summary_app(
             inherited = {}
             tab_filters[tab_id] = plot_tab_server(tab_id, inherited)
             active_tabs.set((*active_tabs.get(), tab_id))
-            ui.insert_nav_panel("plot_tabs", ui.nav_panel(f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id), select=True)
+            ui.insert_nav_panel("plot_tabs", ui.nav_panel(
+                f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id), select=True)
 
         @reactive.effect
         @reactive.event(input.close_tab)
@@ -2414,11 +2610,14 @@ def run_summary_app(
     """Create and start the Shiny app in a background thread."""
     from shiny import run_app
 
-    app = create_summary_app(data, x=x, y=y, group_by=group_by, plot_type=plot_type, title=title, backend=backend)
+    app = create_summary_app(data, x=x, y=y, group_by=group_by,
+                             plot_type=plot_type, title=title, backend=backend)
 
     def _run() -> None:
-        run_app(app, host=host, port=port, launch_browser=launch_browser, dev_mode=False)
+        run_app(app, host=host, port=port,
+                launch_browser=launch_browser, dev_mode=False)
 
-    thread = threading.Thread(target=_run, name="apmtools-shiny-summary", daemon=daemon)
+    thread = threading.Thread(
+        target=_run, name="apmtools-shiny-summary", daemon=daemon)
     thread.start()
     return thread

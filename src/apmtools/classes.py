@@ -1454,9 +1454,26 @@ class Summary(pd.DataFrame):
             else:
                 output = df
 
-        output = output[value_cols].agg(aggregate)
+        if isinstance(frequency, str) and aggregate is None:
+            if grouping_by != None:
+                output = df[grouping_by+[frequency]]
+            else:
+                output = df[[frequency]]
+        if isinstance(frequency, list) and aggregate is None:
+            if grouping_by != None:
+                output = df[grouping_by+frequency]
+            else:
+                output = df[frequency]
+        if frequency == None and aggregate is None:
+            if grouping_by != None:
+                output = df[grouping_by]
+            else:
+                output = df
+                
+        if aggregate is not None:
+            output = output[value_cols].agg(aggregate)
 
-        if frequency != None or grouping_by != None:
+        if aggregate != None and (frequency != None or grouping_by != None):
             output.columns = [
                 "_".join(str(x) for x in col if pd.notna(x) and x != "")
                 for col in output.columns.to_flat_index()
@@ -1472,8 +1489,8 @@ class Summary(pd.DataFrame):
         output.m["aggregate"] = aggregate
 
         return output
-
-
+    
+    
     def get_monitor(self, value):
         
         out = self.subset({"monitor": [value]})
