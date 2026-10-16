@@ -71,22 +71,69 @@ def _parse_label_map(value):
     return result
 
 
+def _numeric_axis_controls(kind, box_orientation="vertical"):
+    """Return axes on which numeric/date tick-density controls apply."""
+    if kind in ("line", "scatter", "histogram"):
+        return True, True
+    if kind == "box" and box_orientation == "horizontal":
+        return True, False
+    return False, kind in ("box", "bar")
+
+
+def _matplotlib_tick_controls(ax, *, kind, box_orientation="vertical", show_grid=True,
+                              x_major_ticks=6, y_major_ticks=6,
+                              x_minor_ticks=False, y_minor_ticks=False):
+    from matplotlib.ticker import MaxNLocator, AutoMinorLocator
+    from matplotlib.dates import AutoDateLocator
+    use_x, use_y = _numeric_axis_controls(kind, box_orientation)
+    for active, axis, count, minor in ((use_x, ax.xaxis, x_major_ticks, x_minor_ticks),
+                                       (use_y, ax.yaxis, y_major_ticks, y_minor_ticks)):
+        if not active:
+            continue
+        count = max(2, min(30, int(count or 6)))
+        if axis.get_scale() == "linear":
+            if isinstance(axis.get_major_locator(), AutoDateLocator):
+                axis.set_major_locator(AutoDateLocator(minticks=max(2, count - 2), maxticks=count))
+            else:
+                axis.set_major_locator(MaxNLocator(nbins=count))
+        if minor:
+            axis.set_minor_locator(AutoMinorLocator())
+        else:
+            axis.set_minor_locator(__import__("matplotlib.ticker", fromlist=["NullLocator"]).NullLocator())
+        axis.grid(bool(show_grid and minor), which="minor")
+
+
 def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
                            legend_labels="", trace_colors="", palette="Default",
                            x_min="", x_max="", y_min="", y_max="",
                            template="plotly", legend_position="right", legend_inside=False,
                            show_grid=True, font_size=12, line_width=2,
-                           marker_size=7):
+                           marker_size=7, line_alpha="", line_style="", scatter_size="", scatter_marker="", scatter_alpha="",
+                           hist_alpha="", box_showfliers=True, box_orientation="vertical",
+                           title_font_size=14, axis_font_size=12, tick_font_size=10,
+                           legend_font_size=12, panel_font_size=14, plot_kind=None,
+                           x_major_ticks=6, y_major_ticks=6, x_minor_ticks=False, y_minor_ticks=False):
     """Apply per-plot appearance overrides without changing the source data."""
     from plotly.colors import qualitative
 
-    fig.update_layout(title=title, template=template, font=dict(size=font_size))
+    fig.update_layout(title=title, template=template, font=dict(size=font_size),
+                      title_font=dict(size=title_font_size),
+                      legend=dict(font=dict(size=legend_font_size), title_font=dict(size=legend_font_size)))
+    fig.update_xaxes(title_font=dict(size=axis_font_size), tickfont=dict(size=tick_font_size))
+    fig.update_yaxes(title_font=dict(size=axis_font_size), tickfont=dict(size=tick_font_size))
     if x_label.strip():
         fig.update_xaxes(title_text=x_label.strip())
     if y_label.strip():
         fig.update_yaxes(title_text=y_label.strip())
     fig.update_xaxes(showgrid=show_grid)
     fig.update_yaxes(showgrid=show_grid)
+    use_x, use_y = _numeric_axis_controls(plot_kind, box_orientation)
+    for active, axis_name, count, minor in ((use_x, "x", x_major_ticks, x_minor_ticks),
+                                            (use_y, "y", y_major_ticks, y_minor_ticks)):
+        if not active:
+            continue
+        update = getattr(fig, f"update_{axis_name}axes")
+        update(nticks=max(2, min(30, int(count or 6))), minor=dict(ticks="inside" if minor else "", showgrid=bool(show_grid and minor)))
     for axis, lower, upper in (("x", x_min, x_max), ("y", y_min, y_max)):
         datetime_axis = axis == "x" and any(
             getattr(trace, "type", "") == "scatter" and
@@ -112,9 +159,12 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
             "bottom": dict(x=0.5, y=0.01, xanchor="center", yanchor="bottom", orientation="h"),
         }.get(legend_position, {})
         legend_settings = {**legend_settings, "bgcolor": "rgba(255,255,255,0.7)"}
-    fig.update_layout(legend={**legend_settings, "title": {"text": "Legend"}})
+    fig.update_layout(legend={**legend_settings, "title": {"text": "Legend", "font": {"size": legend_font_size}}, "font": {"size": legend_font_size}})
     labels = _parse_label_map(legend_labels)
     colors = _parse_label_map(trace_colors)
+    alphas, styles, sizes, markers, marker_alphas = _series_style_maps(
+        line_alpha, line_style, scatter_size, scatter_marker, scatter_alpha)
+    histogram_alphas = _parse_label_map(hist_alpha)
     palette_values = getattr(qualitative, palette, None) if palette != "Default" else None
     # Color keys can refer to either original or renamed trace labels.
     for i, trace in enumerate(fig.data):
@@ -134,11 +184,55 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
                 trace.marker.color = color
             if getattr(trace, "fillcolor", None) is not None and trace.type == "histogram":
                 trace.marker.color = color
-        if getattr(trace, "line", None) is not None:
+        if plot_kind == "histogram":
+            trace.opacity = _bounded_float(histogram_alphas, original, 0.65, 0, 1)
+        if plot_kind == "box":
+            trace.boxpoints = "outliers" if box_showfliers else False
+            if box_orientation == "horizontal":
+                old_x, old_y = trace.x, trace.y
+                trace.x, trace.y = old_y, old_x
+                trace.orientation = "h"
+        if getattr(trace, "line", None) is not None and plot_kind == "line":
             trace.line.width = line_width
+            if plot_kind == "line":
+                trace.line.dash = {"-": "solid", ":": "dot", "--": "dash"}[_line_style(styles, original)]
+                trace.opacity = _bounded_float(alphas, original, 1, 0, 1)
         if getattr(trace, "marker", None) is not None and trace.type in ("scatter", "scattergl"):
-            trace.marker.size = marker_size
+            if plot_kind == "scatter":
+                trace.marker.size = _bounded_float(sizes, original, 7, 0.1, 100)
+                trace.marker.symbol = {"o": "circle", "x": "x"}[_scatter_marker(markers, original)]
+                trace.opacity = _bounded_float(marker_alphas, original, 1, 0, 1)
+            else:
+                trace.marker.size = marker_size
+    if plot_kind == "box" and box_orientation == "horizontal":
+        x_title = fig.layout.xaxis.title.text
+        y_title = fig.layout.yaxis.title.text
+        fig.update_xaxes(title_text=y_title, type="linear", autorange=True)
+        fig.update_yaxes(title_text=x_title, type="category", autorange=True)
     return fig
+
+
+def _series_style_maps(line_alpha="", line_style="", scatter_size="", scatter_marker="", scatter_alpha=""):
+    """Parse per-trace styles, keyed by the original legend/series name."""
+    return tuple(_parse_label_map(v) for v in (line_alpha, line_style, scatter_size, scatter_marker, scatter_alpha))
+
+
+def _bounded_float(mapping, name, default, low, high):
+    try:
+        value = float(mapping.get(name, default))
+        return value if np.isfinite(value) and low <= value <= high else float(default)
+    except (ValueError, TypeError):
+        return float(default)
+
+
+def _line_style(mapping, name):
+    return {"solid": "-", "dotted": ":", "dashed": "--", "-": "-", ":": ":", "--": "--"}.get(
+        mapping.get(name, "solid").strip().lower(), "-")
+
+
+def _scatter_marker(mapping, name):
+    return {"dot": "o", "cross": "x", "o": "o", "x": "x"}.get(
+        mapping.get(name, "dot").strip().lower(), "o")
 
 
 PLOT_TYPES = {
@@ -533,6 +627,10 @@ def _boxplot_figure(data, x_column, y_column, *, group_column=None):
     box_width = 0.82 / n_traces
     for i, trace in enumerate(fig.data):
         trace.width = box_width
+    # A single ungrouped box trace does not convey useful legend information.
+    if group_column is None and len(fig.data) == 1:
+        fig.update_traces(showlegend=False)
+        fig.update_layout(showlegend=False)
     return fig
 
 
@@ -1012,9 +1110,14 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               x_min="", x_max="", y_min="", y_max="",
                               template="plotly", legend_position="right",
                               legend_inside=False, show_grid=True, font_size=12,
-                              line_width=2, marker_size=7, bins=30, density=False,
+                              line_width=2, marker_size=7, line_alpha="", line_style="",
+                              scatter_size="", scatter_marker="", scatter_alpha="", hist_alpha="",
+                              box_showfliers=True, box_orientation="vertical",
+                              title_font_size=14, axis_font_size=12, tick_font_size=10,
+                              legend_font_size=12, panel_font_size=14, bins=30, density=False,
                               stacked=False, histtype="bar", cumulative=0,
-                              panel_by=None, independent_panel_limits=True, panel_titles="", _axes=None):
+                              panel_by=None, independent_panel_limits=True, panel_titles="", _axes=None,
+                              x_major_ticks=6, y_major_ticks=6, x_minor_ticks=False, y_minor_ticks=False):
     """Draw directly from the filtered/aggregated DataFrame, without Plotly."""
     import matplotlib
     matplotlib.use("Agg")
@@ -1051,7 +1154,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 3.8*nrows), dpi=100,
                                      squeeze=False, sharex=False, sharey=False)
             for idx, (panel_title, panel_df, other_groups) in enumerate(partitions):
-                panel_spec = {**spec, "data": panel_df, "groups": other_groups}
+                panel_spec = {**spec, "data": panel_df, "groups": other_groups,
+                              "_hide_ungrouped_legend": not bool(other_groups)}
                 panel_ax = axes.flat[idx]
                 _matplotlib_direct_figure(panel_spec, title=panel_title_map.get(panel_title, panel_title), x_label=x_label,
                     y_label=y_label, legend_labels=legend_labels, trace_colors=trace_colors,
@@ -1060,8 +1164,16 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     y_min=_panel_limit_value(y_min, panel_title), y_max=_panel_limit_value(y_max, panel_title),
                     template=template, legend_position=legend_position,
                     legend_inside=legend_inside, show_grid=show_grid, font_size=font_size,
-                    line_width=line_width, marker_size=marker_size, bins=bins, density=density,
-                    stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax)
+                    line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
+                    scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
+                    hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
+                    title_font_size=panel_font_size, axis_font_size=axis_font_size,
+                    tick_font_size=tick_font_size, legend_font_size=legend_font_size,
+                    panel_font_size=panel_font_size,
+                    bins=bins, density=density,
+                    stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
+                    x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
+                    x_minor_ticks=x_minor_ticks, y_minor_ticks=y_minor_ticks)
             for extra in list(axes.flat)[len(partitions):]:
                 extra.set_visible(False)
             fig.tight_layout()
@@ -1070,6 +1182,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     defaults = _matplotlib_defaults(spec, palette=palette)
     rename = _parse_label_map(legend_labels)
     overrides = _parse_label_map(trace_colors)
+    alphas, styles, sizes, markers, marker_alphas = _series_style_maps(
+        line_alpha, line_style, scatter_size, scatter_marker, scatter_alpha)
+    histogram_alphas = _parse_label_map(hist_alpha)
     palette_values = _MPL_PALETTES.get(palette, _MPL_PALETTES["Default"])
     labels = defaults["names"] if group_col else ([str(y) for y in ys] if len(ys) > 1 else ["All observations"])
     colors = {name: overrides.get(name, defaults["colors"].get(name, palette_values[i % len(palette_values)]))
@@ -1093,20 +1208,34 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         all_vals = np.concatenate(arrays) if arrays else np.array([])
         if len(all_vals):
             edges = np.histogram_bin_edges(all_vals, bins=max(1, int(bins)))
-            ax.hist(arrays, bins=edges, density=density, stacked=stacked or histtype == "barstacked",
-                    histtype=("bar" if histtype == "barstacked" else histtype),
-                    cumulative=cumulative if cumulative else False,
-                    color=[colors[n] for n in labels],
-                    label=[rename.get(n, n) for n in labels],
-                    alpha=.65 if histtype != "step" else 1)
+            _, _, hist_patches = ax.hist(
+                arrays, bins=edges, density=density,
+                stacked=stacked or histtype == "barstacked",
+                histtype=("bar" if histtype == "barstacked" else histtype),
+                cumulative=cumulative if cumulative else False,
+                color=[colors[n] for n in labels],
+                label=[rename.get(n, n) for n in labels])
+            # Matplotlib returns one patch container per group for bar and
+            # one polygon per group for step/stepfilled.
+            for name, group_patches in zip(labels, hist_patches):
+                alpha = _bounded_float(histogram_alphas, name,
+                                       1 if histtype == "step" else .65, 0, 1)
+                if hasattr(group_patches, "set_alpha"):
+                    group_patches.set_alpha(alpha)
+                else:
+                    for patch in group_patches:
+                        patch.set_alpha(alpha)
         defaults["y_label"] = ("Cumulative probability" if cumulative and density else
                                "Cumulative count" if cumulative else
                                "Probability density" if density else "Count")
     elif kind == "scatter":
         for name, rows in series():
             color = colors.get(name, palette_values[0])
-            ax.scatter(rows[x], rows[ys[0]], s=float(marker_size)**2, color=color,
-                       label=rename.get(name, name))
+            ax.scatter(rows[x], rows[ys[0]],
+                       s=_bounded_float(sizes, name, marker_size, 0.1, 100)**2,
+                       marker=_scatter_marker(markers, name),
+                       alpha=_bounded_float(marker_alphas, name, 1, 0, 1),
+                       color=color, label=rename.get(name, name))
     elif kind == "line":
         line_df = df
         id_col = "identifier" if "identifier" in df.columns else None
@@ -1125,7 +1254,10 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 for _, part in parts:
                     part = part.sort_values(x)
                     ax.plot(part[x], part[y], color=colors.get(name, palette_values[0]),
-                            linewidth=float(line_width), label=rename.get(name, name))
+                            linewidth=float(line_width),
+                            linestyle=_line_style(styles, name),
+                            alpha=_bounded_float(alphas, name, 1, 0, 1),
+                            label=rename.get(name, name))
     elif kind in ("box", "bar"):
         # Build categorical groups in a single pass. The former implementation
         # repeatedly scanned the full DataFrame for every category × group,
@@ -1189,13 +1321,25 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 box_positions = sorted(buckets)
                 bp = ax.boxplot([buckets[pos] for pos in box_positions],
                                 positions=box_positions, widths=width * .92,
-                                manage_ticks=False, patch_artist=True)
+                                manage_ticks=False, patch_artist=True,
+                                showfliers=bool(box_showfliers),
+                                vert=(box_orientation != "horizontal"))
                 for patch, position in zip(bp["boxes"], box_positions):
                     patch.set_facecolor(bucket_colors[position])
                     patch.set_alpha(.7)
-        ax.set_xticks(range(len(cats)), cats)
-        ax.set_xlim(-.5, max(.5, len(cats) - .5))
-        if len(group_names) <= 40:
+        if kind == "box" and box_orientation == "horizontal":
+            ax.set_yticks(range(len(cats)), cats)
+            ax.set_ylim(-.5, max(.5, len(cats) - .5))
+        else:
+            ax.set_xticks(range(len(cats)), cats)
+            ax.set_xlim(-.5, max(.5, len(cats) - .5))
+        # A boxplot with a single ungrouped series does not need a legend.
+        # Keep legends for genuinely grouped boxplots and for bar plots.
+        show_category_legend = not (
+            kind == "box" and len(group_names) == 1
+            and group_names[0] == "All observations"
+        )
+        if len(group_names) <= 40 and show_category_legend and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
             ax.legend(handles=[Patch(facecolor=colors[name], label=rename.get(name, name))
                                for name in group_names], title="Legend")
     else:
@@ -1204,7 +1348,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     if kind not in ("box", "bar"):
         handles, texts = ax.get_legend_handles_labels()
         unique = dict(zip(texts, handles))
-        if unique:
+        if unique and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
             ax.legend(unique.values(), unique.keys(), title="Legend")
     legend = ax.get_legend()
     if legend is not None:
@@ -1227,11 +1371,23 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         ax.set_facecolor("#EBEBEB")
     elif template in ("plotly_white", "simple_white"):
         ax.set_facecolor("white")
-    ax.set_xlabel(x_label.strip() or defaults["x_label"], fontsize=font_size)
-    ax.set_ylabel(y_label.strip() or defaults["y_label"], fontsize=font_size)
-    ax.set_title(title, fontsize=font_size+2)
-    ax.tick_params(labelsize=max(6, font_size-2))
+    xlabel = x_label.strip() or defaults["x_label"]
+    ylabel = y_label.strip() or defaults["y_label"]
+    if kind == "box" and box_orientation == "horizontal":
+        xlabel, ylabel = ylabel, xlabel
+    ax.set_xlabel(xlabel, fontsize=axis_font_size)
+    ax.set_ylabel(ylabel, fontsize=axis_font_size)
+    ax.set_title(title, fontsize=title_font_size)
+    ax.tick_params(labelsize=tick_font_size)
+    if legend is not None:
+        for text in legend.get_texts():
+            text.set_fontsize(legend_font_size)
+        legend.get_title().set_fontsize(legend_font_size)
     ax.grid(bool(show_grid))
+    _matplotlib_tick_controls(ax, kind=kind, box_orientation=box_orientation,
+                              show_grid=show_grid, x_major_ticks=x_major_ticks,
+                              y_major_ticks=y_major_ticks, x_minor_ticks=x_minor_ticks,
+                              y_minor_ticks=y_minor_ticks)
     for lo, hi, getter, setter in ((x_min, x_max, ax.get_xlim, ax.set_xlim),
                                    (y_min, y_max, ax.get_ylim, ax.set_ylim)):
         try:
@@ -1381,6 +1537,51 @@ def _matplotlib_figure(plotly_figure):
     fig.tight_layout()
     return fig
 
+def _standalone_matplotlib_script(spec, options):
+    """Create a self-contained plotting script using this renderer's source.
+
+    The CSV holds the *prepared* data, after subsetting and aggregation.
+    Only pandas, numpy and matplotlib are required to rerun the plot.
+    """
+    import inspect
+    import pprint
+
+    dependencies = (
+        _axis_label, _parse_label_map, _series_style_maps, _bounded_float,
+        _line_style, _scatter_marker, _composite_labels,
+        _frequency_timedelta, _add_gap_sections, _matplotlib_defaults,
+        _panel_columns, _panel_partitions, _panel_limit_value,
+        _parse_axis_limit, _numeric_axis_controls, _matplotlib_tick_controls,
+        _matplotlib_direct_figure,
+    )
+    source = "\n\n".join(inspect.getsource(fn) for fn in dependencies)
+    metadata = {key: spec.get(key) for key in
+                ("kind", "x", "ys", "groups", "categories", "frequency")}
+    date_columns = [str(c) for c in spec["data"].columns
+                    if pd.api.types.is_datetime64_any_dtype(spec["data"][c])]
+    return (
+        '# Generated by apmtools Summary.plot_app (Matplotlib backend).\n'
+        '# Run: python plot_script.py\n'
+        '# Dependencies: pip install pandas numpy matplotlib\n'
+        'from pathlib import Path\n'
+        'import pandas as pd\nimport numpy as np\n'
+        'from datetime import datetime, date, timedelta\n\n'
+        'VARIABLE_UNITS = ' + pprint.pformat(VARIABLE_UNITS, sort_dicts=True) + '\n'
+        '_MPL_PALETTES = ' + pprint.pformat(_MPL_PALETTES, sort_dicts=True) + '\n\n'
+        + source + '\n\n'
+        + 'def main():\n'
+        + '    csv_path = Path(__file__).resolve().parent / "plot_data.csv"\n'
+        + '    frame = pd.read_csv(csv_path, parse_dates=' + repr(date_columns) + ')\n'
+        + '    spec = ' + repr(metadata) + '\n'
+        + '    spec["data"] = frame\n'
+        + '    options = ' + repr(options) + '\n'
+        + '    figure = _matplotlib_direct_figure(spec, **options)\n'
+        + '    import matplotlib.pyplot as plt\n'
+        + '    plt.savefig("plot.png")\n\n'
+        + 'if __name__ == "__main__":\n    main()\n'
+    )
+
+
 def create_summary_app(
     data: pd.DataFrame,
     *,
@@ -1448,8 +1649,8 @@ def create_summary_app(
     def plot_tab_ui(initial_filters=None):
         initial_filters = initial_filters or {}
         return ui.div(
-            ui.layout_columns(
-                ui.div(
+            ui.layout_sidebar(
+                ui.sidebar(
                 ui.card(ui.card_header("Plot filters"),
                         ui.input_selectize("subset_columns", "Subset columns",
                             choices={c: c for c in subset_columns},
@@ -1485,8 +1686,8 @@ def create_summary_app(
                                 ui.input_select("hist_cumulative", "Cumulative", choices={"0":"False","1":"True (ascending)","-1":"True (descending)"}, selected="0"),
                             ),
                 ),
+                title="Plot filters / settings / aggregation", position="left", open="open", width="320px",
                 ),
-                ui.div(
                     ui.layout_sidebar(
                         ui.sidebar(
                             ui.input_text("title", "Plot title", value=""),
@@ -1512,18 +1713,42 @@ def create_summary_app(
                             ui.input_select("legend_position", "Legend position", choices={k:k.title() for k in ("right", "left", "top", "bottom")}, selected="right"),
                             ui.input_checkbox("legend_inside", "Place legend inside plot", value=False),
                             ui.input_checkbox("show_grid", "Show grid", value=True),
-                            ui.input_numeric("font_size", "Font size", value=12, min=6, max=36),
-                            ui.input_numeric("line_width", "Line width", value=2, min=0.5, max=15, step=0.5),
-                            ui.input_numeric("marker_size", "Marker size", value=7, min=1, max=30),
+                            ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || (input.plot_type === 'box' && input.box_orientation === 'horizontal')",
+                                ui.input_numeric("x_major_ticks", "X-axis major ticks (approximate)", value=6, min=2, max=30, step=1),
+                                ui.input_checkbox("x_minor_ticks", "X-axis minor ticks / gridlines", value=False)),
+                            ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || input.plot_type === 'bar' || (input.plot_type === 'box' && input.box_orientation !== 'horizontal')",
+                                ui.input_numeric("y_major_ticks", "Y-axis major ticks (approximate)", value=6, min=2, max=30, step=1),
+                                ui.input_checkbox("y_minor_ticks", "Y-axis minor ticks / gridlines", value=False)),
+                            ui.input_numeric("title_font_size", "Plot title font size", value=14, min=6, max=72),
+                            ui.input_numeric("axis_font_size", "Axis title font size", value=12, min=6, max=72),
+                            ui.input_numeric("tick_font_size", "Axis tick font size", value=10, min=6, max=72),
+                            ui.input_numeric("legend_font_size", "Legend font size", value=12, min=6, max=72),
+                            ui.panel_conditional("input.plot_type === 'line'",
+                                ui.input_numeric("line_width", "Line width", value=2, min=0.5, max=15, step=0.5)),
+                            (ui.input_numeric("panel_font_size", "Panel title font size", value=14, min=6, max=72) if backend == "matplotlib" else ui.div()),
+                            ui.panel_conditional("input.plot_type === 'histogram'",
+                                ui.input_text_area("hist_alpha", "Histogram alpha (name=0..1; ...)", value="", rows=4)),
+                            ui.panel_conditional("input.plot_type === 'box'",
+                                ui.input_checkbox("box_showfliers", "Show outliers (fliers)", value=True),
+                                ui.input_select("box_orientation", "Box orientation", choices={"vertical":"Vertical", "horizontal":"Horizontal"}, selected="vertical")),
+                            ui.panel_conditional("input.plot_type === 'line'",
+                                ui.input_text_area("line_alpha", "Line alpha (name=0..1; ...)", value="", rows=4),
+                                ui.input_text_area("line_style", "Line style (name=solid/dotted/dashed; ...)", value="", rows=4)),
+                            ui.panel_conditional("input.plot_type === 'scatter'",
+                                ui.input_text_area("scatter_size", "Marker size (name=size; ...)", value="", rows=4),
+                                ui.input_text_area("scatter_marker", "Marker type (name=dot/cross; ...)", value="", rows=4),
+                                ui.input_text_area("scatter_alpha", "Marker alpha (name=0..1; ...)", value="", rows=4)),
                             title="Plot appearance", position="right", open="closed", width="320px",
                         ),
                         ui.card(ui.card_header("Plot"),
                             ui.div((output_widget("plot", height="100%", width="100%") if backend == "plotly" else ui.output_plot("plot", height="100%", width="100%")),
                                 class_="summary-plot-container"),
-                            ui.input_action_button("export_csv", "Export plotted data as CSV", class_="btn-primary mt-3")),
+                            ui.input_action_button("export_csv", "Export plotted data as CSV", class_="btn-primary mt-3"),
+                            ui.input_action_button("export_plot", "Export plot", class_="btn-secondary mt-3"),
+                            (ui.download_button("export_python", "Export as a Python file and associated data",
+                                                class_="btn-secondary mt-3")
+                             if backend == "matplotlib" else ui.div())),
                     ),
-                ),
-                col_widths=(3, 9),
             ),
         )
 
@@ -1576,6 +1801,50 @@ def create_summary_app(
                     easy_close=True,
                     footer=ui.modal_button("Cancel"),
                 ))
+
+            @reactive.effect
+            @reactive.event(input.export_plot)
+            def show_plot_export_dialog():
+                ui.modal_show(ui.modal(
+                    ui.input_numeric("plot_export_width", "Width (inches)", value=10, min=1, max=100, step=0.5),
+                    ui.input_numeric("plot_export_height", "Height (inches)", value=5, min=1, max=100, step=0.5),
+                    ui.input_numeric("plot_export_dpi", "Resolution (DPI)", value=150, min=30, max=1200, step=25),
+                    ui.download_button("download_plot_png", "Download plot.png", class_="btn-primary"),
+                    title="Export plot", easy_close=True,
+                    footer=ui.modal_button("Cancel"),
+                ))
+
+            @render.download(filename="plot.png", media_type="image/png")
+            def download_plot_png():
+                import io
+                width = float(input.plot_export_width())
+                height = float(input.plot_export_height())
+                dpi = int(input.plot_export_dpi())
+                if not (1 <= width <= 100 and 1 <= height <= 100 and 30 <= dpi <= 1200):
+                    raise ValueError("Invalid plot export dimensions or resolution")
+                if width * dpi * height * dpi > 100_000_000:
+                    raise ValueError("Export exceeds 100 megapixels; reduce size or DPI")
+                if backend == "matplotlib":
+                    import matplotlib.pyplot as plt
+                    fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+                    try:
+                        fig.set_size_inches(width, height, forward=True)
+                        buffer = io.BytesIO()
+                        fig.savefig(buffer, format="png", dpi=dpi)
+                        yield buffer.getvalue()
+                    finally:
+                        plt.close(fig)
+                else:
+                    # Plotly static image export requires kaleido.
+                    # Use the same styled figure as the interactive plot.
+                    fig = styled_plotly_figure()
+                    try:
+                        yield fig.to_image(format="png", width=round(width * dpi),
+                                           height=round(height * dpi), scale=1)
+                    except Exception as exc:
+                        raise RuntimeError(
+                            'Plotly PNG export requires kaleido: pip install kaleido'
+                        ) from exc
 
             @render.download(filename=lambda: _safe_csv_filename(input.export_filename()))
             def download_csv():
@@ -1659,7 +1928,7 @@ def create_summary_app(
                         "input.multi_panel === true",
                         ui.input_selectize("panel_by", "Panel grouping variables",
                             choices={name: name for name in selected},
-                            selected=[], multiple=True)))
+                            selected=selected, multiple=True)))
                 return ui.div(*controls)
 
             @render.ui
@@ -1810,6 +2079,12 @@ def create_summary_app(
                 else:
                     fig = _lineplot_figure(plot_df, x_column, y_columns, group_columns=group_columns, frequency=frequency, column_map=column_map)
 
+                if not group_columns:
+                    # Retain trace names/colours for appearance editing, but
+                    # suppress the redundant ungrouped legend.
+                    fig.update_traces(showlegend=False)
+                    fig.update_layout(showlegend=False)
+
                 _label_plot_axes(
                     fig, selected_plot, x_column, y_columns,
                     category_columns=x_columns if selected_plot in ("box", "bar") else None,
@@ -1838,7 +2113,7 @@ def create_summary_app(
                 if (backend == "matplotlib" and selected_groups_for_legend
                         and bool(_optional_input("multi_panel", False))):
                     panel_variables_for_legend = (
-                        list(_optional_input("panel_by", []) or [])
+                        (list(_optional_input("panel_by", []) or []) or selected_groups_for_legend)
                         if len(selected_groups_for_legend) > 1
                         else selected_groups_for_legend
                     )
@@ -1862,7 +2137,7 @@ def create_summary_app(
                 selected_groups = list(input.group_by() or [])
                 if (backend == "matplotlib" and selected_groups and bool(_optional_input("multi_panel", False))
                         and bool(_optional_input("independent_panel_limits", True))):
-                    panel_variable = (list(_optional_input("panel_by", []) or []) if len(selected_groups) > 1
+                    panel_variable = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
                                       else selected_groups)
                     panel_bounds = _panel_axis_bounds(
                         spec, panel_variable,
@@ -1883,8 +2158,18 @@ def create_summary_app(
                     f"{name}={name}" for name in names))
                 ui.update_text_area("trace_colors", value="; ".join(
                     f"{name}={defaults['colors'][name]}" for name in names))
+                kind = spec["kind"]
+                if kind == "line":
+                    ui.update_text_area("line_alpha", value="; ".join(f"{name}=1" for name in names))
+                    ui.update_text_area("line_style", value="; ".join(f"{name}=solid" for name in names))
+                elif kind == "histogram":
+                    ui.update_text_area("hist_alpha", value="; ".join(f"{name}=0.65" for name in names))
+                elif kind == "scatter":
+                    ui.update_text_area("scatter_size", value="; ".join(f"{name}=7" for name in names))
+                    ui.update_text_area("scatter_marker", value="; ".join(f"{name}=dot" for name in names))
+                    ui.update_text_area("scatter_alpha", value="; ".join(f"{name}=1" for name in names))
                 if backend == "matplotlib":
-                    panel_variables = (list(_optional_input("panel_by", []) or []) if len(selected_groups) > 1
+                    panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
                                        else selected_groups)
                     panel_names = ([name for name, _, _ in _panel_partitions(spec, panel_variables)]
                                    if selected_groups and bool(_optional_input("multi_panel", False)) else [])
@@ -1918,9 +2203,16 @@ def create_summary_app(
                 ui.update_select("legend_position", selected="right")
                 ui.update_checkbox("legend_inside", value=False)
                 ui.update_checkbox("show_grid", value=True)
-                ui.update_numeric("font_size", value=12)
+                for field, value in (("title_font_size", 14), ("axis_font_size", 12),
+                                     ("tick_font_size", 10), ("legend_font_size", 12),
+                                     ("panel_font_size", 14)):
+                    ui.update_numeric(field, value=value)
                 ui.update_numeric("line_width", value=2)
-                ui.update_numeric("marker_size", value=7)
+                ui.update_checkbox("box_showfliers", value=True)
+                ui.update_select("box_orientation", selected="vertical")
+                ui.update_text_area("hist_alpha", value="")
+                for field in ("line_alpha", "line_style", "scatter_size", "scatter_marker", "scatter_alpha"):
+                    ui.update_text_area(field, value="")
                 ui.update_numeric("bins", value=30)
                 ui.update_select("hist_density", selected="False")
                 ui.update_select("hist_stacked", selected="False")
@@ -1930,8 +2222,8 @@ def create_summary_app(
                 ui.update_checkbox("flooring_timestamp", value=True)
 
             if backend == "plotly":
-                @render_plotly
-                def plot():
+                @reactive.calc
+                def styled_plotly_figure():
                     import plotly.graph_objects as go
                     fig = go.Figure(base_figure())
                     return _apply_plot_appearance(
@@ -1942,35 +2234,74 @@ def create_summary_app(
                         y_min=input.y_min(), y_max=input.y_max(),
                         template=input.template(), legend_position=input.legend_position(),
                         legend_inside=input.legend_inside(), show_grid=input.show_grid(),
-                        font_size=input.font_size(), line_width=input.line_width(),
-                        marker_size=input.marker_size(),
+                        x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
+                        x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
+                        line_width=(input.line_width() if input.plot_type() == "line" else 2),
+                        hist_alpha=input.hist_alpha(), box_showfliers=input.box_showfliers(),
+                        box_orientation=input.box_orientation(),
+                        title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
+                        tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
+                        line_alpha=input.line_alpha(), line_style=input.line_style(),
+                        scatter_size=input.scatter_size(), scatter_marker=input.scatter_marker(),
+                        scatter_alpha=input.scatter_alpha(), plot_kind=input.plot_type(),
                     )
-            else:
-                @render.plot
+
+                @render_plotly
                 def plot():
-                    return _matplotlib_direct_figure(
-                        prepared_plot(), title=input.title(),
+                    return styled_plotly_figure()
+            else:
+                @reactive.calc
+                def matplotlib_options():
+                    # Shared with the export so that all appearance options,
+                    # including per-panel overrides, are reproduced exactly.
+                    return dict(title=input.title(),
                         x_label=input.x_axis_label(), y_label=input.y_axis_label(),
                         legend_labels=input.legend_labels(), trace_colors=input.trace_colors(),
                         palette=input.palette(), x_min=input.x_min(), x_max=input.x_max(),
                         y_min=input.y_min(), y_max=input.y_max(), template=input.template(),
                         legend_position=input.legend_position(), legend_inside=input.legend_inside(),
-                        show_grid=input.show_grid(), font_size=input.font_size(),
-                        line_width=input.line_width(), marker_size=input.marker_size(),
+                        show_grid=input.show_grid(),
+                        x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
+                        x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
+                        title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
+                        tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
+                        panel_font_size=input.panel_font_size(), hist_alpha=input.hist_alpha(),
+                        box_showfliers=input.box_showfliers(), box_orientation=input.box_orientation(),
+                        line_width=(input.line_width() if input.plot_type() == "line" else 2), line_alpha=input.line_alpha(),
+                        line_style=input.line_style(), scatter_size=input.scatter_size(),
+                        scatter_marker=input.scatter_marker(), scatter_alpha=input.scatter_alpha(),
                         bins=int(input.bins()) if input.plot_type() == "histogram" else 30,
                         density=input.hist_density() == "True" if input.plot_type() == "histogram" else False,
                         stacked=input.hist_stacked() == "True" if input.plot_type() == "histogram" else False,
                         histtype=input.hist_type() if input.plot_type() == "histogram" else "bar",
                         cumulative=int(input.hist_cumulative()) if input.plot_type() == "histogram" else 0,
                         panel_by=(
-                            (list(_optional_input("panel_by", []) or []) if len(list(input.group_by() or [])) > 1
+                            ((list(_optional_input("panel_by", []) or []) or list(input.group_by() or [])) if len(list(input.group_by() or [])) > 1
                              else list(input.group_by() or []))
                             if list(input.group_by() or []) and bool(_optional_input("multi_panel", False)) else None
                         ),
                         independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
                                                   if input.group_by() and _optional_input("multi_panel", False) else True),
-                        panel_titles=(_optional_input("panel_titles", "") if input.group_by() and _optional_input("multi_panel", False) else ""),
-                    )
+                        panel_titles=(_optional_input("panel_titles", "") if input.group_by() and _optional_input("multi_panel", False) else ""),                    )
+
+                @render.download(filename="plot_export.zip", media_type="application/zip")
+                def export_python():
+                    import io
+                    import zipfile
+                    spec = prepared_plot()
+                    if "error" in spec:
+                        raise ValueError(spec["error"])
+                    frame = pd.DataFrame(spec["data"])
+                    script = _standalone_matplotlib_script(spec, matplotlib_options())
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                        archive.writestr("plot_data.csv", frame.to_csv(index=False))
+                        archive.writestr("plot_script.py", script)
+                    yield buffer.getvalue()
+
+                @render.plot
+                def plot():
+                    return _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
 
             return filter_state
 
