@@ -453,9 +453,9 @@ class Dataset(DictionaryPlus):
 
         from .data_processing import upas_processing, lascar_processing, purple_processing, lcm_processing
 
-        if len(set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))) > 0:
+        if len(set(levels).intersection(set(["identifier", "start", "end", "length", "datetime", "timedelta","pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))) > 0:
             print(
-                f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))}. Please choose different level names")
+                f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "datetime", "timedelta", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))}. Please choose different level names")
             return
         if levels_dict == None:
             levels_dict = dict(
@@ -608,7 +608,7 @@ class Dataset(DictionaryPlus):
             c = 5.75
             d = self.subset(condition=lambda x: match_monitor(x) == "Upas")
             columns1 = ["identifier", "monitor",
-                        "start", "end", "length", "time"]
+                        "start", "end", "length", "datetime","timedelta"]
             columns2 = list(set(d.meta()).difference(
                 set(["filter", "header", "parameters"])))
             if "upas" not in columns.keys():
@@ -644,6 +644,7 @@ class Dataset(DictionaryPlus):
                         app.append(end)
                         app.append(length)
                         app.append(v.index[i])
+                        app.append(v.index[i]-v.start)
                         for m in columns2:
                             if m in v.m.keys():
                                 app.append(v.m[m] if v.m[m] != None else "")
@@ -677,13 +678,14 @@ class Dataset(DictionaryPlus):
                 out["start"] = pd.to_datetime(out["start"])
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
-                out["time"] = pd.to_datetime(out["time"])
+                out["datetime"] = pd.to_datetime(out["datetime"])
+                out["timedelta"] = pd.to_timedelta(out["timedelta"])
                 return (Summary(out, metadata=set(columns2)))
 
         def run_lascar():
             d = self.subset(condition=lambda x: match_monitor(x) == "Lascar")
             columns1 = ["identifier", "monitor",
-                        "start", "end", "length", "time"]
+                        "start", "end", "length", "datetime", "timedelta"]
             columns2 = list(set(d.meta()))
             columns3 = ["CO(ppm)"]
 
@@ -707,6 +709,7 @@ class Dataset(DictionaryPlus):
                         app.append(end)
                         app.append(length)
                         app.append(v.index[i])
+                        app.append(v.index[i]-v.start)
                         for m in columns2:
                             if m in v.m.keys():
                                 app.append(v.m[m] if v.m[m] != None else "")
@@ -720,7 +723,8 @@ class Dataset(DictionaryPlus):
                 out["start"] = pd.to_datetime(out["start"])
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
-                out["time"] = pd.to_datetime(out["time"])
+                out["datetime"] = pd.to_datetime(out["datetime"])
+                out["timedelta"] = pd.to_timedelta(out["timedelta"])
                 return (Summary(out, metadata=set(columns2)))
 
         def run_lcm():
@@ -729,7 +733,7 @@ class Dataset(DictionaryPlus):
             c = 5.75
             d = self.subset(condition=lambda x: match_monitor(x) == "Lcm")
             columns1 = ["identifier", "monitor",
-                        "start", "end", "length", "time"]
+                        "start", "end", "length", "datetime", "timedelta"]
             columns2 = list(set(d.meta()))
             columns3 = ["sensorName", "deviceId", "resolution",
                          "PM2.5", "PM10", "CO2", "NO2", "Temperature", "Humidity"]
@@ -755,6 +759,7 @@ class Dataset(DictionaryPlus):
                         app.append(end)
                         app.append(length)
                         app.append(v.index[i])
+                        app.append(v.index[i]-v.start)
                         for m in columns2:
                             if m in v.m.keys():
                                 app.append(v.m[m] if v.m[m] != None else "")
@@ -771,13 +776,14 @@ class Dataset(DictionaryPlus):
                 out["start"] = pd.to_datetime(out["start"])
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
-                out["time"] = pd.to_datetime(out["time"])
+                out["datetime"] = pd.to_datetime(out["datetime"])
+                out["timedelta"] = pd.to_timedelta(out["timedelta"])
                 return (Summary(out, metadata=set(columns2)))
 
         def run_purple():
             d = self.subset(condition=lambda x: match_monitor(x) == "Purple")
             columns1 = ["identifier", "monitor",
-                        "start", "end", "length", "time"]
+                        "start", "end", "length", "datetime", "timedelta"]
             columns2 = list(set(d.meta()))
             columns3 = ["pm2_5", "pm2_5_adj"]
             columns4 = []
@@ -806,6 +812,7 @@ class Dataset(DictionaryPlus):
                         app.append(end)
                         app.append(length)
                         app.append(v.index[i])
+                        app.append(v.index[i]-v.start)
                         for m in columns2:
                             if m in v.m.keys():
                                 app.append(v.m[m] if v.m[m] != None else "")
@@ -834,7 +841,8 @@ class Dataset(DictionaryPlus):
                 out["start"] = pd.to_datetime(out["start"])
                 out["end"] = pd.to_datetime(out["end"])
                 out["length"] = pd.to_timedelta(out["length"])
-                out["time"] = pd.to_datetime(out["time"])
+                out["datetime"] = pd.to_datetime(out["datetime"])
+                out["timedelta"] = pd.to_timedelta(out["timedelta"])
                 return (Summary(out, metadata=set(columns2)))
 
         out = {}
@@ -1124,24 +1132,26 @@ class Summary(pd.DataFrame):
             date_end = parse(date_end)
 
         if date_start is not None:
-            self = self.loc[self["time"] >= date_start]
+            self = self.loc[self["datetime"] >= date_start]
         if date_end is not None:
-            self = self.loc[self["time"] < date_end]
+            self = self.loc[self["datetime"] < date_end]
         if (time_start is not None) & (time_end is not None):
             if time_start > time_end:
-                self = self.loc[(self["time"].map(lambda x:x.time()) >= time_start)
-                                | (self["time"].map(lambda x: x.time()) < time_end)]
+                self = self.loc[(self["datetime"].map(lambda x:x.time()) >= time_start)
+                                | (self["datetime"].map(lambda x: x.time()) < time_end)]
             else:
-                self = self.loc[(self["time"].map(lambda x: x.time()) >= time_start)
-                                & (self["time"].map(lambda x: x.time()) < time_end)]
+                self = self.loc[(self["datetime"].map(lambda x: x.time()) >= time_start)
+                                & (self["datetime"].map(lambda x: x.time()) < time_end)]
         if (time_start is not None) & (time_end is None):
-            self = self.loc[self["time"].map(lambda x: x.time()) >= time_start]
+            self = self.loc[self["datetime"].map(
+                lambda x: x.time()) >= time_start]
         if (time_start is None) & (time_end is not None):
-            self = self.loc[self["time"].map(lambda x: x.time()) <= time_end]
+            self = self.loc[self["datetime"].map(
+                lambda x: x.time()) <= time_end]
 
         if day is not None:
-            self = self.loc[[a in day for a in [self["time"].map(lambda x: x.date().isoweekday())
-                                                for i in range(len(self["time"]))]]]
+            self = self.loc[[a in day for a in [self["datetime"].map(lambda x: x.date().isoweekday())
+                                                for i in range(len(self["datetime"]))]]]
         return self.reset_index()
 
     def set_attrib(self, attribute):
@@ -1216,27 +1226,27 @@ class Summary(pd.DataFrame):
                             case "hour":
                                 expected = (pd.Timedelta(1, "hour") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("h")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("h")
                             case "day":
                                 expected = (pd.Timedelta(1, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("d")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("d")
                             case "minute":
                                 expected = (pd.Timedelta(1, "minute") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("min")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("min")
                             case "second":
                                 expected = (pd.Timedelta(1, "second") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("s")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("s")
                             case "week":
                                 expected = (pd.Timedelta(1, "W") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("w")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("w")
                             case "weekday":
                                 expected = (pd.Timedelta(1, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].map(
+                                df["xxxyyyxxx"] = df["datetime"].map(
                                     lambda x: (x.weekday()))
                     if len(frequency.split(" ")) == 2:
                         mult = float(frequency.split(" ")[0])
@@ -1244,32 +1254,32 @@ class Summary(pd.DataFrame):
                             case "hour":
                                 expected = (pd.Timedelta(mult, "hour") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}h")
                             case "day":
                                 expected = (pd.Timedelta(mult, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}d")
                             case "minute":
                                 expected = (pd.Timedelta(mult, "minute") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}min")
                             case "second":
                                 expected = (pd.Timedelta(mult, "second") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}s")
                             case "week":
                                 expected = (pd.Timedelta(mult, "W") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}w")
                             case "weekday":
                                 expected = (pd.Timedelta(mult, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].map(
+                                df["xxxyyyxxx"] = df["datetime"].map(
                                     lambda x: (x.weekday//mult))*mult
 
                     counts = df.groupby([id_col, "xxxyyyxxx"])[
@@ -1289,27 +1299,27 @@ class Summary(pd.DataFrame):
                             case "hour":
                                 expected = (pd.Timedelta(1, "hour") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("h")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("h")
                             case "day":
                                 expected = (pd.Timedelta(1, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("d")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("d")
                             case "minute":
                                 expected = (pd.Timedelta(1, "minute") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("min")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("min")
                             case "second":
                                 expected = (pd.Timedelta(1, "second") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("s")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("s")
                             case "week":
                                 expected = (pd.Timedelta(1, "W") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor("w")
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor("w")
                             case "weekday":
                                 expected = (pd.Timedelta(1, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].map(
+                                df["xxxyyyxxx"] = df["datetime"].map(
                                     lambda x: (x.weekday()))
                     if len(freq.split(" ")) == 2:
                         mult = float(freq.split(" ")[0])
@@ -1317,32 +1327,32 @@ class Summary(pd.DataFrame):
                             case "hour":
                                 expected = (pd.Timedelta(mult, "hour") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}h")
                             case "day":
                                 expected = (pd.Timedelta(mult, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}d")
                             case "minute":
                                 expected = (pd.Timedelta(mult, "minute") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}m")
                             case "second":
                                 expected = (pd.Timedelta(mult, "second") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}s")
                             case "week":
                                 expected = (pd.Timedelta(mult, "W") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].dt.floor(
+                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
                                     f"{mult}w")
                             case "weekday":
                                 expected = (pd.Timedelta(mult, "day") /
                                             intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["time"].map(
+                                df["xxxyyyxxx"] = df["datetime"].map(
                                     lambda x: (x.weekday//mult))*mult
 
                     counts = df.groupby([id_col, "xxxyyyxxx"])[
@@ -1360,36 +1370,36 @@ class Summary(pd.DataFrame):
                     match frequency:
                         case "hour":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor("h")
+                                df[frequency] = df["datetime"].dt.floor("h")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.hour))
                         case "day":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor("d")
+                                df[frequency] = df["datetime"].dt.floor("d")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.day))
                         case "minute":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor("min")
+                                df[frequency] = df["datetime"].dt.floor("min")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.minute))
                         case "second":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor("s")
+                                df[frequency] = df["datetime"].dt.floor("s")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.second))
                         case "week":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor("w")
+                                df[frequency] = df["datetime"].dt.floor("w")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.week))
                         case "weekday":
-                            df[frequency] = df["time"].map(
+                            df[frequency] = df["datetime"].map(
                                 lambda x: (x.weekday()))
 
                 if len(frequency.split(" ")) == 2:
@@ -1397,40 +1407,40 @@ class Summary(pd.DataFrame):
                     match frequency.split(" ")[1]:
                         case "hour":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor(f"{mult}h")
+                                df[frequency] = df["datetime"].dt.floor(f"{mult}h")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.hour//mult))*mult
                         case "day":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor(
+                                df[frequency] = df["datetime"].dt.floor(
                                     f"{mult}d")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.day//mult))*mult
                         case "minute":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor(
+                                df[frequency] = df["datetime"].dt.floor(
                                     f"{mult}min")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.minute//mult))*mult
                         case "second":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor(
+                                df[frequency] = df["datetime"].dt.floor(
                                     f"{mult}s")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.second//mult))*mult
                         case "week":
                             if flooring_timestamp:
-                                df[frequency] = df["time"].dt.floor(
+                                df[frequency] = df["datetime"].dt.floor(
                                     f"{mult}w")
                             else:
-                                df[frequency] = df["time"].map(
+                                df[frequency] = df["datetime"].map(
                                     lambda x: (x.week//mult))*mult
                         case "weekday":
-                            df[frequency] = df["time"].map(
+                            df[frequency] = df["datetime"].map(
                                 lambda x: (x.weekday//mult))*mult
 
             if isinstance(frequency, list):
@@ -1439,36 +1449,36 @@ class Summary(pd.DataFrame):
                         match freq:
                             case "hour":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor("h")
+                                    df[freq] = df["datetime"].dt.floor("h")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.hour))
                             case "day":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor("d")
+                                    df[freq] = df["datetime"].dt.floor("d")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.day))
                             case "minute":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor("min")
+                                    df[freq] = df["datetime"].dt.floor("min")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.minute))
                             case "second":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor("s")
+                                    df[freq] = df["datetime"].dt.floor("s")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.second))
                             case "week":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor("w")
+                                    df[freq] = df["datetime"].dt.floor("w")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.week))
                             case "weekday":
-                                df[freq] = df["time"].map(
+                                df[freq] = df["datetime"].map(
                                     lambda x: (x.weekday()))
 
                     if len(freq.split(" ")) == 2:
@@ -1476,40 +1486,40 @@ class Summary(pd.DataFrame):
                         match freq.split(" ")[1]:
                             case "hour":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor(f"{mult}h")
+                                    df[freq] = df["datetime"].dt.floor(f"{mult}h")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.hour//mult))*mult
                             case "day":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor(
+                                    df[freq] = df["datetime"].dt.floor(
                                         f"{mult}d")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.day//mult))*mult
                             case "minute":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor(
+                                    df[freq] = df["datetime"].dt.floor(
                                         f"{mult}min")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.minute//mult))*mult
                             case "second":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor(
+                                    df[freq] = df["datetime"].dt.floor(
                                         f"{mult}s")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.second//mult))*mult
                             case "week":
                                 if flooring_timestamp:
-                                    df[freq] = df["time"].dt.floor(
+                                    df[freq] = df["datetime"].dt.floor(
                                         f"{mult}w")
                                 else:
-                                    df[freq] = df["time"].map(
+                                    df[freq] = df["datetime"].map(
                                         lambda x: (x.week//mult))*mult
                             case "weekday":
-                                df[freq] = df["time"].map(
+                                df[freq] = df["datetime"].map(
                                     lambda x: (x.weekday//mult))*mult
 
         if isinstance(frequency, str):

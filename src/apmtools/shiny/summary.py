@@ -286,8 +286,8 @@ AGGREGATES = {
 
 def _default_x(data: pd.DataFrame) -> str:
     """Return ``time`` when available, otherwise the first column."""
-    if "time" in data.columns:
-        return "time"
+    if "datetime" in data.columns:
+        return "datetime"
     datetime_columns = [
         column
         for column in data.columns
@@ -422,7 +422,7 @@ def _parse_datetime_filter(value):
         if match:
             return "date", date(*(int(part) for part in match.groups()))
         if re.fullmatch(r"\d{1,2}:\d{2}(?::\d{2}(?:\.\d{1,6})?)?", value):
-            return "time", time.fromisoformat(value)
+            return "datetime", time.fromisoformat(value)
         match = re.fullmatch(
             date_pattern + r"[ T](\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d{1,6}))?)?", value)
         if match:
@@ -464,14 +464,14 @@ def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None)
     if start_kind in ("date", "datetime"):
         kwargs["date_start"] = datetime.combine(
             start, time.min) if start_kind == "date" else start
-    elif start_kind == "time":
+    elif start_kind == "datetime":
         kwargs["time_start"] = start
     if end_kind in ("date", "datetime"):
         # dtfilter uses an exclusive upper bound. A date-only end bound
         # therefore means the end of that calendar day, not its midnight.
         kwargs["date_end"] = datetime.combine(
             end + timedelta(days=1), time.min) if end_kind == "date" else end
-    elif end_kind == "time":
+    elif end_kind == "datetime":
         kwargs["time_end"] = end
     if kwargs:
         filtered = filtered.dtfilter(**kwargs)
@@ -2110,7 +2110,7 @@ def create_summary_app(
                     values = generated.set_index("index")[component]
                     current[component] = values.reindex(current.index)
                 else:
-                    valid = current["time"].notna().to_numpy()
+                    valid = current["datetime"].notna().to_numpy()
                     current[component] = pd.NA
                     if len(generated) == int(valid.sum()):
                         current.loc[valid,
