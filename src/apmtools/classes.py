@@ -1161,7 +1161,7 @@ class Summary(pd.DataFrame):
         if attribute in self.columns:
             return set(self[attribute])
 
-    def group_stat(self, value_cols, frequency=None, grouping_by=["identifier"], time_col='time', id_col='identifier',
+    def group_stat(self, value_cols, frequency=None, grouping_by=["identifier"], time_col='datetime', id_col='identifier',
                    min_completeness=1.0, only_complete=True, flooring_timestamp=True, aggregate=["mean"]):
         """
         Filter a DataFrame down to only the (monitor, hour) groups that have

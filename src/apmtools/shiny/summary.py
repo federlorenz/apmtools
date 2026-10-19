@@ -36,7 +36,7 @@ def _axis_label(variable: str) -> str:
 
 
 def _label_plot_axes(fig, plot_type, x_column, y_columns, *,
-                     category_columns=None):
+                     category_columns=None, x_label_override=None):
     """Label plot axes while retaining special histogram and facet labels."""
     if plot_type == "histogram":
         fig.update_xaxes(title_text=_axis_label(x_column))
@@ -58,6 +58,8 @@ def _label_plot_axes(fig, plot_type, x_column, y_columns, *,
         fig.update_xaxes(title_text=_axis_label(x_column))
         if y_columns:
             fig.update_yaxes(title_text=_axis_label(y_columns[0]))
+    if x_label_override is not None:
+        fig.update_xaxes(title_text=x_label_override)
     return fig
 
 
@@ -947,6 +949,7 @@ def _matplotlib_defaults(spec, *, palette="Default"):
     y_label = ("Probability density" if kind == "histogram" else
                "Value" if kind == "line" and len(ys) > 1 else
                _axis_label(ys[0]) if ys else "Count")
+    x_label = spec.get("x_label_override") or x_label
     return dict(x_label=x_label, y_label=y_label, names=names, colors=colors)
 
 
@@ -1681,7 +1684,6 @@ def create_summary_app(
     categorical_columns = _categorical_columns(summary)
     datetime_columns = _datetime_columns(summary)
     timedelta_columns = _timedelta_columns(summary)
-
     time_group_columns = [f for f in FREQUENCIES.values(
     ) if f is not None and f not in column_map]
     group_columns = _alphabetical(
@@ -1988,7 +1990,8 @@ def create_summary_app(
                 choices = categorical_columns
                 multiple = True
             elif kind == "line":
-                choices = datetime_columns+timedelta_columns
+                choices = _alphabetical(
+                    datetime_columns + timedelta_columns)
                 multiple = False
             else:
                 choices = numeric_columns
@@ -2133,6 +2136,12 @@ def create_summary_app(
                 value_columns = list(dict.fromkeys(
                     [column_map[selected_x[0]], *value_columns]
                 ))
+            if (kind == "line" and selected_x[0] in timedelta_columns
+                    and should_aggregate):
+                # group_stat aggregation drops the original timedelta X
+                # unless it is explicitly aggregated. Never silently plot
+                # an unrelated frequency column instead.
+                return pd.DataFrame()
             if should_aggregate:
                 current = _aggregate(
                     current, value_columns, frequency, grouping_by, aggregate,
@@ -2158,6 +2167,10 @@ def create_summary_app(
             should_aggregate = AGGREGATES.get(
                 input.aggregate()) is not None
 
+            if (selected_plot == "line" and selected_x
+                    and selected_x[0] in timedelta_columns
+                    and should_aggregate):
+                return {"error": "Timedelta X-axis requires Aggregation: None. Disable aggregation to plot elapsed time."}
             if plot_df.empty or not selected_x or (
                 selected_plot != "histogram" and not selected_y
             ):
@@ -2180,7 +2193,9 @@ def create_summary_app(
                 x_column = mapped(selected_x[0])
                 y_columns = [mapped(selected_y[0])]
             else:
-                x_column = frequency if frequency is not None else column_map[selected_x[0]]
+                x_column = (column_map[selected_x[0]] if selected_x[0] in timedelta_columns
+                            else frequency if frequency is not None
+                            else column_map[selected_x[0]])
                 y_columns = [mapped(c) for c in selected_y]
 
             if selected_plot == "line" and should_aggregate and frequency is None:
@@ -2198,6 +2213,20 @@ def create_summary_app(
                     plot_df, x_columns)
                 x_column = "__plot_category"
 
+            # Convert durations once for Plotly, Matplotlib, editable
+            # numeric bounds, faceting and exported plots. Retain the
+            # original variable name and label its displayed unit.
+            x_label_override = None
+            if (selected_plot == "line" and
+                    pd.api.types.is_timedelta64_dtype(plot_df[x_column])):
+                plot_df = plot_df.copy()
+                plot_df[x_column] = plot_df[x_column] / \
+                    pd.Timedelta(hours=1)
+                x_label_override = f"{x_column} [hours]"
+                # Frequency-based gap detection is only meaningful for
+                # aggregated timestamp series, not raw durations.
+                frequency = None
+
             # Multiple grouping columns are supported by group_stat(). For
             # plotting, Plotly needs one color/category column, so combine the
             # selected grouping columns into a readable composite label.
@@ -2212,7 +2241,7 @@ def create_summary_app(
             return {"data": plot_df, "kind": selected_plot, "x": x_column,
                     "ys": y_columns, "groups": group_columns,
                     "categories": x_columns if selected_plot in ("box", "bar") else None,
-                    "frequency": frequency}
+                    "frequency": frequency, "x_label_override": x_label_override}
 
         @reactive.calc
         def base_figure():
@@ -2260,6 +2289,7 @@ def create_summary_app(
                 fig, selected_plot, x_column, y_columns,
                 category_columns=x_columns if selected_plot in (
                     "box", "bar") else None,
+                x_label_override=spec.get("x_label_override"),
             )
             fig.update_layout(
                 hovermode="x unified" if selected_plot == "line" else "closest",
