@@ -8,7 +8,7 @@ from io import StringIO
 from csv import writer
 from dateutil.parser import parse
 
-from .units import upas_units,lascar_units,purple_units
+from .units import upas_units, lascar_units, purple_units, lcm_units
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
@@ -449,13 +449,13 @@ class Dataset(DictionaryPlus):
             a.filter_key = self.filter_key
             return a
 
-    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, gmt_timezone_shift=0, interpolate=False, add_m={}):
+    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, utc_timezone_shift=0, interpolate=False, add_m={}):
 
-        from .data_processing import upas_processing, lascar_processing, purple_processing
+        from .data_processing import upas_processing, lascar_processing, purple_processing, lcm_processing
 
-        if len(set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]))) > 0:
+        if len(set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))) > 0:
             print(
-                f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]))}. Please choose different level names")
+                f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "time", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))}. Please choose different level names")
             return
         if levels_dict == None:
             levels_dict = dict(
@@ -473,6 +473,8 @@ class Dataset(DictionaryPlus):
                         return "purple"
                     case ['Time', 'CO(ppm)']:
                         return "lascar"
+                    case ['date','sensorName']:
+                        return "lcm"
                     case _:
                         return None
             except:
@@ -518,10 +520,25 @@ class Dataset(DictionaryPlus):
                             except:
                                 print(
                                     f"processing of file {directory}{j} failed. Is this a {monitor} file?")
+                        case "lcm":
+                            try:
+                                processed = lcm_processing(
+                                    directory, file=j, interpolate_data=interpolate, timezone_shift=timedelta(hours=utc_timezone_shift))
+                                for k, v in levels_dict.items():
+                                    if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
+                                        processed.m[k] = v
+                                processed.m["rejected"] = False
+                                processed.m["filename"] = j
+                                for key, value in add_m.items():
+                                    processed.m[key] = value
+                                self[str(uuid.uuid4())] = processed
+                            except:
+                                print(
+                                    f"processing of file {directory}{j} failed. Is this a {monitor} file?")
                         case "purple":
                             try:
                                 processed = purple_processing(
-                                    f"{directory}/", timezone_shift=timedelta(hours=gmt_timezone_shift), interpolate_data=interpolate)
+                                    f"{directory}/", timezone_shift=timedelta(hours=utc_timezone_shift), interpolate_data=interpolate)
                                 for k, v in levels_dict.items():
                                     if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
                                         processed.m[k] = v
@@ -547,7 +564,7 @@ class Dataset(DictionaryPlus):
                             if levels[r] not in levels[:level+1]:
                                 levels_dict[levels[r]] = None
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
-                                     level=level+1, monitor=monitor, levels_dict=levels_dict, gmt_timezone_shift=gmt_timezone_shift, interpolate=interpolate, add_m=add_m)
+                                     level=level+1, monitor=monitor, levels_dict=levels_dict, utc_timezone_shift=utc_timezone_shift, interpolate=interpolate, add_m=add_m)
 
     def save_summary(self, save_csv=True, filename="./", columns={}, merged=True):
         types_in = list(set(type(v) for v in self.values()))
@@ -559,6 +576,8 @@ class Dataset(DictionaryPlus):
                 return ("lascar", run_lascar())
             elif x is Purple:
                 return ("purple", run_purple())
+            elif x is Lcm:
+                return ("lcm", run_lcm())
             # elif x is Apm:
             #     return "Apm"
             # elif x is PolarH10:
@@ -572,6 +591,8 @@ class Dataset(DictionaryPlus):
                     return "Upas"
                 case Lascar():
                     return "Lascar"
+                case Lcm():
+                    return "Lcm"
                 case Purple():
                     return "Purple"
                 case Apm():
@@ -702,6 +723,57 @@ class Dataset(DictionaryPlus):
                 out["time"] = pd.to_datetime(out["time"])
                 return (Summary(out, metadata=set(columns2)))
 
+        def run_lcm():
+            a = 0.524
+            b = -0.0862
+            c = 5.75
+            d = self.subset(condition=lambda x: match_monitor(x) == "Lcm")
+            columns1 = ["identifier", "monitor",
+                        "start", "end", "length", "time"]
+            columns2 = list(set(d.meta()))
+            columns3 = ["sensorName", "deviceId", "resolution",
+                         "PM2.5", "PM10", "CO2", "NO2", "Temperature", "Humidity"]
+            columns4 = ["pm25correctedrh"]
+
+            buffer = StringIO()
+            with buffer as file:
+                df = writer(file, delimiter=",")
+                df.writerow(columns1+columns2+columns3+columns4)
+                count = 0
+                for k, v in d.items():
+                    print(f"processing Lcm {count+1} out of {len(d)}")
+                    v = v.dropna(subset="PM2.5")
+                    identifier = k
+                    start = v.start
+                    end = v.end
+                    length = v.length
+                    for i in range(len(v)):
+                        app = []
+                        app.append(identifier)
+                        app.append("lcm")
+                        app.append(start)
+                        app.append(end)
+                        app.append(length)
+                        app.append(v.index[i])
+                        for m in columns2:
+                            if m in v.m.keys():
+                                app.append(v.m[m] if v.m[m] != None else "")
+                            else:
+                                app.append("")
+                        for m in columns3:
+                            app.append(v[m].iloc[i])
+                        xx = (a*v["PM2.5"].iloc[i])+(b*v["Humidity"].iloc[i])+c
+                        app.append(xx)
+                        df.writerow(list(map(str, app)))
+                    count += 1
+                file.seek(0)
+                out = pd.read_csv(file)
+                out["start"] = pd.to_datetime(out["start"])
+                out["end"] = pd.to_datetime(out["end"])
+                out["length"] = pd.to_timedelta(out["length"])
+                out["time"] = pd.to_datetime(out["time"])
+                return (Summary(out, metadata=set(columns2)))
+
         def run_purple():
             d = self.subset(condition=lambda x: match_monitor(x) == "Purple")
             columns1 = ["identifier", "monitor",
@@ -819,6 +891,8 @@ class Dataset(DictionaryPlus):
                     return "Upas"
                 case Lascar():
                     return "Lascar"
+                case Lcm():
+                    return "Lcm"
                 case Purple():
                     return "Purple"
                 case Apm():
@@ -1952,6 +2026,37 @@ class PurpleSeries(ApmSeries):
     @property
     def _constructor(self):
         return PurpleSeries
+
+class Lcm(Apm):
+    monitor = "lcm"
+
+    def __init__(self, *args, **kwargs):
+        Apm.__init__(self, *args, **kwargs)
+        self.m = {}
+        self.variable = "PM2.5"
+
+    @property
+    def _constructor(self):
+        return Lcm
+
+    @property
+    def _constructor_sliced(self):
+        return LcmSeries
+
+    @property
+    def units(self):
+        return lcm_units
+
+class LcmSeries(ApmSeries):
+    def __init__(self, *args, **kwargs):
+        ApmSeries.__init__(self, *args, **kwargs)
+    _metadata = ['m']
+
+    @property
+    def _constructor(self):
+        return LcmSeries
+
+
 
 class PolarH10(dict):
     monitor = "polarh10"

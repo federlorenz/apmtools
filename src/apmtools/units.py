@@ -277,6 +277,10 @@ upas_datatype = {'AccelComplianceCnt': 'integer',
 
 lascar_units = {"CO(ppm)":"ppm"}
 
+
+lcm_units = {"sensorName": "-", "deviceId": "-", "resolution": "-", "PM2.5": "µg m-3",
+             "PM10": "µg m-3", "CO2": "ppm", "NO2": "ppm", "Temperature": "°C", "Humidity": "%"}
+
 lascar_datatype = {"CO(ppm)": "numeric",
                    'start': "datetime",
                    'end': "datetime",

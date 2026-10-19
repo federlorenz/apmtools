@@ -4,7 +4,7 @@ import pandas as pd
 import numpy as np
 import datetime as dt
 import os as os
-from .classes import Apm, Sum, PolarH10, DictionaryPlus, Grav_Filter, Upas, Lascar, Purple
+from .classes import Apm, Sum, PolarH10, DictionaryPlus, Grav_Filter, Upas, Lascar, Purple, Lcm
 from zipfile import ZipFile
 from copy import deepcopy
 from pandas.errors import EmptyDataError
@@ -306,6 +306,14 @@ def to_datetime(x):
         '/')[0]), int(x.split('T')[0].split('/')[1]), int(x.split('T')[0].split('/')[2])
     hour, minute, second = int(x.split('T')[1].split(
         ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2][:-1])
+    return dt.datetime(year, month, day, hour, minute, second)
+
+
+def to_datetime_lcm(x):
+    year, month, day = int(x.split('T')[0].split(
+        '-')[0]), int(x.split('T')[0].split('-')[1]), int(x.split('T')[0].split('-')[2])
+    hour, minute, second = int(x.split('T')[1].split(
+        ':')[0]), int(x.split('T')[1].split(':')[1]), int(x.split('T')[1].split(':')[2].split(".")[0])
     return dt.datetime(year, month, day, hour, minute, second)
 
 def to_datetime_polar(x):
@@ -839,6 +847,20 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds", in
             '00:01:00'), numeric_columns=numeric, add_binary_counter=False)
         df = keep_interval(df, interval)
     out = Lascar(df)
+    return out
+
+
+def lcm_processing(directory, file, interpolation=1, interval="300 seconds", interpolate_data=True, timezone_shift=dt.timedelta(hours=0)):
+    numeric = ["PM2.5",	"PM10",	"CO2",	"NO2",	"Temperature",	"Humidity"]
+    df = pd.read_csv(directory+file)
+    df['timestamp'] = df['timestamp'].map(to_datetime_lcm)
+    df.set_index('timestamp', inplace=True)
+    if interpolate_data:
+        df = interpolate(df, 300, interpolation, pd.Timedelta(
+            '00:06:00'), numeric_columns=numeric, add_binary_counter=False)
+        df = keep_interval(df, interval)
+    df.index = df.index + timezone_shift
+    out = Lcm(df)
     return out
 
 def sum_interpolation(file, interpolation=1, interval="5 minutes", timing=False):
