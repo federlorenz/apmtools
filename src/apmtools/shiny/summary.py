@@ -1680,6 +1680,8 @@ def create_summary_app(
     numeric_columns = _alphabetical(_numeric_columns(summary))
     categorical_columns = _categorical_columns(summary)
     datetime_columns = _datetime_columns(summary)
+    timedelta_columns = _timedelta_columns(summary)
+
     time_group_columns = [f for f in FREQUENCIES.values(
     ) if f is not None and f not in column_map]
     group_columns = _alphabetical(
@@ -1986,7 +1988,7 @@ def create_summary_app(
                 choices = categorical_columns
                 multiple = True
             elif kind == "line":
-                choices = datetime_columns
+                choices = datetime_columns+timedelta_columns
                 multiple = False
             else:
                 choices = numeric_columns
