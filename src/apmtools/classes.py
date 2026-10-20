@@ -1574,7 +1574,6 @@ class Summary(pd.DataFrame):
 
         return output
     
-    
     def get_monitor(self, value):
         
         out = self.subset({"monitor": [value]})
@@ -2065,8 +2064,6 @@ class LcmSeries(ApmSeries):
     @property
     def _constructor(self):
         return LcmSeries
-
-
 
 class PolarH10(dict):
     monitor = "polarh10"

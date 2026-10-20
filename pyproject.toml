@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "apmtools"
-version = "0.2.41"
+version = "0.2.42"
 authors = [
   { name="Federico Lorenzetti", email="lorenzetti.federico@gmail.com" },
 ]
@@ -24,5 +24,6 @@ Homepage = "https://github.com/federlorenz/apmtools"
 shiny = [
     "shiny>=1.10",
     "shinywidgets>=0.6",
+    "shinyswatch>=0.12",
     "plotly>=6.0",
 ]

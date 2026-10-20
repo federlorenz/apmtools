@@ -1,4 +1,4 @@
-"""Optional Shiny integration for apmtools."""
+"""Optional Shiny integration for apmtools Summary objects."""
 
 from .summary import PLOT_TYPES, create_summary_app, run_summary_app
 
