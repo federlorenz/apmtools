@@ -23,8 +23,7 @@ def _composite_labels(data: pd.DataFrame, columns: list[str]) -> pd.Series:
         return "None" if pd.isna(value) else str(value)
     if len(columns) == 1:
         return data[columns[0]].map(label)
-    return pd.Series(
-        (" | ".join(label(value) for value in row)
+    return pd.Series((" | ".join(label(value) for value in row)
          for row in data[columns].itertuples(index=False, name=None)),
         index=data.index,
         dtype="str",

@@ -41,6 +41,7 @@ def create_summary_app(
         from shinywidgets import output_widget, render_plotly
     # Keep the Summary object intact: subset(), dtfilter() and group_stat()
     # are methods on Summary and are intentionally used below.
+    summary_description = str(getattr(data, "description", "") or "")
     summary = data.copy(deep=False)
     if not isinstance(summary, pd.DataFrame):
         raise TypeError("data must be a pandas DataFrame/Summary")
@@ -90,6 +91,57 @@ def create_summary_app(
         if name not in subset_choice_cache:
             subset_choice_cache[name] = _subset_choices(summary, column_map[name])
         return subset_choice_cache[name]
+
+    # The Info tab is the only tab at startup. Plot modules are created lazily
+    # when the user presses New plot, so no plotting inputs need to initialize
+    # until a plot actually exists.
+    info_tab = ui.nav_panel(
+        "Info",
+        ui.div(
+            ui.h2("Summary information"),
+            ui.p("Description of the Summary object used to launch this application."),
+            ui.tags.pre(summary_description, class_="summary-info-description"),
+            ui.h3("Using the plotting application"),
+            ui.p("Select + New plot to create Plot 1. Each additional plot opens "
+                 "in its own tab. When a plot is selected, New plot copies its "
+                 "current settings, which you can then edit independently."),
+            ui.h4("Left sidebar — data and plot settings"),
+            ui.tags.ul(
+                ui.tags.li(ui.strong("Plot settings: "), "Choose the plot type and the X and Y variables."),
+                ui.tags.li(ui.strong("Plot filters: "), "Select categorical subsets, numerical "
+                           "greater-than and less-than bounds, and start/end datetime limits."),
+                ui.tags.li(ui.strong("Group by: "), "Choose one or more grouping variables "
+                           "to distinguish data series."),
+                ui.tags.li(ui.strong("Frequency / statistical aggregation: "),
+                           "Select a time frequency and statistical function for aggregated plots."),
+            ),
+            ui.h4("Right sidebar — appearance and layout"),
+            ui.tags.ul(
+                ui.tags.li(ui.strong("Plot appearance: "), "Set the palette, plot theme, "
+                           "title and title font size."),
+                ui.tags.li(ui.strong("Legend: "), "Control legend position, inside/outside "
+                           "placement, labels, columns and font size."),
+                ui.tags.li(ui.strong("Axes: "), "Set axis labels, minimum and maximum "
+                           "values, grid, tick controls and fonts."),
+                ui.tags.li(ui.strong("Plot components: "), "Customize trace colours, "
+                           "lines, markers, histograms and boxplot options."),
+                ui.tags.li(ui.strong("Panel appearance: "), "Configure multi-panel "
+                           "plots and panel titles (Matplotlib backend)."),
+            ),
+            ui.h4("Plot tabs, export and application theme"),
+            ui.p("Use + New plot to add a plot tab, or Close selected plot to "
+                 "remove the current plot. The Info tab remains available."),
+            ui.p("Export plotted data as CSV saves the data displayed in the plot. "
+                 "Export plot saves the chart. With the Matplotlib backend, "
+                 "Export as a Python file and associated data creates a "
+                 "reproducible script and its data."),
+            ui.p("Use the theme selector at the top right to change the Shiny "
+                 "application's appearance. This is separate from the plot theme "
+                 "in the Plot appearance tab."),
+            class_="summary-info-content",
+        ),
+        value="info",
+    )
 
     @module.ui
     def plot_tab_ui(initial_filters=None):
@@ -148,7 +200,18 @@ def create_summary_app(
                             ui.input_select("palette", "Color palette", choices=["Default", "Plotly", "D3", "G10", "T10", "Set1", "Set2", "Pastel", "Dark24"], selected=initial("palette", "Default")),
                             ui.input_select("template", "Theme", choices={"plotly":"Light", "plotly_white":"White", "plotly_dark":"Dark", "simple_white":"Minimal", "ggplot2":"GGPlot"}, selected=initial("template", "plotly")),
                             ui.input_text("title", "Plot title", value=initial("title", "")),
-                            ui.input_numeric("title_font_size", "Plot title font size", value=initial("title_font_size", 14), min=6, max=72)),
+                            ui.input_numeric("title_font_size", "Plot title font size", value=initial("title_font_size", 14), min=6, max=72),
+                            (ui.div(
+                                ui.help_text("Adjust all plot font sizes together (1 point per click)."),
+                                ui.div(ui.input_action_button("decrease_plot_fonts", "− Decrease fonts"),
+                                       ui.input_action_button("increase_plot_fonts", "+ Increase fonts"),
+                                       class_="d-flex flex-wrap gap-2 mb-3"),
+                                ui.input_numeric("plot_dpi", "Plot DPI", value=initial("plot_dpi", 100), min=30, max=600, step=25),
+                                ui.div(ui.input_action_button("decrease_plot_dpi", "− DPI"),
+                                       ui.input_action_button("increase_plot_dpi", "+ DPI"),
+                                       class_="d-flex flex-wrap gap-2"),
+                                ui.help_text("DPI affects Matplotlib plot rendering. Export DPI is set separately when exporting."),
+                            ) if backend == "matplotlib" else ui.div())),
                         ui.nav_panel("Legend",
                             ui.input_select("legend_position", "Legend position", choices={k:k.title() for k in ("right", "left", "top", "bottom")}, selected=initial("legend_position", "right")),
                             ui.input_checkbox("legend_inside", "Place legend inside plot", value=initial("legend_inside", False)),
@@ -843,6 +906,8 @@ def create_summary_app(
                                      ("tick_font_size", 10), ("legend_font_size", 12),
                                      ("panel_font_size", 14)):
                     ui.update_numeric(field, value=value)
+                if backend == "matplotlib":
+                    ui.update_numeric("plot_dpi", value=100)
                 ui.update_numeric("line_width", value=2)
                 ui.update_checkbox("box_showfliers", value=True)
                 ui.update_select("box_orientation", selected="vertical")
@@ -856,6 +921,49 @@ def create_summary_app(
                 ui.update_select("hist_cumulative", selected="0")
                 ui.update_checkbox("only_complete", value=True)
                 ui.update_checkbox("flooring_timestamp", value=True)
+
+            if backend == "matplotlib":
+                _font_fields = ("title_font_size", "axis_font_size", "tick_font_size",
+                                "legend_font_size", "panel_font_size")
+
+                def _change_fonts(delta):
+                    # Use current values, not the defaults, to retain individual
+                    # adjustments made in the other appearance tabs.
+                    with reactive.isolate():
+                        for field in _font_fields:
+                            current = _optional_input(field, None)
+                            if current is None:
+                                current = initial_filters.get(field, {
+                                    "title_font_size": 14, "axis_font_size": 12,
+                                    "tick_font_size": 10, "legend_font_size": 12,
+                                    "panel_font_size": 14,
+                                }[field])
+                            ui.update_numeric(field, value=max(6, min(72, float(current) + delta)))
+
+                @reactive.effect
+                @reactive.event(input.increase_plot_fonts)
+                def _increase_plot_fonts():
+                    _change_fonts(1)
+
+                @reactive.effect
+                @reactive.event(input.decrease_plot_fonts)
+                def _decrease_plot_fonts():
+                    _change_fonts(-1)
+
+                def _change_dpi(delta):
+                    with reactive.isolate():
+                        current = _optional_input("plot_dpi", initial_filters.get("plot_dpi", 100))
+                        ui.update_numeric("plot_dpi", value=max(30, min(600, int(current or 100) + delta)))
+
+                @reactive.effect
+                @reactive.event(input.increase_plot_dpi)
+                def _increase_plot_dpi():
+                    _change_dpi(25)
+
+                @reactive.effect
+                @reactive.event(input.decrease_plot_dpi)
+                def _decrease_plot_dpi():
+                    _change_dpi(-25)
 
             if backend == "plotly":
                 @reactive.calc
@@ -917,7 +1025,7 @@ def create_summary_app(
                         x_minor_ticks=_optional_input("x_minor_ticks", False), y_minor_ticks=_optional_input("y_minor_ticks", False),
                         title_font_size=_optional_input("title_font_size", 14), axis_font_size=_optional_input("axis_font_size", 12),
                         tick_font_size=_optional_input("tick_font_size", 10), legend_font_size=_optional_input("legend_font_size", 12),
-                        panel_font_size=_optional_input("panel_font_size", 14), hist_alpha=_optional_input("hist_alpha", ""),
+                        panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
                         box_showfliers=_optional_input("box_showfliers", True), box_orientation=_optional_input("box_orientation", "vertical"),
                         line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2), line_alpha=_optional_input("line_alpha", ""),
                         line_style=_optional_input("line_style", ""), scatter_size=_optional_input("scatter_size", ""),
@@ -958,7 +1066,7 @@ def create_summary_app(
             def snapshot():
                 keys = ("plot_type", "x", "y", "subset_columns", "numeric_subset_columns", "datetime_start", "datetime_end",
                         "group_by", "frequency", "aggregate", "only_complete", "flooring_timestamp",
-                        "palette", "template", "title", "title_font_size", "legend_position",
+                        "palette", "template", "title", "title_font_size", "plot_dpi", "legend_position",
                         "legend_inside", "legend_labels", "legend_columns", "legend_font_size",
                         "x_axis_label", "y_axis_label", "x_min", "x_max", "y_min", "y_max",
                         "show_grid", "x_major_ticks", "x_minor_ticks", "y_major_ticks",
@@ -1069,7 +1177,17 @@ def create_summary_app(
                 ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme"),
                 class_="summary-top-toolbar",
             ),
-            ui.navset_tab(ui.nav_panel("Plot 1", plot_tab_ui("plot_1", {}), value="plot_1"), id="plot_tabs"),
+            ui.tags.style("""
+                .summary-info-content {max-width: 980px; margin: 1.2rem auto 3rem;
+                                       padding: 0 1.25rem; line-height: 1.6;}
+                .summary-info-content h3 {margin-top: 2rem;}
+                .summary-info-content h4 {margin-top: 1.4rem;}
+                .summary-info-content li {margin-bottom: .45rem;}
+                .summary-info-description {white-space: pre-wrap; overflow-wrap: anywhere;
+                    font: inherit; padding: 1rem 1.25rem; border: 1px solid var(--bs-border-color);
+                    border-radius: .5rem; background: var(--bs-tertiary-bg); min-height: 3rem;}
+            """),
+            ui.navset_tab(info_tab, id="plot_tabs"),
         ),
         title="Summary plots",
     )
@@ -1079,9 +1197,9 @@ def create_summary_app(
         # Its picker dynamically switches the app's Bootstrap theme without
         # touching plot-specific options or the plot cloning logic.
         shinyswatch.theme_picker_server()
-        next_tab = reactive.value(1)
-        active_tabs = reactive.value(("plot_1",))
-        tab_filters = {"plot_1": plot_tab_server("plot_1", {})}
+        next_tab = reactive.value(0)
+        active_tabs = reactive.value(())
+        tab_filters = {}
 
         @reactive.effect
         @reactive.event(input.add_tab)
@@ -1110,7 +1228,7 @@ def create_summary_app(
         def close_plot():
             selected = input.plot_tabs()
             tabs = active_tabs.get()
-            if selected not in tabs or len(tabs) <= 1:
+            if selected not in tabs:
                 return
             ui.remove_nav_panel("plot_tabs", target=selected)
             active_tabs.set(tuple(t for t in tabs if t != selected))

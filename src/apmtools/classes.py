@@ -861,7 +861,9 @@ class Dataset(DictionaryPlus):
                     z[1].to_csv(output, index=False)
             out[z[0]] = z[1]
         if merged:
-            return pd.concat([out[k] for k in out.keys()]).reset_index()
+            out_merged = pd.concat([out[k] for k in out.keys()]).reset_index()
+            out_merged.description = self.description
+            return out_merged
         return out
 
     def save_data(self, directory="./saved/", levels=[]):

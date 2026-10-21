@@ -327,7 +327,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               scatter_size="", scatter_marker="", scatter_alpha="", hist_alpha="",
                               box_showfliers=True, box_orientation="vertical",
                               title_font_size=14, axis_font_size=12, tick_font_size=10,
-                              legend_font_size=12, panel_font_size=14, bins=30, density=False,
+                              legend_font_size=12, panel_font_size=14, plot_dpi=100, bins=30, density=False,
                               stacked=False, histtype="bar", cumulative=0,
                               panel_by=None, independent_panel_limits=True, panel_titles="", _axes=None,
                               x_major_ticks=6, y_major_ticks=6, x_minor_ticks=False, y_minor_ticks=False):
@@ -339,7 +339,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     from matplotlib.patches import Patch
 
     if _axes is None:
-        fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
+        fig, ax = plt.subplots(figsize=(10, 5), dpi=plot_dpi)
     else:
         ax = _axes
         fig = ax.figure
@@ -364,7 +364,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             plt.close(fig)
             ncols = (2 if len(partitions) == 4 else min(3, len(partitions)))
             nrows = math.ceil(len(partitions) / ncols)
-            fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 3.8*nrows), dpi=100,
+            fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 3.8*nrows), dpi=plot_dpi,
                                      squeeze=False, sharex=False, sharey=False)
             for idx, (panel_title, panel_df, other_groups) in enumerate(partitions):
                 panel_spec = {**spec, "data": panel_df, "groups": other_groups,
@@ -382,7 +382,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
                     title_font_size=panel_font_size, axis_font_size=axis_font_size,
                     tick_font_size=tick_font_size, legend_font_size=legend_font_size,
-                    panel_font_size=panel_font_size,
+                    panel_font_size=panel_font_size, plot_dpi=plot_dpi,
                     bins=bins, density=density,
                     stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
                     x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
@@ -671,7 +671,7 @@ def _matplotlib_figure(plotly_figure):
     import matplotlib.colors as mcolors
     from matplotlib.patches import Patch
 
-    fig, ax = plt.subplots(figsize=(10, 5), dpi=100)
+    fig, ax = plt.subplots(figsize=(10, 5), dpi=plot_dpi)
     source = plotly_figure
     category_labels = list(getattr(source.layout.xaxis, "categoryarray", None) or [])
     categorical = (getattr(source.layout.xaxis, "type", None) == "category")
