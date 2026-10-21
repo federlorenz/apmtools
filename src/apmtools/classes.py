@@ -1594,7 +1594,6 @@ class Summary(pd.DataFrame):
         
         out = self.subset({"monitor": [value]})
         out = out.dropna(axis=1,how="all")
-        out.description = out.description + f"\nReturned monitor {value}"
         return out
 
     def plot_app(
