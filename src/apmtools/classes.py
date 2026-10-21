@@ -257,6 +257,7 @@ class Dataset(DictionaryPlus):
     def __init__(self, *args, **kwargs):
         DictionaryPlus.__init__(self, *args, **kwargs)
         self.filter_key = None
+        self.description = ""
 
     @property
     def _constructor(self):
@@ -285,6 +286,7 @@ class Dataset(DictionaryPlus):
             if verbose:
                 print(key)
         a.filter_key = self.filter_key
+        a.description = self.description + f"\n Applied function {func}"
         return a
 
     def subset(self, filter_dict={}, filter_style='all', condition=None):
@@ -435,6 +437,8 @@ class Dataset(DictionaryPlus):
                         a[key] = value
                 a = Dataset(a)
                 a.filter_key = self.filter_key
+                a.description = self.description + \
+                    f"\nSubset by {filter_dict} on style {filter_style} by condition {condition}"
                 return a
             else:
                 b = {}
@@ -443,10 +447,14 @@ class Dataset(DictionaryPlus):
                         b[key] = value
                 b = Dataset(b)
                 b.filter_key = self.filter_key
+                b.description = self.description + \
+                    f"\nSubset by {filter_dict} on style {filter_style} by condition {condition}"
                 return b
         else:
             a = Dataset(a)
             a.filter_key = self.filter_key
+            a.description = self.description + \
+                f"\nSubset by {filter_dict} on style {filter_style} by condition {condition}"
             return a
 
     def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, utc_timezone_shift=0, interpolate=False, add_m={}):
@@ -1026,16 +1034,18 @@ class Summary(pd.DataFrame):
     def _constructor(self):
         return Summary
 
-    def __init__(self, *args, metadata=set(), variable=None, **kwargs):
+    def __init__(self, *args, metadata=set(), variable=None, description="",**kwargs):
         pd.DataFrame.__init__(self, *args, **kwargs)
 
         self.metadata = metadata
         self.variable = variable
+        self.description = description
 
     def __finalize__(self, other, method=None, **kwargs):
         if isinstance(other, Summary):
             self.variable = other.variable
             self.metadata = other.metadata.copy()
+            self.description = other.description
 
         return self
 
@@ -1070,6 +1080,7 @@ class Summary(pd.DataFrame):
         if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
             return return_dict
 
+
         # Only conditions referring to existing columns can be evaluated.
         conditions = []
         for column, values in filter_dict.items():
@@ -1091,6 +1102,8 @@ class Summary(pd.DataFrame):
             mask = (~conditions).all(axis=0).to_numpy()
         else:  # negative any
             mask = (~conditions).any(axis=0).to_numpy()
+        
+        return_dict.description = self.description + f"\nSubset by {filter_dict} on style {filter_style}"
 
         return return_dict.loc[mask]
 
@@ -1152,6 +1165,9 @@ class Summary(pd.DataFrame):
         if day is not None:
             self = self.loc[[a in day for a in [self["datetime"].map(lambda x: x.date().isoweekday())
                                                 for i in range(len(self["datetime"]))]]]
+            
+        self.description = self.description + \
+            f"\nFiltered by {time_start if time_start != None else ""} till {time_end if time_end != None else ""}, {date_start if date_start != None else ""} till {date_end if date_end != None else ""}, {day if day != None else ""}"
         return self.reset_index()
 
     def set_attrib(self, attribute):
@@ -1578,6 +1594,7 @@ class Summary(pd.DataFrame):
         
         out = self.subset({"monitor": [value]})
         out = out.dropna(axis=1,how="all")
+        out.description = out.description + f"\nReturned monitor {value}"
         return out
 
     def plot_app(
