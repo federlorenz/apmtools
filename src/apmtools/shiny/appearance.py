@@ -41,9 +41,7 @@ def _label_plot_axes(fig, plot_type, x_column, y_columns, *,
         fig.update_yaxes(title_text=_axis_label(y_columns[0]))
     elif plot_type == "line" and len(y_columns) > 1:
         fig.update_xaxes(title_text=_axis_label(x_column))
-        # The values axis is shared by multiple series; facet headings carry
-        # the variable-specific unit rather than misleadingly naming one unit.
-        fig.update_yaxes(title_text="Value")
+        fig.update_yaxes(title_text="<br>".join(_axis_label(y) for y in y_columns))
         for annotation in fig.layout.annotations:
             label = str(annotation.text)
             if label.startswith("variable="):
@@ -125,7 +123,7 @@ def _apply_plot_appearance(fig, *, title, x_label="", y_label="",
     if x_label.strip():
         fig.update_xaxes(title_text=x_label.strip())
     if y_label.strip():
-        fig.update_yaxes(title_text=y_label.strip())
+        fig.update_yaxes(title_text=y_label.strip().replace("\n", "<br>"))
     fig.update_xaxes(showgrid=show_grid)
     fig.update_yaxes(showgrid=show_grid)
     use_x, use_y = _numeric_axis_controls(plot_kind, box_orientation)

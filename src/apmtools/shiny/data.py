@@ -23,7 +23,8 @@ def _composite_labels(data: pd.DataFrame, columns: list[str]) -> pd.Series:
         return "None" if pd.isna(value) else str(value)
     if len(columns) == 1:
         return data[columns[0]].map(label)
-    return pd.Series((" | ".join(label(value) for value in row)
+    return pd.Series(
+        (" | ".join(label(value) for value in row)
          for row in data[columns].itertuples(index=False, name=None)),
         index=data.index,
         dtype="str",
@@ -130,8 +131,12 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
     is selected, matching Summary.group_stat(frequency=None, grouping_by=...).
     This function is called only when aggregation is explicitly requested.
     """
+    if data is None or data.empty:
+        return pd.DataFrame()
     if frequency is None and not grouping_by:
-        raise ValueError("Select at least one categorical grouping variable for categorical-only aggregation.")
+        # Invalid/incomplete UI selection: no aggregation groups exist.
+        # Return empty rather than breaking Shiny's reactive graph.
+        return pd.DataFrame()
 
     result = data.group_stat(
         value_cols=value_columns,
@@ -142,10 +147,9 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
            if frequency is not None else {}),
     )
     if result is None:
-        raise ValueError(
-            "Summary.group_stat() returned None. Check the selected variables, "
-            "grouping columns, frequency, and completeness settings."
-        )
+        # group_stat() may return None when no rows survive completeness
+        # requirements or other filtering. Treat this as an empty plot.
+        return pd.DataFrame()
     return result
 
 

@@ -228,7 +228,7 @@ def _lineplot_figure(plot_df, x_column, y_columns, *, group_columns, frequency, 
             y="value",
             color=group_column,
             line_group=line_group_column,
-            facet_row="variable" if len(y_columns) > 1 else None,
+            line_dash="variable" if len(y_columns) > 1 else None,
         )
     elif section_column is not None:
         # Preserve filtered-out gaps even when no colour grouping is selected.
@@ -238,7 +238,7 @@ def _lineplot_figure(plot_df, x_column, y_columns, *, group_columns, frequency, 
             long_df = plot_df[[x_column, section_column, *y_columns]].melt(
                 id_vars=[x_column, section_column], var_name="variable", value_name="value")
             fig = px.line(long_df, x=x_column, y="value", color="variable",
-                          line_group=section_column, facet_row="variable")
+                          line_group=section_column)
     elif identifier_column is not None:
         # With no explicit grouping, retain the normal Y-variable
         # colouring while using identifier to keep each monitor's
@@ -263,7 +263,7 @@ def _lineplot_figure(plot_df, x_column, y_columns, *, group_columns, frequency, 
                 y="value",
                 color="variable",
                 line_group=identifier_column,
-                facet_row="variable",
+                line_dash="variable",
             )
     elif section_column is not None:
         if len(y_columns) == 1:
@@ -286,9 +286,88 @@ def _lineplot_figure(plot_df, x_column, y_columns, *, group_columns, frequency, 
                 y="value",
                 color="variable",
                 line_group=section_column,
-                facet_row="variable",
+                line_dash="variable",
             )
     else:
         fig = px.line(plot_df, x=x_column, y=y_columns)
     return fig
 
+
+
+def _style_multi_y_legend(fig, spec, mode, palette, trace_colors, line_style, legend_labels):
+    """Give multi-Y line plots separate variable/group legend keys."""
+    from .appearance import _parse_label_map
+    from .multi_y import multi_y_styles
+    from plotly.colors import qualitative
+    import plotly.graph_objects as go
+
+    variables = [str(v) for v in spec["ys"]]
+    groups = [str(v) for v in spec["data"]["__plot_group"].dropna().unique()] if spec["groups"] else []
+    palettes = getattr(qualitative, palette, None) if palette != "Default" else None
+    colors, dashes, variables, groups = multi_y_styles(variables, groups, palettes or qualitative.Plotly,
+                                                        mode, _parse_label_map(trace_colors), _parse_label_map(line_style))
+    rename = _parse_label_map(legend_labels)
+    for trace in fig.data:
+        if trace.type not in ("scatter", "scattergl"):
+            continue
+        name = str(trace.name or "")
+        # Plotly Express names traces "group, variable" when both encodings are present.
+        group = None
+        variable = None
+        if groups:
+            for g in groups:
+                for v in variables:
+                    if name == f"{g}, {v}" or name == f"{v}, {g}":
+                        group, variable = g, v
+                        break
+                if variable is not None:
+                    break
+        else:
+            variable = name if name in variables else next((v for v in variables if name.endswith(v)), None)
+        if variable is None:
+            continue
+        key = (variable, group)
+        trace.line.color = colors[key]
+        trace.line.dash = {"-":"solid", "--":"dash", ":":"dot", "-.":"dashdot"}.get(dashes[key], dashes[key])
+        trace.showlegend = False
+        trace.legendgroup = f"series:{group}:{variable}"
+    if mode == "none":
+        for group in groups:
+            key = (variables[0], group)
+            fig.add_trace(go.Scatter(
+                x=[None], y=[None], mode="lines", name=rename.get(group, group),
+                line=dict(color=colors[key], dash={"-":"solid", "--":"dash", ":":"dot", "-.":"dashdot"}.get(dashes[key], "solid")),
+                legendgroup=f"group:{group}", showlegend=True, hoverinfo="skip",
+            ))
+        fig.update_layout(showlegend=bool(groups))
+        return
+    if mode == "both":
+        for group in (groups or [None]):
+            for variable in variables:
+                key = (variable, group)
+                label = f"{group}, {variable}" if group is not None else variable
+                fig.add_trace(go.Scatter(
+                    x=[None], y=[None], mode="lines", name=rename.get(label, label),
+                    line=dict(color=colors[key], dash="solid"),
+                    legendgroup=f"series:{group}:{variable}", showlegend=True, hoverinfo="skip",
+                ))
+        fig.update_layout(showlegend=True)
+        return
+    # Legend-only proxy traces avoid duplicating real observations and preserve hover data.
+    added_section = False
+    for heading, items, by_variable in (("Y variable", variables, True), ("Grouping", groups, False)):
+        if not items:
+            continue
+        if added_section:
+            # A blank legend row separating the variable and grouping keys.
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", name=" ",
+                                     line=dict(color="rgba(0,0,0,0)", width=0),
+                                     showlegend=True, hoverinfo="skip", legendgroup="separator"))
+        added_section = True
+        for index, item in enumerate(items):
+            key = (item, groups[0] if groups else None) if by_variable else (variables[0], item)
+            fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", name=rename.get(item, item),
+                                     line=dict(color=colors[key], dash={"-":"solid", "--":"dash", ":":"dot", "-.":"dashdot"}.get(dashes[key], "solid")),
+                                     legendgroup=heading, legendgrouptitle_text=heading if index == 0 else None,
+                                     showlegend=True, hoverinfo="skip"))
+    fig.update_layout(showlegend=True)

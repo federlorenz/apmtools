@@ -83,6 +83,7 @@ def create_summary_app(
         raise ValueError(f"Unknown plot_type {plot_type!r}. Choose one of: {', '.join(PLOT_TYPES)}")
 
     subset_columns = columns
+    max_subset_stages = max(2, len(subset_columns) + 1)
     # Stable choices are shared across tabs. Computing unique values from the
     # full dataset on every filter change was expensive for large summaries.
     subset_choice_cache = {}
@@ -168,9 +169,35 @@ def create_summary_app(
                         ui.output_ui("x_control"),
                         ui.output_ui("y_control")),
                     ui.nav_panel("Plot filters",
-                        ui.input_selectize("subset_columns", "Subset columns",
-                            choices={c: c for c in subset_columns}, selected=initial("subset_columns", []), multiple=True),
-                        ui.output_ui("subset_filters"),
+                        *[
+                            ui.div(
+                                ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
+                                    choices={"": "Select a column", **{c: c for c in subset_columns}},
+                                    selected=(initial("subset_chain", [{}] * max_subset_stages)[i].get("column", "")
+                                        if i < len(initial("subset_chain", [])) else "")),
+                                ui.output_ui(f"subset_values_ui_{i}"),
+                                ui.input_select(f"subset_style_{i}", "Filter style",
+                                    choices={k: k for k in ("all", "any", "negative all", "negative any")},
+                                    selected=(initial("subset_chain", [])[i].get("style", "all")
+                                        if i < len(initial("subset_chain", [])) else "all")),
+                                class_="mb-3",
+                            ) if i == 0 else ui.panel_conditional(
+                                " && ".join(f"input.subset_column_{j} !== ''" for j in range(i)),
+                                ui.div(
+                                    ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
+                                        choices={"": "Select a column", **{c: c for c in subset_columns}},
+                                        selected=(initial("subset_chain", [])[i].get("column", "")
+                                            if i < len(initial("subset_chain", [])) else "")),
+                                    ui.output_ui(f"subset_values_ui_{i}"),
+                                    ui.input_select(f"subset_style_{i}", "Filter style",
+                                        choices={k: k for k in ("all", "any", "negative all", "negative any")},
+                                        selected=(initial("subset_chain", [])[i].get("style", "all")
+                                            if i < len(initial("subset_chain", [])) else "all")),
+                                    class_="mb-3",
+                                ),
+                            )
+                            for i in range(max_subset_stages)
+                        ],
                         ui.input_selectize("numeric_subset_columns", "Numerical subset",
                             choices={c: c for c in numeric_columns},
                             selected=initial("numeric_subset_columns", []), multiple=True),
@@ -213,6 +240,7 @@ def create_summary_app(
                                 ui.help_text("DPI affects Matplotlib plot rendering. Export DPI is set separately when exporting."),
                             ) if backend == "matplotlib" else ui.div())),
                         ui.nav_panel("Legend",
+                            ui.panel_conditional("input.plot_type === 'line' && input.y && input.y.length > 1", ui.input_select("multi_y_color_by", "Multiple Y variables: colour by", choices={"group":"Grouping (default)", "variable":"Y variable", "both":"Both", "none":"None"}, selected=initial("multi_y_color_by", "group"))),
                             ui.input_select("legend_position", "Legend position", choices={k:k.title() for k in ("right", "left", "top", "bottom")}, selected=initial("legend_position", "right")),
                             ui.input_checkbox("legend_inside", "Place legend inside plot", value=initial("legend_inside", False)),
                             ui.input_text_area("legend_labels", "Legend labels (old=new; ...)", value=initial("legend_labels", ""), rows=6),
@@ -220,7 +248,7 @@ def create_summary_app(
                             ui.input_numeric("legend_font_size", "Legend font size", value=initial("legend_font_size", 12), min=6, max=72)),
                         ui.nav_panel("Axes",
                             ui.input_text("x_axis_label", "X-axis label", value=initial("x_axis_label", "")),
-                            ui.input_text("y_axis_label", "Y-axis label", value=initial("y_axis_label", "")),
+                            ui.input_text_area("y_axis_label", "Y-axis label", value=initial("y_axis_label", ""), rows=3),
                             ui.layout_columns(
                                 (ui.input_text_area("x_min", "X minimum", value=initial("x_min", ""), rows=4) if backend == "matplotlib" else ui.input_text("x_min", "X minimum", value="")),
                                 (ui.input_text_area("x_max", "X maximum", value=initial("x_max", ""), rows=4) if backend == "matplotlib" else ui.input_text("x_max", "X maximum", value="")),
@@ -289,19 +317,29 @@ def create_summary_app(
     @module.server
     def plot_tab_server(input, output, session, initial_filters=None):
             initial_filters = initial_filters or {}
-            @render.ui
-            def subset_filters():
-                controls = []
-                for i, name in enumerate(list(input.subset_columns())):
+            # One stable output per stage: changing a later stage does not
+            # recreate the inputs belonging to earlier stages.
+            def _make_subset_values_ui(stage):
+                def _values_ui():
+                    try:
+                        name = input[f"subset_column_{stage}"]()
+                    except Exception:
+                        name = ""
                     if name not in column_map:
-                        continue
+                        return ui.div()
                     choices, _ = cached_subset_choices(name)
-                    controls.append(ui.input_selectize(
-                        f"subset_values_{i}", f"{name} values", choices=choices,
-                        selected=initial_filters.get("subset_values", {}).get(name, []),
-                        multiple=True,
-                    ))
-                return ui.div(*controls) if controls else ui.help_text("Select columns to filter this plot.")
+                    saved = initial_filters.get("subset_chain", [])
+                    selected = (saved[stage].get("values", [])
+                                if stage < len(saved) and saved[stage].get("column") == name else [])
+                    return ui.input_selectize(f"subset_values_{stage}", f"{name} values",
+                                              choices=choices, selected=selected, multiple=True)
+                # Shiny registers outputs by the decorated function name.
+                # Give each generated output its own stable name before rendering.
+                _values_ui.__name__ = f"subset_values_ui_{stage}"
+                return render.ui(_values_ui)
+
+            for _stage in range(max_subset_stages):
+                output(_make_subset_values_ui(_stage))
 
             @render.ui
             def numeric_subset_bounds():
@@ -324,24 +362,33 @@ def create_summary_app(
 
             @reactive.calc
             def filter_state():
-                names = list(input.subset_columns())
-                values = {}
-                for i, name in enumerate(names):
-                    if name in column_map:
-                        values[name] = list(input[f"subset_values_{i}"]())
-                return {"columns": names, "values": values,
+                stages = []
+                for i in range(max_subset_stages):
+                    try:
+                        name = input[f"subset_column_{i}"]()
+                    except Exception:
+                        break
+                    if name not in column_map:
+                        break
+                    try:
+                        keys = list(input[f"subset_values_{i}"]() or [])
+                    except Exception:
+                        keys = []
+                    try:
+                        style = input[f"subset_style_{i}"]() or "all"
+                    except Exception:
+                        style = "all"
+                    stages.append({"column": name, "values": keys, "style": style})
+                return {"stages": stages,
                         "start": input.datetime_start().strip(),
                         "end": input.datetime_end().strip()}
 
             @reactive.calc
             def filtered_summary():
                 state = filter_state()
-                filters = {}
-                for name, keys in state["values"].items():
-                    _, mapping = cached_subset_choices(name)
-                    selected = [mapping[key] for key in keys if key in mapping]
-                    if selected:
-                        filters[column_map[name]] = selected
+                # Apply each stage sequentially through Summary.subset().
+                # Empty value selections are intentionally no-ops.
+                stages = state["stages"]
                 # Preserve original row adjacency before numerical filtering so a
                 # line cannot bridge observations removed by a numeric bound.
                 source = summary
@@ -352,7 +399,16 @@ def create_summary_app(
                         source.loc[order.index, "__source_row_order"] = order.groupby("identifier", dropna=False).cumcount().to_numpy()
                     else:
                         source.loc[order.index, "__source_row_order"] = np.arange(len(order))
-                current = _apply_filters(source, filters, state["start"], state["end"])
+                current = source
+                for stage in stages:
+                    _, mapping = cached_subset_choices(stage["column"])
+                    selected = [mapping[key] for key in stage["values"] if key in mapping]
+                    if selected:
+                        current = current.subset(
+                            {column_map[stage["column"]]: selected},
+                            filter_style=stage["style"],
+                        )
+                current = _apply_filters(current, {}, state["start"], state["end"])
                 for name in list(input.numeric_subset_columns() or []):
                     if name not in numeric_columns:
                         continue
@@ -520,6 +576,10 @@ def create_summary_app(
             @reactive.calc
             def selected_data():
                 current = filtered_summary()
+                # Chained subsets may legitimately produce zero rows. Do not
+                # call group_stat() on an empty Summary (it returns None).
+                if current is None or current.empty:
+                    return pd.DataFrame()
                 kind = input.plot_type()
                 x_input = input.x()
                 selected_x = ([x_input] if isinstance(x_input, str) else list(x_input or []))
@@ -532,6 +592,15 @@ def create_summary_app(
                     y_input = input.y()
                     value_names = ([y_input] if isinstance(y_input, str) else list(y_input or []))
                 if not value_names or any(c not in column_map for c in value_names):
+                    return pd.DataFrame()
+                # Changing plot type updates the X selector asynchronously.
+                # Until that update arrives, a histogram may still hold the
+                # previous line plot's string/datetime X column. Never pass
+                # such a column to group_stat(mean/median/etc.).
+                if kind == "histogram" and any(
+                    not pd.api.types.is_numeric_dtype(current[column_map[name]])
+                    for name in value_names
+                ):
                     return pd.DataFrame()
 
                 selected_groups = list(input.group_by() or [])
@@ -581,15 +650,30 @@ def create_summary_app(
                     # an unrelated frequency column instead.
                     return pd.DataFrame()
                 if should_aggregate:
+                    # An aggregation without a frequency or grouping has no
+                    # plotting groups. Keep the reactive chain alive; the
+                    # prepared_plot() validation displays a useful message.
+                    if frequency is None and not grouping_by:
+                        return pd.DataFrame()
+                    if current is None or current.empty:
+                        return pd.DataFrame()
                     current = _aggregate(
                         current, value_columns, frequency, grouping_by, aggregate,
                         only_complete=(bool(input.only_complete()) if frequency is not None else True),
                         flooring_timestamp=(bool(input.flooring_timestamp()) if frequency is not None else True),
                     )
+                    if current is None or current.empty:
+                        return pd.DataFrame()
                 return current
 
             @reactive.calc
             def prepared_plot():
+                # Validate before evaluating selected_data(), since invalid
+                # aggregation options must not poison reactive calculations.
+                if (AGGREGATES.get(input.aggregate()) is not None
+                        and FREQUENCIES.get(input.frequency()) is None
+                        and not list(input.group_by() or [])):
+                    return {"error": "Select a frequency or at least one Group by variable to apply a statistical function"}
                 plot_df = selected_data()
                 selected_plot = input.plot_type()
                 x_input = input.x()
@@ -752,7 +836,7 @@ def create_summary_app(
                         defaults["colors"] = trace_defaults["colors"]
                 ui.update_text("title", value="Summary plot")
                 ui.update_text("x_axis_label", value=defaults["x_label"])
-                ui.update_text("y_axis_label", value=defaults["y_label"])
+                ui.update_text_area("y_axis_label", value=defaults["y_label"])
                 limits = _axis_bounds_from_spec(
                     spec,
                     bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
@@ -876,7 +960,9 @@ def create_summary_app(
             @reactive.event(input.plot_type, ignore_init=True)
             def reset_on_plot_type_change():
                 # Reset every plot-specific selection when the plot type changes.
-                ui.update_selectize("subset_columns", selected=[])
+                for _i in range(max_subset_stages):
+                    ui.update_select(f"subset_column_{_i}", selected="")
+                    ui.update_select(f"subset_style_{_i}", selected="all")
                 ui.update_selectize("numeric_subset_columns", selected=[])
                 ui.update_text("datetime_start", value="")
                 ui.update_text("datetime_end", value="")
@@ -886,8 +972,8 @@ def create_summary_app(
                 ui.update_select("frequency", selected="None")
                 ui.update_select("aggregate", selected="None")
                 ui.update_text("title", value="")
-                for field in ("x_axis_label", "y_axis_label"):
-                    ui.update_text(field, value="")
+                ui.update_text("x_axis_label", value="")
+                ui.update_text_area("y_axis_label", value="")
                 for field in ("x_min", "x_max", "y_min", "y_max"):
                     if backend == "matplotlib":
                         ui.update_text_area(field, value="")
@@ -989,6 +1075,11 @@ def create_summary_app(
                         scatter_size=input.scatter_size(), scatter_marker=input.scatter_marker(),
                         scatter_alpha=input.scatter_alpha(), plot_kind=input.plot_type(),
                     )
+                    if input.plot_type() == "line" and len(prepared_plot().get("ys", [])) > 1:
+                        from .plotly_renderer import _style_multi_y_legend
+                        _style_multi_y_legend(styled, prepared_plot(), input.multi_y_color_by(),
+                                              input.palette(), input.trace_colors(), input.line_style(),
+                                              input.legend_labels())
                     if input.plot_type() == "box" and not input.box_showfliers():
                         from .data import _box_whisker_limits
                         spec = prepared_plot()
@@ -1020,6 +1111,7 @@ def create_summary_app(
                         y_min=_optional_input("y_min", ""), y_max=_optional_input("y_max", ""), template=_optional_input("template", "plotly"),
                         legend_position=_optional_input("legend_position", "right"), legend_inside=_optional_input("legend_inside", False),
                         legend_columns=max(1, int(_optional_input("legend_columns", 1) or 1)),
+                        multi_y_color_by=_optional_input("multi_y_color_by", "group"),
                         show_grid=_optional_input("show_grid", True),
                         x_major_ticks=_optional_input("x_major_ticks", 6), y_major_ticks=_optional_input("y_major_ticks", 6),
                         x_minor_ticks=_optional_input("x_minor_ticks", False), y_minor_ticks=_optional_input("y_minor_ticks", False),
@@ -1064,10 +1156,10 @@ def create_summary_app(
                     return _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
 
             def snapshot():
-                keys = ("plot_type", "x", "y", "subset_columns", "numeric_subset_columns", "datetime_start", "datetime_end",
+                keys = ("plot_type", "x", "y", "numeric_subset_columns", "datetime_start", "datetime_end",
                         "group_by", "frequency", "aggregate", "only_complete", "flooring_timestamp",
                         "palette", "template", "title", "title_font_size", "plot_dpi", "legend_position",
-                        "legend_inside", "legend_labels", "legend_columns", "legend_font_size",
+                        "legend_inside", "legend_labels", "legend_columns", "legend_font_size", "multi_y_color_by",
                         "x_axis_label", "y_axis_label", "x_min", "x_max", "y_min", "y_max",
                         "show_grid", "x_major_ticks", "x_minor_ticks", "y_major_ticks",
                         "y_minor_ticks", "axis_font_size", "tick_font_size", "trace_colors",
@@ -1085,13 +1177,24 @@ def create_summary_app(
                     except Exception:
                         # Inputs in inactive tabs may not have been initialized yet.
                         pass
-                subset = {}
-                for i, name in enumerate(result.get("subset_columns", []) or []):
+                chain = []
+                for i in range(max_subset_stages):
                     try:
-                        subset[name] = list(input[f"subset_values_{i}"]() or [])
+                        name = input[f"subset_column_{i}"]()
                     except Exception:
-                        subset[name] = initial_filters.get("subset_values", {}).get(name, [])
-                result["subset_values"] = subset
+                        break
+                    if name not in column_map:
+                        break
+                    try:
+                        values = list(input[f"subset_values_{i}"]() or [])
+                    except Exception:
+                        values = []
+                    try:
+                        style = input[f"subset_style_{i}"]() or "all"
+                    except Exception:
+                        style = "all"
+                    chain.append({"column": name, "values": values, "style": style})
+                result["subset_chain"] = chain
                 numeric_bounds = {}
                 for name in result.get("numeric_subset_columns", []) or []:
                     if name not in numeric_columns:
@@ -1106,12 +1209,292 @@ def create_summary_app(
                 result["numeric_subset_bounds"] = numeric_bounds
                 return result
 
+            # Expose the same dataframe that feeds plot preparation/export.
+            # The app-level New table action captures it as a static snapshot.
+            snapshot.plot_dataframe = selected_data
             return snapshot
+
+
+    @module.ui
+    def table_tab_ui(frame):
+        available = _alphabetical(frame.columns)
+        numeric = _alphabetical(_numeric_columns(frame))
+        groups = _alphabetical([c for c in available if c not in numeric])
+        stages = max(2, len(available) + 1)
+        return ui.div(
+            ui.layout_sidebar(
+                ui.sidebar(
+                    ui.div(ui.navset_tab(
+                        ui.nav_panel("Table filters",
+                            *[
+                                ui.div(
+                                    ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
+                                        choices={"": "Select a column", **{c: c for c in available}}),
+                                    ui.output_ui(f"subset_values_ui_{i}"),
+                                    ui.input_select(f"subset_style_{i}", "Filter style",
+                                        choices={k: k for k in ("all", "any", "negative all", "negative any")}),
+                                    class_="mb-3",
+                                ) if i == 0 else ui.panel_conditional(
+                                    " && ".join(f"input.subset_column_{j} !== ''" for j in range(i)),
+                                    ui.div(
+                                        ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
+                                            choices={"": "Select a column", **{c: c for c in available}}),
+                                        ui.output_ui(f"subset_values_ui_{i}"),
+                                        ui.input_select(f"subset_style_{i}", "Filter style",
+                                            choices={k: k for k in ("all", "any", "negative all", "negative any")}),
+                                        class_="mb-3",
+                                    ),
+                                ) for i in range(stages)
+                            ],
+                            ui.input_selectize("numeric_subset_columns", "Numerical subset",
+                                choices={c: c for c in numeric}, multiple=True),
+                            ui.output_ui("numeric_subset_bounds"),
+                            ui.input_text("datetime_start", "Start datetime",
+                                placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                            ui.input_text("datetime_end", "End datetime",
+                                placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                        ),
+                        ui.nav_panel("Frequency/Grouping/Statistical aggregation",
+                            ui.input_selectize("group_by", "Group by", choices={c: c for c in groups},
+                                multiple=True),
+                            ui.input_select("frequency", "Frequency / aggregation mode",
+                                choices={k: k for k in FREQUENCIES}),
+                            ui.input_select("aggregate", "Apply statistical function",
+                                choices={k: k for k in AGGREGATES}),
+                            ui.output_ui("frequency_options"),
+                        ),
+                        id="table_sidebar_tabs"), class_="summary-sidebar-tabs"),
+                    title="Table controls", open="closed", width="320px",
+                ),
+                ui.card(
+                    ui.card_header("Data table"),
+                    ui.div(ui.output_data_frame("table_grid"), class_="summary-table-grid-area"),
+                    class_="summary-table-grid-card",
+                ),
+            ),
+            class_="summary-table-tab",
+        )
+
+    @module.server
+    def table_tab_server(input, output, session, frame):
+        # Preserve Summary methods on snapshots made from plots and tables.
+        if hasattr(summary, "subset") and not hasattr(frame, "subset"):
+            frame = summary._constructor(frame)
+        # Each table starts from its own snapshot and processes it independently.
+        available = _alphabetical(frame.columns)
+        numeric = _alphabetical(_numeric_columns(frame))
+        stages = max(2, len(available) + 1)
+        cache = {}
+
+        def choices_for(name):
+            if name not in cache:
+                cache[name] = _subset_choices(frame, name)
+            return cache[name]
+
+        def make_values_ui(stage):
+            def values_ui():
+                try:
+                    name = input[f"subset_column_{stage}"]()
+                except Exception:
+                    return ui.div()
+                if name not in frame.columns:
+                    return ui.div()
+                choices, _ = choices_for(name)
+                return ui.input_selectize(f"subset_values_{stage}", f"{name} values",
+                    choices=choices, multiple=True)
+            values_ui.__name__ = f"subset_values_ui_{stage}"
+            return render.ui(values_ui)
+
+        for stage in range(stages):
+            output(make_values_ui(stage))
+
+        @render.ui
+        def numeric_subset_bounds():
+            controls = []
+            for name in list(input.numeric_subset_columns() or []):
+                if name not in numeric:
+                    continue
+                index = numeric.index(name)
+                controls.append(ui.div(
+                    ui.tags.strong(name),
+                    ui.input_text(f"numeric_gt_{index}", "Greater than", placeholder="No lower bound"),
+                    ui.input_text(f"numeric_lt_{index}", "Less than", placeholder="No upper bound"),
+                ))
+            return ui.div(*controls)
+
+        @render.ui
+        def frequency_options():
+            if FREQUENCIES.get(input.frequency()) is None:
+                return ui.div()
+            return ui.div(
+                ui.input_checkbox("only_complete", "Only complete intervals", value=True),
+                ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=True),
+            )
+
+        @reactive.calc
+        def table_data():
+            current = frame.copy(deep=True)
+            for stage in range(stages):
+                try:
+                    name = input[f"subset_column_{stage}"]()
+                except Exception:
+                    break
+                if name not in frame.columns:
+                    break
+                try:
+                    keys = list(input[f"subset_values_{stage}"]() or [])
+                except Exception:
+                    keys = []
+                _, mapping = choices_for(name)
+                values = [mapping[key] for key in keys if key in mapping]
+                if values:
+                    try:
+                        style = input[f"subset_style_{stage}"]() or "all"
+                    except Exception:
+                        style = "all"
+                    current = current.subset({name: values}, filter_style=style)
+            current = _apply_filters(current, {}, input.datetime_start(), input.datetime_end())
+            for name in list(input.numeric_subset_columns() or []):
+                if name not in numeric:
+                    continue
+                index = numeric.index(name)
+                values = pd.to_numeric(current[name], errors="coerce")
+                for suffix in ("gt", "lt"):
+                    try:
+                        bound = float(str(input[f"numeric_{suffix}_{index}"]()).strip())
+                    except (TypeError, ValueError, KeyError):
+                        continue
+                    if not np.isfinite(bound):
+                        continue
+                    mask = values.gt(bound) if suffix == "gt" else values.lt(bound)
+                    current = current.loc[mask.fillna(False)].copy()
+                    values = values.loc[current.index]
+            if current.empty:
+                return current
+            aggregate = AGGREGATES.get(input.aggregate())
+            if aggregate is not None:
+                frequency = FREQUENCIES.get(input.frequency())
+                grouping = list(input.group_by() or [])
+                if frequency is None and not grouping:
+                    return pd.DataFrame()
+                # Do not exclude identifier by name: preserve the existing
+                # Summary.group_stat() semantics and let the grouping selection
+                # determine whether a numeric column is an aggregation value.
+                # Entirely missing numeric columns remain excluded.
+                value_cols = [name for name in numeric if name not in grouping
+                              and current[name].notna().any()]
+                if not value_cols:
+                    return pd.DataFrame()
+                if not hasattr(current, "group_stat"):
+                    return pd.DataFrame()
+                complete = bool(input.only_complete()) if frequency is not None else False
+                floor = bool(input.flooring_timestamp()) if frequency is not None else True
+                if complete and frequency is not None:
+                    # group_stat requires *every* value column to be complete in
+                    # the same interval. Evaluate each measurement independently,
+                    # then align the resulting aggregate columns on group keys.
+                    # This avoids one sparse sensor hiding all other measurements.
+                    parts = []
+                    for value_col in value_cols:
+                        part = _aggregate(current, [value_col], frequency, grouping,
+                            aggregate, only_complete=True, flooring_timestamp=floor)
+                        if part is not None and not part.empty:
+                            parts.append(pd.DataFrame(part).reset_index(drop=True))
+                    if parts:
+                        current = parts[0]
+                        for part in parts[1:]:
+                            # Merge on actual grouping/time columns produced by
+                            # group_stat(), not on the frequency option string.
+                            measurement_cols = {f"{name}_{aggregate}" for name in value_cols}
+                            keys = [col for col in current.columns
+                                    if col in part.columns and col not in measurement_cols]
+                            if keys:
+                                current = current.merge(part, on=keys, how="outer", sort=False)
+                            else:
+                                # No reliable shared keys: preserve the rows of
+                                # each result rather than triggering a merge error.
+                                current = pd.concat([current, part], ignore_index=True)
+                    else:
+                        current = pd.DataFrame()
+                else:
+                    current = _aggregate(current, value_cols, frequency, grouping, aggregate,
+                        only_complete=False, flooring_timestamp=floor)
+            return pd.DataFrame() if current is None else current
+
+        @render.data_frame
+        def table_grid():
+            result = table_data()
+            # Convert Summary/Group output to plain, grid-compatible pandas
+            # columns. Completeness filtering may legitimately produce zero rows.
+            result = pd.DataFrame(result).reset_index(drop=True)
+            # Hide columns without any observed values in the current table.
+            # This is presentation-only: the underlying table data is retained
+            # for subsequent filtering, grouping and new-table snapshots.
+            result = result.dropna(axis=1, how="all")
+            result.columns = [str(c) for c in result.columns]
+            result = result.loc[:, ~result.columns.duplicated()].copy()
+            for col in result.columns:
+                series = result[col]
+                if pd.api.types.is_timedelta64_dtype(series.dtype):
+                    result[col] = series.astype(str)
+                elif pd.api.types.is_object_dtype(series.dtype):
+                    # Shiny's browser grid cannot reliably infer mixed Python
+                    # objects (including nested values and pd.NA).
+                    nonnull = series.dropna()
+                    if len(nonnull) and not nonnull.map(lambda v: isinstance(v, (str, int, float, bool, datetime, date, pd.Timestamp))).all():
+                        result[col] = series.map(lambda v: str(v) if not pd.isna(v) else None)
+                elif pd.api.types.is_numeric_dtype(series.dtype):
+                    result[col] = series.replace([np.inf, -np.inf], np.nan)
+            return render.DataGrid(result, filters=True, width="100%", height="100%")
 
 
     app_ui = ui.page_fluid(
         ui.tags.style("""
             .container, .container-fluid {max-width: none !important;}
+            /* Give table grid headers and their filter inputs 50% more space. */
+            .summary-table-tab .shiny-data-grid table th,
+            .summary-table-tab .shiny-data-grid table td,
+            .summary-table-tab .shiny-data-grid .cell,
+            .summary-table-tab .shiny-data-grid .header {
+                min-width: 150px !important;
+            }
+            .summary-table-tab .shiny-data-grid input {min-width: 120px;}
+            /* Explicit viewport sizing avoids zero-height nested flex children. */
+            .summary-table-tab {
+                height: calc(100dvh - 185px);
+                min-height: 360px;
+                overflow: hidden;
+            }
+            .summary-table-tab > .bslib-sidebar-layout {
+                height: 100%;
+                min-height: 0;
+            }
+            .summary-table-tab .bslib-sidebar-layout > aside,
+            .summary-table-tab .bslib-sidebar-layout > .sidebar {
+                height: 100%;
+                overflow-y: auto;
+            }
+            .summary-table-tab .summary-table-grid-card {
+                height: 100%;
+                min-height: 0;
+            }
+            .summary-table-tab .summary-table-grid-card .card-body {
+                height: 100%;
+                min-height: 0;
+                display: flex;
+                flex-direction: column;
+            }
+            .summary-table-tab .summary-table-grid-area {
+                flex: 1 1 auto;
+                min-height: 0;
+                height: 100%;
+                overflow: hidden;
+            }
+            .summary-table-tab .summary-table-grid-area > * {
+                height: 100% !important;
+                min-height: 0;
+            }
+
             .summary-plot-container {width:100%; height:auto; aspect-ratio: 2 / 1; min-width:0; position:relative;}
             .summary-plot-container > * {width:100% !important;}
             .summary-plot-container .shiny-plot-output {min-height:400px;}
@@ -1169,7 +1552,8 @@ def create_summary_app(
             ui.div(
                 ui.div(
                     ui.input_action_button("add_tab", "+ New plot", class_="btn-primary"),
-                    ui.input_action_button("close_tab", "Close selected plot", class_="btn-outline-danger"),
+                    ui.input_action_button("add_table", "+ New table", class_="btn-primary"),
+                    ui.input_action_button("close_tab", "Close selected tab", class_="btn-outline-danger"),
                     class_="summary-toolbar-actions",
                 ),
                 # Exactly one app-wide theme picker, outside dynamically added
@@ -1200,6 +1584,8 @@ def create_summary_app(
         next_tab = reactive.value(0)
         active_tabs = reactive.value(())
         tab_filters = {}
+        table_frames = {}
+        next_table = reactive.value(0)
 
         @reactive.effect
         @reactive.event(input.add_tab)
@@ -1224,6 +1610,36 @@ def create_summary_app(
             ui.insert_nav_panel("plot_tabs", new_panel, select=True)
 
         @reactive.effect
+        @reactive.event(input.add_table)
+        def add_table():
+            number = next_table.get() + 1
+            next_table.set(number)
+            tab_id = f"table_{number}"
+            selected = input.plot_tabs()
+            with reactive.isolate():
+                if selected in table_frames:
+                    frame = table_frames[selected].copy(deep=True)
+                elif selected in tab_filters:
+                    try:
+                        frame = tab_filters[selected].plot_dataframe()
+                        frame = pd.DataFrame(frame).copy(deep=True)
+                    except Exception:
+                        # A plot may have incomplete settings; show an empty
+                        # grid rather than disabling the New table action.
+                        frame = pd.DataFrame()
+                else:
+                    frame = pd.DataFrame(summary).copy(deep=True)
+            # Datagrid requires plain column names; preserve the values and
+            # index as displayed columns where useful.
+            frame = frame.reset_index(drop=True)
+            frame.columns = [str(c) for c in frame.columns]
+            panel = ui.nav_panel(f"Table {number}", table_tab_ui(tab_id, frame), value=tab_id)
+            table_frames[tab_id] = frame
+            table_tab_server(tab_id, frame)
+            active_tabs.set((*active_tabs.get(), tab_id))
+            ui.insert_nav_panel("plot_tabs", panel, select=True)
+
+        @reactive.effect
         @reactive.event(input.close_tab)
         def close_plot():
             selected = input.plot_tabs()
@@ -1231,6 +1647,8 @@ def create_summary_app(
             if selected not in tabs:
                 return
             ui.remove_nav_panel("plot_tabs", target=selected)
+            table_frames.pop(selected, None)
+            tab_filters.pop(selected, None)
             active_tabs.set(tuple(t for t in tabs if t != selected))
             # Shiny does not provide a public API to unregister an output module.
             # The removed tab cannot be selected again and tab IDs are never reused.

@@ -27,7 +27,7 @@ def _matplotlib_defaults(spec, *, palette="Default"):
     x_label = (" | ".join(_axis_label(c) for c in spec["categories"])
                if kind in ("box", "bar") else _axis_label(x))
     y_label = ("Probability density" if kind == "histogram" else
-               "Value" if kind == "line" and len(ys) > 1 else
+               "\n".join(_axis_label(y) for y in ys) if kind == "line" and len(ys) > 1 else
                _axis_label(ys[0]) if ys else "Count")
     x_label = spec.get("x_label_override") or x_label
     return dict(x_label=x_label, y_label=y_label, names=names, colors=colors)
@@ -322,7 +322,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               legend_labels="", trace_colors="", palette="Default",
                               x_min="", x_max="", y_min="", y_max="",
                               template="plotly", legend_position="right",
-                              legend_inside=False, legend_columns=1, show_grid=True, font_size=12,
+                              legend_inside=False, legend_columns=1, multi_y_color_by="group", show_grid=True, font_size=12,
                               line_width=2, marker_size=7, line_alpha="", line_style="",
                               scatter_size="", scatter_marker="", scatter_alpha="", hist_alpha="",
                               box_showfliers=True, box_orientation="vertical",
@@ -376,7 +376,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     x_min=_panel_limit_value(x_min, panel_title), x_max=_panel_limit_value(x_max, panel_title),
                     y_min=_panel_limit_value(y_min, panel_title), y_max=_panel_limit_value(y_max, panel_title),
                     template=template, legend_position=legend_position,
-                    legend_inside=legend_inside, legend_columns=legend_columns, show_grid=show_grid, font_size=font_size,
+                    legend_inside=legend_inside, legend_columns=legend_columns, multi_y_color_by=multi_y_color_by, show_grid=show_grid, font_size=font_size,
                     line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
                     scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
                     hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
@@ -413,6 +413,11 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     labels = defaults["names"] if group_col else ([str(y) for y in ys] if len(ys) > 1 else ["All observations"])
     colors = {name: overrides.get(name, defaults["colors"].get(name, palette_values[i % len(palette_values)]))
               for i, name in enumerate(labels)}
+    multi_y = kind == "line" and len(ys) > 1
+    if multi_y:
+        from .multi_y import multi_y_styles
+        multi_colors, multi_dashes, variable_names, group_names = multi_y_styles(
+            ys, labels if group_col else [], palette_values, multi_y_color_by, overrides, styles)
     for name, color in list(colors.items()):
         if not mcolors.is_color_like(color):
             colors[name] = defaults["colors"].get(name, palette_values[0])
@@ -480,11 +485,12 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 parts = (rows.groupby(segment_col, dropna=False, sort=False) if segment_col else [(None, rows)])
                 for _, part in parts:
                     part = part.sort_values(x)
-                    ax.plot(part[x], part[y], color=colors.get(name, palette_values[0]),
+                    key = (str(y), str(name) if group_col else None)
+                    ax.plot(part[x], part[y], color=(multi_colors[key] if multi_y else colors.get(name, palette_values[0])),
                             linewidth=float(line_width),
-                            linestyle=_line_style(styles, name),
+                            linestyle=(multi_dashes[key] if multi_y else _line_style(styles, name)),
                             alpha=_bounded_float(alphas, name, 1, 0, 1),
-                            label=rename.get(name, name))
+                            label=("_nolegend_" if multi_y else rename.get(name, name)))
     elif kind in ("box", "bar"):
         # Build categorical groups in a single pass. The former implementation
         # repeatedly scanned the full DataFrame for every category × group,
@@ -593,6 +599,39 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         unique = dict(zip(texts, handles))
         if unique and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
             ax.legend(unique.values(), unique.keys(), title="Legend")
+    if multi_y:
+        from matplotlib.lines import Line2D
+        # Independent legend keys for the two dimensions, with explicit headings.
+        legend_handles = []
+        legend_labels_out = []
+        if multi_y_color_by == "none":
+            for group in group_names if group_col else []:
+                key = (variable_names[0], group)
+                legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
+                legend_labels_out.append(rename.get(group, group))
+        if multi_y_color_by == "both":
+            for group in (group_names or [None]):
+                for variable in variable_names:
+                    key = (variable, group)
+                    label = f"{group}, {variable}" if group is not None else variable
+                    legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
+                    legend_labels_out.append(rename.get(label, label))
+        added_section = False
+        for heading, keys, by_var in (() if multi_y_color_by in ("both", "none") else (("Y variable", variable_names, True), ("Grouping", group_names, False))):
+            if not keys or (not by_var and not group_col):
+                continue
+            if added_section:
+                legend_handles.append(Line2D([], [], color="none"))
+                legend_labels_out.append(" ")
+            added_section = True
+            legend_handles.append(Line2D([], [], color="none"))
+            legend_labels_out.append(heading)
+            for value in keys:
+                key = (value, group_names[0] if group_col else None) if by_var else (variable_names[0], value)
+                legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
+                legend_labels_out.append(rename.get(value, value))
+        if legend_handles:
+            ax.legend(legend_handles, legend_labels_out, title=None)
     legend = ax.get_legend()
     if legend is not None:
         locs = {"right":"upper right", "left":"upper left", "top":"upper center", "bottom":"lower center"}
