@@ -13,6 +13,7 @@ from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices
 from .appearance import _apply_plot_appearance, _label_plot_axes
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
 from .plotly_renderer import _barplot_figure, _boxplot_figure, _histogram_figure, _lineplot_figure, _scatter_figure
+from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
 
 
@@ -161,6 +162,50 @@ def create_summary_app(
 .summary-sidebar-tabs .nav-item:nth-child(5n+5) {--tab-color:#f7c7d5;}
 .summary-sidebar-tabs .tab-content {padding:0.65rem 0.25rem;}
 """),
+            ui.tags.style("""
+.summary-color-row {display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;}
+.summary-color-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:.85rem;}
+.summary-color-trigger {display:inline-flex;align-items:center;gap:7px;white-space:nowrap;}
+.summary-color-swatch {display:inline-block;width:27px;height:23px;border:1px solid #888;border-radius:4px;}
+.summary-color-hex {font-family:monospace;font-size:.8rem;}
+.summary-native-color-picker {display:block;width:100%;height:110px;cursor:pointer;margin:8px 0 14px;}
+.summary-color-presets {display:grid;grid-template-columns:repeat(6,1fr);gap:8px;margin:14px 0;}
+.summary-color-preset {height:32px;border:1px solid #888;border-radius:5px;cursor:pointer;}
+"""),
+            ui.tags.script("""
+// Event delegation survives Shiny's dynamic modal and panel replacement.
+if (!window.__apmColorPickerInstalled) {
+  window.__apmColorPickerInstalled = true;
+  document.addEventListener('input', function(ev) {
+    if (!ev.target.matches('.summary-native-color-picker')) return;
+    const field = document.getElementById(ev.target.dataset.hexTarget);
+    if (field) {
+      field.value = ev.target.value.toUpperCase();
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+  });
+  document.addEventListener('click', function(ev) {
+    const swatch = ev.target.closest('.summary-color-preset');
+    if (!swatch) return;
+    ev.preventDefault();
+    const field = document.getElementById(swatch.dataset.hexTarget);
+    if (field) {
+      field.value = swatch.dataset.colorValue;
+      field.dispatchEvent(new Event('input', {bubbles:true}));
+      field.dispatchEvent(new Event('change', {bubbles:true}));
+    }
+    const picker = document.querySelector('.summary-native-color-picker');
+    if (picker) picker.value = swatch.dataset.colorValue;
+  });
+  document.addEventListener('input', function(ev) {
+    if (!ev.target.matches('input[id$="picker_hex"]')) return;
+    if (!/^#[0-9a-f]{6}$/i.test(ev.target.value)) return;
+    const picker = document.querySelector('.summary-native-color-picker');
+    if (picker) picker.value = ev.target.value;
+  });
+}
+"""),
             ui.layout_sidebar(
                 ui.sidebar(
                     ui.div(ui.navset_tab(
@@ -240,10 +285,10 @@ def create_summary_app(
                                 ui.help_text("DPI affects Matplotlib plot rendering. Export DPI is set separately when exporting."),
                             ) if backend == "matplotlib" else ui.div())),
                         ui.nav_panel("Legend",
-                            ui.panel_conditional("input.plot_type === 'line' && input.y && input.y.length > 1", ui.input_select("multi_y_color_by", "Multiple Y variables: colour by", choices={"group":"Grouping (default)", "variable":"Y variable", "both":"Both", "none":"None"}, selected=initial("multi_y_color_by", "group"))),
+                            ui.panel_conditional("(input.plot_type === 'line' || input.plot_type === 'box' || input.plot_type === 'bar' || input.plot_type === 'scatter') && input.y && input.y.length > 1", ui.input_select("multi_y_color_by", "Multiple Y variables: colour by", choices={"group":"Grouping (default)", "variable":"Y variable", "both":"Both", "none":"None"}, selected=initial("multi_y_color_by", "group"))),
                             ui.input_select("legend_position", "Legend position", choices={k:k.title() for k in ("right", "left", "top", "bottom")}, selected=initial("legend_position", "right")),
                             ui.input_checkbox("legend_inside", "Place legend inside plot", value=initial("legend_inside", False)),
-                            ui.input_text_area("legend_labels", "Legend labels (old=new; ...)", value=initial("legend_labels", ""), rows=6),
+                            ui.output_ui("legend_labels_editor"),
                             (ui.input_numeric("legend_columns", "Legend columns", value=initial("legend_columns", 1), min=1, max=100, step=1) if backend == "matplotlib" else ui.div()),
                             ui.input_numeric("legend_font_size", "Legend font size", value=initial("legend_font_size", 12), min=6, max=72)),
                         ui.nav_panel("Axes",
@@ -257,6 +302,8 @@ def create_summary_app(
                                 (ui.input_text_area("y_min", "Y minimum", value=initial("y_min", ""), rows=4) if backend == "matplotlib" else ui.input_text("y_min", "Y minimum", value="")),
                                 (ui.input_text_area("y_max", "Y maximum", value=initial("y_max", ""), rows=4) if backend == "matplotlib" else ui.input_text("y_max", "Y maximum", value="")),
                                 col_widths=(6, 6)),
+                            ui.output_ui("x_tick_labels_editor"),
+                            ui.output_ui("y_tick_labels_editor"),
                             ui.input_checkbox("show_grid", "Show grid", value=initial("show_grid", True)),
                             ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter' || input.plot_type === 'histogram' || (input.plot_type === 'box' && input.box_orientation === 'horizontal')",
                                 ui.input_numeric("x_major_ticks", "X-axis major ticks (approximate)", value=initial("x_major_ticks", 6), min=2, max=30, step=1),
@@ -267,7 +314,8 @@ def create_summary_app(
                             ui.input_numeric("axis_font_size", "Axis title font size", value=initial("axis_font_size", 12), min=6, max=72),
                             ui.input_numeric("tick_font_size", "Axis tick font size", value=initial("tick_font_size", 10), min=6, max=72)),
                         ui.nav_panel("Plot components",
-                            ui.input_text_area("trace_colors", "Trace colors (name=#hex; ...)", value=initial("trace_colors", ""), rows=6),
+                            ui.output_ui("element_visibility_ui"),
+                            ui.output_ui("trace_colors_editor"),
                             ui.panel_conditional("input.plot_type === 'line'",
                                 ui.input_numeric("line_width", "Line width", value=initial("line_width", 2), min=0.5, max=15, step=0.5),
                                 ui.input_text_area("line_alpha", "Line alpha (name=0..1; ...)", value=initial("line_alpha", ""), rows=4),
@@ -283,6 +331,9 @@ def create_summary_app(
                                 ui.input_select("hist_type", "Histogram type", choices={"bar":"bar","barstacked":"barstacked","step":"step","stepfilled":"stepfilled"}, selected=initial("hist_type", "bar")),
                                 ui.input_select("hist_cumulative", "Cumulative", choices={"0":"False","1":"True (ascending)","-1":"True (descending)"}, selected=initial("hist_cumulative", "0")),
                                 ui.input_text_area("hist_alpha", "Histogram alpha (name=0..1; ...)", value=initial("hist_alpha", ""), rows=4)),
+                            ui.panel_conditional("input.plot_type === 'bar' || input.plot_type === 'box'",
+                                ui.input_numeric("bar_box_width", "Bar / box width", min=0.20, max=3.00,
+                                                 value=initial("bar_box_width", 1.0), step=0.05)),
                             ui.panel_conditional("input.plot_type === 'box'",
                                 ui.input_checkbox("box_showfliers", "Show outliers (fliers)", value=initial("box_showfliers", True)),
                                 ui.input_select("box_orientation", "Box orientation", choices={"vertical":"Vertical", "horizontal":"Horizontal"}, selected=initial("box_orientation", "vertical")))),
@@ -297,7 +348,9 @@ def create_summary_app(
                                         ui.input_selectize("panel_by", "Panel grouping variables",
                                             choices={name: name for name in group_columns}, selected=initial("panel_by", []), multiple=True))),
                                 ui.panel_conditional("input.multi_panel === true",
-                                    ui.input_text_area("panel_titles", "Panel titles (old=new; ...)", value=initial("panel_titles", ""), rows=6)),
+                                    ui.output_ui("panel_titles_editor"),
+                                    ui.input_numeric("panel_hspace", "Vertical panel spacing", value=initial("panel_hspace", 0.90), min=0, max=5, step=0.05),
+                                    ui.input_numeric("panel_wspace", "Horizontal panel spacing", value=initial("panel_wspace", 0.38), min=0, max=5, step=0.05)),
                                 ui.input_numeric("panel_font_size", "Panel title font size", value=initial("panel_font_size", 14), min=6, max=72))
                                 if backend == "matplotlib" else ui.help_text("Panel formatting is available with the Matplotlib backend."))),
                         id="right_sidebar_tabs"), class_="summary-sidebar-tabs"),
@@ -430,6 +483,187 @@ def create_summary_app(
                         values = values.loc[current.index]
                 return current
 
+            # Individual editors: original labels are stable keys, never parsed
+            # from user-entered text. Changes invalidate only figure styling.
+            import hashlib
+            _label_fields = ("legend_labels", "panel_titles", "x_tick_labels", "y_tick_labels")
+            _label_keys = {name: reactive.value(()) for name in _label_fields}
+            _label_values = {name: reactive.value({}) for name in _label_fields}
+
+            def _set_label_keys(field, keys):
+                keys = tuple(dict.fromkeys(str(k) for k in keys if str(k).strip()))
+                with reactive.isolate():
+                    previous = _label_keys[field].get()
+                if keys != previous:
+                    _label_keys[field].set(keys)
+
+            def _label_string(field):
+                # Internal adapter for the existing renderer/export APIs.
+                keys = _label_keys[field].get()
+                values = _label_values[field].get()
+                return "; ".join(f"{key}={values.get(key, key)}" for key in keys
+                                 if values.get(key, key) != key)
+
+            for _field in _label_fields:
+                def _make_editor(field):
+                    @output(id=f"{field}_editor")
+                    @render.ui
+                    def _editor():
+                        keys = _label_keys[field].get()
+                        with reactive.isolate():
+                            values = _label_values[field].get()
+                        headings = {
+                            "legend_labels": "Legend labels",
+                            "panel_titles": "Panel titles",
+                            "x_tick_labels": "X tick labels",
+                            "y_tick_labels": "Y tick labels",
+                        }
+                        return ui.div(
+                            ui.h6(headings[field]),
+                            *[
+                                ui.input_text(
+                                    f"edit_{field}_{hashlib.sha1(key.encode()).hexdigest()[:16]}",
+                                    None, value=values.get(key, key)) for key in keys
+                            ] if keys else [ui.help_text("No displayed labels")],
+                        )
+                _make_editor(_field)
+
+                def _make_watcher(field):
+                    @reactive.effect
+                    def _watch():
+                        keys = _label_keys[field].get()
+                        # Read current mappings without subscribing this watcher to
+                        # its own writes: otherwise each keystroke can retrigger it.
+                        with reactive.isolate():
+                            updated = dict(_label_values[field].get())
+                        changed = False
+                        for key in keys:
+                            ident = f"edit_{field}_{hashlib.sha1(key.encode()).hexdigest()[:16]}"
+                            value = _optional_input(ident, None)
+                            if value is not None and updated.get(key, key) != value:
+                                updated[key] = value
+                                changed = True
+                        if changed:
+                            _label_values[field].set(updated)
+                _make_watcher(_field)
+
+            # Colour keys describe the actual colour encoding, not the number
+            # of categorical boxes/points.  Facet variables are removed before
+            # determining the active within-panel grouping.
+            from .color_editor import active_color_keys, color_defaults, valid_hex_color
+            _color_keys = reactive.value(())
+            _color_values = reactive.value({})
+
+            def _color_string():
+                keys = _color_keys.get()
+                values = _color_values.get()
+                return "; ".join(f"{key}={values[key]}" for key in keys if key in values)
+
+            # Each rendered colour key has a stable swatch button. The popup
+            # itself is mounted only on demand, avoiding text-input remounts
+            # and the feedback loop previously seen in the label editors.
+            _picker_key = reactive.value(None)
+            _picker_defaults = ("#636EFA", "#EF553B", "#00CC96", "#AB63FA",
+                                "#FFA15A", "#19D3F3", "#FF6692", "#B6E880",
+                                "#FF97FF", "#FECB52", "#000000", "#FFFFFF")
+
+            @output(id="trace_colors_editor")
+            @render.ui
+            def trace_colors_editor():
+                keys = _color_keys.get()
+                values = _color_values.get()
+                with reactive.isolate():
+                    palette = _optional_input("palette", "Default")
+                    spec = prepared_plot()
+                    defaults = color_defaults(spec, keys, palette)
+                return ui.div(
+                    ui.h6("Trace colors"),
+                    *[ui.div(
+                        ui.tags.span(k, class_="summary-color-name", title=k),
+                        ui.input_action_button(
+                            f"pick_trace_color_{hashlib.sha1(k.encode()).hexdigest()[:16]}",
+                            ui.tags.span(
+                                ui.tags.span("", class_="summary-color-swatch",
+                                             style=f"background-color:{values.get(k, defaults.get(k, '#636efa'))}"),
+                                ui.tags.span(values.get(k, defaults.get(k, "#636efa")),
+                                             class_="summary-color-hex"),
+                            ),
+                            class_="summary-color-trigger btn btn-outline-secondary btn-sm"),
+                        class_="summary-color-row") for k in keys]
+                    if keys else [ui.help_text("No coloured elements")],
+                )
+
+            _picker_click_counts = {}
+            @reactive.effect
+            def _watch_picker_buttons():
+                keys = _color_keys.get()
+                clicked = None
+                for key in keys:
+                    field = f"pick_trace_color_{hashlib.sha1(key.encode()).hexdigest()[:16]}"
+                    count = int(_optional_input(field, 0) or 0)
+                    previous = _picker_click_counts.get(key, 0)
+                    if count > previous:
+                        clicked = key
+                    _picker_click_counts[key] = count
+                if clicked is None:
+                    return
+                with reactive.isolate():
+                    values = _color_values.get()
+                    defaults = color_defaults(prepared_plot(), (clicked,),
+                                              _optional_input("palette", "Default"))
+                    current = values.get(clicked, defaults.get(clicked, "#636efa"))
+                _picker_key.set(clicked)
+                ui.modal_show(ui.modal(
+                    ui.p(f"Choose colour for {clicked}"),
+                    ui.tags.input(type="color", value=current,
+                                  class_="summary-native-color-picker",
+                                  **{"data-hex-target": session.ns("picker_hex")}),
+                    ui.input_text("picker_hex", "Hex colour", value=current),
+                    ui.div(*[ui.tags.button("", type="button",
+                        class_="summary-color-preset",
+                        title=color, style=f"background-color:{color}",
+                        **{"data-color-value": color,
+                           "data-hex-target": session.ns("picker_hex")})
+                        for color in _picker_defaults],
+                        class_="summary-color-presets"),
+                    title="Trace colour", easy_close=True,
+                    footer=ui.div(ui.modal_button("Cancel"),
+                        ui.input_action_button("picker_apply", "Apply colour",
+                                               class_="btn-primary")),
+                ))
+
+            @reactive.effect
+            @reactive.event(input.picker_apply)
+            def _apply_picked_color():
+                key = _picker_key.get()
+                value = str(_optional_input("picker_hex", "")).strip()
+                if key is not None and valid_hex_color(value):
+                    with reactive.isolate():
+                        values = dict(_color_values.get())
+                    values[key] = value.upper()
+                    _color_values.set(values)
+                    ui.modal_remove()
+                else:
+                    ui.notification_show("Enter a valid six-digit hex colour (#RRGGBB).",
+                                         type="error", duration=4)
+
+            @reactive.effect
+            def _sync_color_keys():
+                spec = prepared_plot()
+                if "error" in spec:
+                    keys = ()
+                else:
+                    groups = list(input.group_by() or [])
+                    faceted = backend == "matplotlib" and bool(groups) and bool(_optional_input("multi_panel", False))
+                    panel_by = ((list(_optional_input("panel_by", []) or []) or groups)
+                                if faceted and len(groups) > 1 else groups if faceted else [])
+                    keys = active_color_keys(spec, mode=_optional_input("multi_y_color_by", "group"),
+                                             panel_by=panel_by)
+                with reactive.isolate():
+                    previous = _color_keys.get()
+                if keys != previous:
+                    _color_keys.set(keys)
+
             @reactive.effect
             @reactive.event(input.export_csv)
             def show_export_dialog():
@@ -503,14 +737,14 @@ def create_summary_app(
                     multiple = False
                 else:
                     choices = numeric_columns
-                    multiple = False
+                    multiple = kind in ("scatter", "histogram")
 
                 if not choices:
                     return ui.help_text(f"No compatible X variables for {kind}.")
                 selected = initial_filters.get("x", [])
                 if multiple:
                     return ui.input_selectize(
-                        "x", "X-axis / categories",
+                        "x", "X-axis / variables" if kind in ("scatter", "histogram") else "X-axis / categories",
                         choices={c: c for c in choices},
                         selected=selected, multiple=True,
                     )
@@ -527,13 +761,6 @@ def create_summary_app(
                     return ui.div()
                 if not numeric_columns:
                     return ui.help_text("No numeric Y variables available.")
-                selected = ""
-                if kind in ("box", "bar", "scatter"):
-                    return ui.input_select(
-                        "y", "Y-axis / variable",
-                        choices={"": "None", **{c: c for c in numeric_columns}},
-                        selected=initial_filters.get("y", ""),
-                    )
                 return ui.input_selectize(
                     "y", "Y-axis / variables",
                     choices={c: c for c in numeric_columns},
@@ -639,9 +866,9 @@ def create_summary_app(
                         if column_map[c] not in grouping_by:
                             grouping_by.append(column_map[c])
                 if kind == "scatter" and should_aggregate:
-                    # Both numerical axes must be aggregated on the same rows.
+                    # Every X and Y variable must be aggregated on identical rows.
                     value_columns = list(dict.fromkeys(
-                        [column_map[selected_x[0]], *value_columns]
+                        [*(column_map[c] for c in selected_x), *value_columns]
                     ))
                 if (kind == "line" and selected_x[0] in timedelta_columns
                         and should_aggregate):
@@ -667,7 +894,7 @@ def create_summary_app(
                 return current
 
             @reactive.calc
-            def prepared_plot():
+            def unfiltered_plot():
                 # Validate before evaluating selected_data(), since invalid
                 # aggregation options must not poison reactive calculations.
                 if (AGGREGATES.get(input.aggregate()) is not None
@@ -704,10 +931,10 @@ def create_summary_app(
                 elif selected_plot in ("box", "bar"):
                     x_columns = [column_map[c] for c in selected_x]
                     x_column = x_columns[0]
-                    y_columns = [mapped(selected_y[0])]
+                    y_columns = [mapped(c) for c in selected_y]
                 elif selected_plot == "scatter":
                     x_column = mapped(selected_x[0])
-                    y_columns = [mapped(selected_y[0])]
+                    y_columns = [mapped(c) for c in selected_y]
                 else:
                     x_column = (column_map[selected_x[0]] if selected_x[0] in timedelta_columns
                                 else frequency if frequency is not None
@@ -717,11 +944,20 @@ def create_summary_app(
                 if selected_plot == "line" and should_aggregate and frequency is None:
                     return {"error": "Categorical-only aggregation has no datetime axis; use a bar plot or select a frequency"}
 
-                required = [x_column, *y_columns]
+                x_variables = [mapped(c) for c in selected_x] if selected_plot in ("scatter", "histogram") else [x_column]
+                required = [*x_variables, *y_columns]
                 if selected_plot in ("box", "bar"):
                     required.extend(x_columns)
                 if any(c not in plot_df.columns for c in required):
                     return {"error": "Selected variables are unavailable after aggregation"}
+
+                if selected_plot == "histogram" and len(x_variables) > 1:
+                    from .histogram_multi import histogram_long_data
+                    plot_df = histogram_long_data(plot_df, x_variables, group_columns=[
+                        column_map[c] for c in selected_groups if column_map[c] in plot_df.columns
+                    ])
+                    x_column = "__hist_value"
+                    x_label_override = " | ".join(x_variables)
 
                 if selected_plot in ("box", "bar"):
                     plot_df = plot_df.copy(deep=False)
@@ -755,7 +991,71 @@ def create_summary_app(
                 return {"data": plot_df, "kind": selected_plot, "x": x_column,
                         "ys": y_columns, "groups": group_columns,
                         "categories": x_columns if selected_plot in ("box", "bar") else None,
-                        "frequency": frequency, "x_label_override": x_label_override}
+                        "frequency": frequency, "x_label_override": x_label_override,
+                        "x_variables": x_variables,
+                        "hist_variables": x_variables if selected_plot == "histogram" and len(x_variables) > 1 else [],
+                        "multi_axis": (selected_plot in ("box", "bar") and len(y_columns) > 1)
+                            or (selected_plot == "scatter" and (len(x_variables) > 1 or len(y_columns) > 1))}
+
+            @reactive.calc
+            def available_elements():
+                return element_keys(unfiltered_plot())
+
+            # Visibility is owned by the plot, not by the dynamically mounted
+            # checkbox widget. Rebuilding the widget must not feed back into
+            # its own render dependency (which previously caused a render loop).
+            inherited_visible = initial_filters.get("visible_elements")
+            visible_element_selection = reactive.Value(
+                tuple(inherited_visible) if inherited_visible is not None else None
+            )
+            element_key_signature = reactive.Value(None)
+
+            @reactive.effect
+            def reset_visibility_for_new_elements():
+                keys = tuple(available_elements())
+                with reactive.isolate():
+                    previous = element_key_signature.get()
+                if previous != keys:
+                    if previous is not None:
+                        visible_element_selection.set(tuple(default_visible_keys(unfiltered_plot())))
+                    element_key_signature.set(keys)
+
+            @render.ui
+            def element_visibility_ui():
+                keys = tuple(available_elements())
+                with reactive.isolate():
+                    current = visible_element_selection.get()
+                    chosen = (tuple(default_visible_keys(unfiltered_plot())) if current is None else
+                              tuple(k for k in current if k in keys))
+                if not keys:
+                    return ui.help_text("No plotted elements available")
+                return ui.input_checkbox_group(
+                    "visible_elements", "Visible plotted elements",
+                    choices={key: key for key in keys}, selected=list(chosen),
+                )
+
+            @reactive.effect
+            @reactive.event(input.visible_elements, ignore_init=True)
+            def sync_visible_elements():
+                chosen = _optional_input("visible_elements", None)
+                if chosen is None:
+                    return
+                keys = tuple(available_elements())
+                chosen = tuple(k for k in chosen if k in keys)
+                with reactive.isolate():
+                    current = visible_element_selection.get()
+                    effective = tuple(default_visible_keys(unfiltered_plot())) if current is None else current
+                if chosen != effective:
+                    visible_element_selection.set(chosen)
+
+            @reactive.calc
+            def prepared_plot():
+                raw = unfiltered_plot()
+                keys = tuple(available_elements())
+                chosen = visible_element_selection.get()
+                if chosen is None:
+                    chosen = tuple(default_visible_keys(raw))
+                return filter_elements(raw, chosen)
 
             @reactive.calc
             def base_figure():
@@ -764,21 +1064,30 @@ def create_summary_app(
                 if "error" in spec:
                     return px.scatter(title=spec["error"])
                 plot_df = spec["data"]
+                if plot_df.empty:
+                    return px.scatter(title="No visible plot elements")
                 selected_plot = spec["kind"]
                 x_column = spec["x"]
                 y_columns = spec["ys"]
                 group_columns = spec["groups"]
                 frequency = spec["frequency"]
                 x_columns = spec["categories"]
-                if selected_plot == "histogram":
+                if spec.get("multi_axis"):
+                    from .multi_axis import plotly_multi_axis
+                    fig = plotly_multi_axis(spec, mode=_optional_input("multi_y_color_by", "group"),
+                                            palette=input.palette(), legend_labels=_label_string("legend_labels"),
+                                            trace_colors=_color_string())
+                elif selected_plot == "histogram":
                     fig = _histogram_figure(
                         plot_df, x_column,
-                        group_column="__plot_group" if group_columns else None,
+                        group_column="__hist_series" if spec.get("hist_variables") else
+                                     ("__plot_group" if group_columns else None),
                         bins=int(input.bins()),
                         density=input.hist_density() == "True",
                         stacked=input.hist_stacked() == "True",
                         histtype=input.hist_type(),
                         cumulative=int(input.hist_cumulative()),
+                        overlay=bool(spec.get("hist_variables")),
                     )
                 elif selected_plot == "box":
                     fig = _boxplot_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
@@ -789,7 +1098,13 @@ def create_summary_app(
                 else:
                     fig = _lineplot_figure(plot_df, x_column, y_columns, group_columns=group_columns, frequency=frequency, column_map=column_map)
 
-                if not group_columns:
+                # A removed group/variable must not leave an empty Plotly trace
+                # or a legend entry behind.
+                if selected_plot == "line":
+                    fig.data = tuple(trace for trace in fig.data
+                                     if getattr(trace, "y", None) is not None
+                                     and any(pd.notna(v) for v in trace.y))
+                if not group_columns and not spec.get("multi_axis") and not spec.get("hist_variables"):
                     # Retain trace names/colours for appearance editing, but
                     # suppress the redundant ungrouped legend.
                     fig.update_traces(showlegend=False)
@@ -800,6 +1115,12 @@ def create_summary_app(
                     category_columns=x_columns if selected_plot in ("box", "bar") else None,
                     x_label_override=spec.get("x_label_override"),
                 )
+                if spec.get("multi_axis"):
+                    from .appearance import _axis_label
+                    if selected_plot == "scatter" and len(spec["x_variables"]) > 1:
+                        fig.update_xaxes(title_text="<br>".join(_axis_label(c) for c in spec["x_variables"]))
+                    if len(y_columns) > 1:
+                        fig.update_yaxes(title_text="<br>".join(_axis_label(c) for c in y_columns))
                 fig.update_layout(
                     hovermode="x unified" if selected_plot == "line" else "closest",
                     margin=dict(l=60, r=30, t=70, b=60),
@@ -815,6 +1136,7 @@ def create_summary_app(
                             lambda: tuple(_optional_input("panel_by", []) or []) if input.group_by() and len(input.group_by()) > 1 else (),
                             lambda: _optional_input("independent_panel_limits", True) if input.group_by() and _optional_input("multi_panel", False) else True, ignore_none=False)
             def populate_appearance_from_plot():
+                from .appearance import _parse_label_map
                 spec = prepared_plot()
                 if "error" in spec:
                     return
@@ -844,7 +1166,7 @@ def create_summary_app(
                     stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
                     cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
                 )
-                if spec["kind"] == "box" and not input.box_showfliers():
+                if spec["kind"] == "box" and not spec.get("multi_axis") and not input.box_showfliers():
                     from .data import _box_whisker_limits
                     box_groups = [spec["x"]] + (["__plot_group"] if spec["groups"] else [])
                     whiskers = _box_whisker_limits(spec["data"], spec["ys"][0], box_groups)
@@ -865,7 +1187,7 @@ def create_summary_app(
                         cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
                     )
                     if panel_bounds:
-                        if spec["kind"] == "box" and not input.box_showfliers():
+                        if spec["kind"] == "box" and not spec.get("multi_axis") and not input.box_showfliers():
                             from .data import _box_whisker_limits
                             panel_groups = [spec["x"]] + (["__plot_group"] if spec["groups"] else [])
                             axis = "x" if input.box_orientation() == "horizontal" else "y"
@@ -880,81 +1202,95 @@ def create_summary_app(
                         ui.update_text_area(field, value=value)
                     else:
                         ui.update_text(field, value=value)
-                ui.update_text_area("legend_labels", value="; ".join(
-                    f"{name}={name}" for name in names))
-                ui.update_text_area("trace_colors", value="; ".join(
-                    f"{name}={defaults['colors'][name]}" for name in names))
+                # Legend labels are maintained by the rendered-figure observer
+                # below, not predicted from the plot specification.
+                names = list(dict.fromkeys(str(n) for n in names))
+                # Trace-colour editor keys are synced independently from the
+                # active plot and never reset by appearance defaults.
                 kind = spec["kind"]
                 if kind == "line":
-                    ui.update_text_area("line_alpha", value="; ".join(f"{name}=1" for name in names))
-                    ui.update_text_area("line_style", value="; ".join(f"{name}=solid" for name in names))
+                    ui.update_text_area("line_alpha", value="\n".join(f"{name}=1" for name in names))
+                    ui.update_text_area("line_style", value="\n".join(f"{name}=solid" for name in names))
                 elif kind == "histogram":
-                    ui.update_text_area("hist_alpha", value="; ".join(f"{name}=0.65" for name in names))
+                    ui.update_text_area("hist_alpha", value="\n".join(f"{name}=0.65" for name in names))
                 elif kind == "scatter":
-                    ui.update_text_area("scatter_size", value="; ".join(f"{name}=7" for name in names))
-                    ui.update_text_area("scatter_marker", value="; ".join(f"{name}=dot" for name in names))
-                    ui.update_text_area("scatter_alpha", value="; ".join(f"{name}=1" for name in names))
+                    ui.update_text_area("scatter_size", value="\n".join(f"{name}=7" for name in names))
+                    ui.update_text_area("scatter_marker", value="\n".join(f"{name}=dot" for name in names))
+                    ui.update_text_area("scatter_alpha", value="\n".join(f"{name}=1" for name in names))
                 if backend == "matplotlib":
                     panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
                                        else selected_groups)
-                    panel_names = ([name for name, _, _ in _panel_partitions(spec, panel_variables)]
+                    panel_names = (list(dict.fromkeys(name for name, part, _ in _panel_partitions(spec, panel_variables)
+                                                        if not part.empty))
                                    if selected_groups and bool(_optional_input("multi_panel", False)) else [])
-                    ui.update_text_area("panel_titles", value="; ".join(
-                        f"{name}={name}" for name in panel_names))
+                    _set_label_keys("panel_titles", panel_names)
 
             @reactive.effect
-            @reactive.event(input.box_showfliers, input.box_orientation, ignore_init=True)
+            @reactive.event(input.box_showfliers, input.box_orientation,
+                            input.multi_panel, input.independent_panel_limits,
+                            input.panel_by, ignore_init=True)
             def update_box_axis_for_fliers():
-                """Refresh only the boxplot value-axis bounds when fliers change."""
+                """Recompute both axes after orientation, outlier or facet changes.
+
+                The category axis must never inherit a numeric data range from
+                the previous orientation. Facet limits are recomputed from the
+                actual partition, not from the preceding single-panel view.
+                """
                 spec = prepared_plot()
                 if spec.get("kind") != "box" or "error" in spec:
                     return
-                axis = "x" if input.box_orientation() == "horizontal" else "y"
-                if input.box_showfliers():
-                    vals = pd.to_numeric(spec["data"][spec["ys"][0]], errors="coerce")
+                from .data import _box_whisker_limits
+
+                horizontal = input.box_orientation() == "horizontal"
+                value_axis = "x" if horizontal else "y"
+                category_axis = "y" if horizontal else "x"
+
+                def box_bounds(frame, grouped):
+                    vals = pd.to_numeric(frame[spec["ys"][0]], errors="coerce")
                     vals = vals[np.isfinite(vals.to_numpy(dtype=float, na_value=np.nan))]
                     if vals.empty:
-                        return
-                    lo, hi = float(vals.min()), float(vals.max())
-                    pad = .05 * (hi - lo) if hi > lo else max(abs(lo) * .05, .5)
-                    limits = [lo - pad, hi + pad]
-                else:
-                    from .data import _box_whisker_limits
-                    grouping = [spec["x"]] + (["__plot_group"] if spec["groups"] else [])
-                    limits = _box_whisker_limits(spec["data"], spec["ys"][0], grouping)
-                if limits is None:
-                    return
-                if (backend == "matplotlib" and input.group_by()
-                        and bool(_optional_input("multi_panel", False))
-                        and bool(_optional_input("independent_panel_limits", True))):
-                    groups = list(input.group_by() or [])
+                        return None
+                    if input.box_showfliers():
+                        low, high = float(vals.min()), float(vals.max())
+                    else:
+                        group_cols = [spec["x"]] + (["__plot_group"] if grouped else [])
+                        whiskers = _box_whisker_limits(frame, spec["ys"][0], group_cols)
+                        if whiskers is None:
+                            return None
+                        low, high = map(float, whiskers)
+                    margin = .05 * (high - low) if high > low else max(abs(low) * .05, .5)
+                    return (low - margin, high + margin)
+
+                groups = list(input.group_by() or [])
+                panels = (backend == "matplotlib" and groups
+                          and bool(_optional_input("multi_panel", False))
+                          and bool(_optional_input("independent_panel_limits", True)))
+                if panels:
                     panel_by = ((list(_optional_input("panel_by", []) or []) or groups)
                                 if len(groups) > 1 else groups)
-                    from .data import _box_whisker_limits
-                    panel_values = {}
-                    for panel_title, part, remaining in _panel_partitions(spec, panel_by):
-                        if input.box_showfliers():
-                            vals = pd.to_numeric(part[spec["ys"][0]], errors="coerce")
-                            vals = vals[np.isfinite(vals.to_numpy(dtype=float, na_value=np.nan))]
-                            if vals.empty:
-                                continue
-                            lo, hi = float(vals.min()), float(vals.max())
-                            pad = .05 * (hi - lo) if hi > lo else max(abs(lo) * .05, .5)
-                            panel_values[panel_title] = [lo - pad, hi + pad]
-                        else:
-                            group_cols = [spec["x"]] + (["__plot_group"] if remaining else [])
-                            panel_values[panel_title] = _box_whisker_limits(part, spec["ys"][0], group_cols)
-                    panel_values = {name: val for name, val in panel_values.items() if val is not None}
-                    if panel_values:
-                        for idx, key in enumerate((f"{axis}_min", f"{axis}_max")):
-                            ui.update_text_area(key, value="\n".join(
-                                f"{name}={values[idx]}" for name, values in panel_values.items()))
-                        return
-                for key, value in zip((f"{axis}_min", f"{axis}_max"), limits):
+                    parts = _panel_partitions(spec, panel_by)
+                    values = {name: box_bounds(part, remaining)
+                              for name, part, remaining in parts}
+                    values = {name: bounds for name, bounds in values.items() if bounds is not None}
+                    if values:
+                        for index, suffix in enumerate(("min", "max")):
+                            ui.update_text_area(f"{value_axis}_{suffix}", value="\n".join(
+                                f"{name}={bounds[index]}" for name, bounds in values.items()))
+                else:
+                    bounds = box_bounds(spec["data"], spec["groups"])
+                    if bounds is not None:
+                        for suffix, value in zip(("min", "max"), bounds):
+                            if backend == "matplotlib":
+                                ui.update_text_area(f"{value_axis}_{suffix}", value=str(value))
+                            else:
+                                ui.update_text(f"{value_axis}_{suffix}", value=str(value))
+                # Categorical positions are determined by the renderer.
+                # Clearing these prevents old numeric limits from clipping them.
+                for suffix in ("min", "max"):
                     if backend == "matplotlib":
-                        ui.update_text_area(key, value=str(value))
+                        ui.update_text_area(f"{category_axis}_{suffix}", value="")
                     else:
-                        ui.update_text(key, value=str(value))
+                        ui.update_text(f"{category_axis}_{suffix}", value="")
 
             @reactive.effect
             @reactive.event(input.plot_type, ignore_init=True)
@@ -979,8 +1315,9 @@ def create_summary_app(
                         ui.update_text_area(field, value="")
                     else:
                         ui.update_text(field, value="")
-                for field in ("legend_labels", "trace_colors"):
-                    ui.update_text_area(field, value="")
+                for field in ("legend_labels", "x_tick_labels", "y_tick_labels", "panel_titles"):
+                    _set_label_keys(field, ())
+                _color_keys.set(())
                 ui.update_select("palette", selected="Default")
                 ui.update_select("template", selected="plotly")
                 ui.update_select("legend_position", selected="right")
@@ -1051,6 +1388,116 @@ def create_summary_app(
                 def _decrease_plot_dpi():
                     _change_dpi(-25)
 
+            # The figure renderer is the source of truth for legend entries.
+            # Store original keys, not renamed display strings, to avoid
+            # feedback loops when the user edits the mapping.
+            rendered_legend_keys = reactive.value(())
+
+            def _capture_legend(fig, is_plotly=False):
+                from .appearance import _parse_label_map
+                with reactive.isolate():
+                    mapping = _parse_label_map(_label_string("legend_labels"))
+                reverse = {v: k for k, v in mapping.items() if v != k}
+                if is_plotly:
+                    if getattr(fig.layout, "showlegend", None) is False:
+                        labels = []
+                    else:
+                        labels = [str(t.name) for t in fig.data
+                                  if getattr(t, "showlegend", None) is True and t.name]
+                else:
+                    legends = list(getattr(fig, "legends", []))
+                    legends += [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None]
+                    labels = [txt.get_text() for leg in legends for txt in leg.get_texts()]
+                keys = tuple(dict.fromkeys(reverse.get(label, label) for label in labels
+                    if label.strip() and label not in ("Y variable", "Grouping", "Legend", "All observations")))
+                with reactive.isolate():
+                    old = rendered_legend_keys.get()
+                if keys != old:
+                    rendered_legend_keys.set(keys)
+
+            @reactive.effect
+            def _refresh_labels_from_rendered_legend():
+                keys = rendered_legend_keys.get()
+                _set_label_keys("legend_labels", keys)
+
+            # Tick editors are populated from the actual axes after the plot
+            # renderer has finished choosing tick positions and categories.
+            # Keep the unmodified keys separate from user-visible replacements.
+            rendered_tick_keys = reactive.value(((), ()))
+
+            def _capture_ticks(fig, is_plotly=False):
+                if is_plotly:
+                    keys = []
+                    for axis_name in ("xaxis", "yaxis"):
+                        axis = getattr(fig.layout, axis_name)
+                        if axis.tickmode == "array" and axis.ticktext:
+                            labels = tuple(map(str, axis.ticktext))
+                        elif axis.type == "category" and axis.categoryarray:
+                            labels = tuple(map(str, axis.categoryarray))
+                        else:
+                            # Plotly chooses automatic numeric ticks in the
+                            # browser, not in the Python figure.
+                            labels = ()
+                        keys.append(tuple(dict.fromkeys(labels)))
+                    keys = tuple(keys)
+                else:
+                    fig.canvas.draw()
+                    keys = tuple(tuple(dict.fromkeys(
+                        text.get_text() for ax in fig.axes if ax.get_visible()
+                        for text in (ax.get_xticklabels() if direction == "x" else ax.get_yticklabels())
+                        if text.get_text().strip()
+                    )) for direction in ("x", "y"))
+                with reactive.isolate():
+                    previous = rendered_tick_keys.get()
+                if keys != previous:
+                    rendered_tick_keys.set(keys)
+
+            @reactive.effect
+            def _refresh_tick_editors():
+                xkeys, ykeys = rendered_tick_keys.get()
+                _set_label_keys("x_tick_labels", xkeys)
+                _set_label_keys("y_tick_labels", ykeys)
+
+            def _apply_matplotlib_tick_labels(fig):
+                from .appearance import _parse_label_map
+                from matplotlib.ticker import FixedLocator, FixedFormatter
+                maps = tuple(_parse_label_map(_label_string(field))
+                             for field in ("x_tick_labels", "y_tick_labels"))
+                if not any(maps):
+                    return
+                # A fixed locator preserves the exact tick positions chosen
+                # by Matplotlib, while the formatter changes text only.
+                for ax in fig.axes:
+                    for axis, mapping in zip((ax.xaxis, ax.yaxis), maps):
+                        if not mapping:
+                            continue
+                        positions = axis.get_majorticklocs()
+                        labels = [label.get_text() for label in axis.get_ticklabels()]
+                        if len(positions) == len(labels):
+                            axis.set_major_locator(FixedLocator(positions))
+                            axis.set_major_formatter(FixedFormatter(
+                                [mapping.get(label, label) for label in labels]))
+
+            def _apply_plotly_tick_labels(fig):
+                from .appearance import _parse_label_map
+                maps = tuple(_parse_label_map(_label_string(field))
+                             for field in ("x_tick_labels", "y_tick_labels"))
+                for axis_name, mapping in zip(("xaxis", "yaxis"), maps):
+                    if not mapping:
+                        continue
+                    axis = getattr(fig.layout, axis_name)
+                    if axis.tickmode == "array" and axis.tickvals:
+                        original = list(axis.ticktext or [str(v) for v in axis.tickvals])
+                        axis.ticktext = [mapping.get(str(t), str(t)) for t in original]
+                    else:
+                        # Plotly category tick positions are category strings.
+                        # Explicit tick arrays avoid changing category order.
+                        values = list(axis.categoryarray or ())
+                        if values:
+                            axis.tickmode = "array"
+                            axis.tickvals = values
+                            axis.ticktext = [mapping.get(str(v), str(v)) for v in values]
+
             if backend == "plotly":
                 @reactive.calc
                 def styled_plotly_figure():
@@ -1058,8 +1505,8 @@ def create_summary_app(
                     fig = go.Figure(base_figure())
                     styled = _apply_plot_appearance(
                         fig, title=input.title(), x_label=input.x_axis_label(),
-                        y_label=input.y_axis_label(), legend_labels=input.legend_labels(),
-                        trace_colors=input.trace_colors(), palette=input.palette(),
+                        y_label=input.y_axis_label(), legend_labels=_label_string("legend_labels"),
+                        trace_colors=_color_string(), palette=input.palette(),
                         x_min=input.x_min(), x_max=input.x_max(),
                         y_min=input.y_min(), y_max=input.y_max(),
                         template=input.template(), legend_position=input.legend_position(),
@@ -1075,11 +1522,29 @@ def create_summary_app(
                         scatter_size=input.scatter_size(), scatter_marker=input.scatter_marker(),
                         scatter_alpha=input.scatter_alpha(), plot_kind=input.plot_type(),
                     )
+                    if input.plot_type() in ("bar", "box"):
+                        from .plotly_renderer import _set_bar_box_width
+                        _set_bar_box_width(styled, input.plot_type(), float(input.bar_box_width()))
+                    if prepared_plot().get("multi_axis"):
+                        # The generic appearance helper applies palette colours
+                        # per trace and resets scatter symbols. Preserve the
+                        # multi-variable colour/shape mapping after styling.
+                        original = base_figure()
+                        for target, source in zip(styled.data, original.data):
+                            if getattr(source, "marker", None) is not None:
+                                if source.marker.color is not None:
+                                    target.marker.color = source.marker.color
+                                if getattr(source.marker, "symbol", None) is not None:
+                                    target.marker.symbol = source.marker.symbol
+                                if getattr(source.marker, "pattern", None) is not None:
+                                    target.marker.pattern = source.marker.pattern
+                            if getattr(source, "line", None) is not None and source.line.color is not None:
+                                target.line.color = source.line.color
                     if input.plot_type() == "line" and len(prepared_plot().get("ys", [])) > 1:
                         from .plotly_renderer import _style_multi_y_legend
                         _style_multi_y_legend(styled, prepared_plot(), input.multi_y_color_by(),
-                                              input.palette(), input.trace_colors(), input.line_style(),
-                                              input.legend_labels())
+                                              input.palette(), _color_string(), input.line_style(),
+                                              _label_string("legend_labels"))
                     if input.plot_type() == "box" and not input.box_showfliers():
                         from .data import _box_whisker_limits
                         spec = prepared_plot()
@@ -1098,7 +1563,11 @@ def create_summary_app(
 
                 @render_plotly
                 def plot():
-                    return styled_plotly_figure()
+                    fig = styled_plotly_figure()
+                    _capture_legend(fig, is_plotly=True)
+                    _capture_ticks(fig, is_plotly=True)
+                    _apply_plotly_tick_labels(fig)
+                    return fig
             else:
                 @reactive.calc
                 def matplotlib_options():
@@ -1106,7 +1575,7 @@ def create_summary_app(
                     # including per-panel overrides, are reproduced exactly.
                     return dict(title=_optional_input("title", ""),
                         x_label=_optional_input("x_axis_label", ""), y_label=_optional_input("y_axis_label", ""),
-                        legend_labels=_optional_input("legend_labels", ""), trace_colors=_optional_input("trace_colors", ""),
+                        legend_labels=_label_string("legend_labels"), trace_colors=_color_string(),
                         palette=_optional_input("palette", "Default"), x_min=_optional_input("x_min", ""), x_max=_optional_input("x_max", ""),
                         y_min=_optional_input("y_min", ""), y_max=_optional_input("y_max", ""), template=_optional_input("template", "plotly"),
                         legend_position=_optional_input("legend_position", "right"), legend_inside=_optional_input("legend_inside", False),
@@ -1119,6 +1588,7 @@ def create_summary_app(
                         tick_font_size=_optional_input("tick_font_size", 10), legend_font_size=_optional_input("legend_font_size", 12),
                         panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
                         box_showfliers=_optional_input("box_showfliers", True), box_orientation=_optional_input("box_orientation", "vertical"),
+                        bar_box_width=float(_optional_input("bar_box_width", 1.0)),
                         line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2), line_alpha=_optional_input("line_alpha", ""),
                         line_style=_optional_input("line_style", ""), scatter_size=_optional_input("scatter_size", ""),
                         scatter_marker=_optional_input("scatter_marker", ""), scatter_alpha=_optional_input("scatter_alpha", ""),
@@ -1134,7 +1604,10 @@ def create_summary_app(
                         ),
                         independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
                                                   if input.group_by() and _optional_input("multi_panel", False) else True),
-                        panel_titles=(_optional_input("panel_titles", "") if input.group_by() and _optional_input("multi_panel", False) else ""),                    )
+                        panel_titles=(_label_string("panel_titles") if input.group_by() and _optional_input("multi_panel", False) else ""),
+                        panel_hspace=float(_optional_input("panel_hspace", 0.90) or 0),
+                        panel_wspace=float(_optional_input("panel_wspace", 0.38) or 0),
+                    )
 
                 @render.download(filename="plot_export.zip", media_type="application/zip")
                 def export_python():
@@ -1153,25 +1626,29 @@ def create_summary_app(
 
                 @render.plot
                 def plot():
-                    return _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+                    fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+                    _capture_legend(fig)
+                    _capture_ticks(fig)
+                    _apply_matplotlib_tick_labels(fig)
+                    return fig
 
             def snapshot():
                 keys = ("plot_type", "x", "y", "numeric_subset_columns", "datetime_start", "datetime_end",
                         "group_by", "frequency", "aggregate", "only_complete", "flooring_timestamp",
                         "palette", "template", "title", "title_font_size", "plot_dpi", "legend_position",
                         "legend_inside", "legend_labels", "legend_columns", "legend_font_size", "multi_y_color_by",
-                        "x_axis_label", "y_axis_label", "x_min", "x_max", "y_min", "y_max",
+                        "x_axis_label", "y_axis_label", "x_tick_labels", "y_tick_labels", "x_min", "x_max", "y_min", "y_max",
                         "show_grid", "x_major_ticks", "x_minor_ticks", "y_major_ticks",
-                        "y_minor_ticks", "axis_font_size", "tick_font_size", "trace_colors",
+                        "y_minor_ticks", "axis_font_size", "tick_font_size",
                         "line_width", "line_alpha", "line_style", "scatter_size", "scatter_marker",
                         "scatter_alpha", "bins", "hist_density", "hist_stacked", "hist_type",
-                        "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation",
+                        "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation", "bar_box_width",
                         "multi_panel", "independent_panel_limits", "panel_by", "panel_titles",
-                        "panel_font_size")
+                        "panel_font_size", "panel_hspace", "panel_wspace", "visible_elements")
                 result = dict(initial_filters)
                 for key in keys:
                     try:
-                        value = getattr(input, key)()
+                        value = (_label_string(key) if key in _label_fields else getattr(input, key)())
                         if value is not None:
                             result[key] = list(value) if isinstance(value, (list, tuple)) else value
                     except Exception:
@@ -1207,6 +1684,9 @@ def create_summary_app(
                         except Exception:
                             numeric_bounds[name][suffix] = initial_filters.get("numeric_subset_bounds", {}).get(name, {}).get(suffix, "")
                 result["numeric_subset_bounds"] = numeric_bounds
+                with reactive.isolate():
+                    chosen = visible_element_selection.get()
+                    result["visible_elements"] = list(default_visible_keys(unfiltered_plot()) if chosen is None else chosen)
                 return result
 
             # Expose the same dataframe that feeds plot preparation/export.

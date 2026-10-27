@@ -16,7 +16,9 @@ def _matplotlib_defaults(spec, *, palette="Default"):
     """Derive labels and series colours directly from prepared pandas data."""
     kind, df = spec["kind"], spec["data"]
     x, ys, groups = spec["x"], spec["ys"], spec["groups"]
-    names = ([str(v) for v in pd.unique(df["__plot_group"])]
+    names = ([str(v) for v in pd.unique(df["__hist_series"])]
+             if kind == "histogram" and spec.get("hist_variables") and "__hist_series" in df
+             else [str(v) for v in pd.unique(df["__plot_group"])]
              if groups and "__plot_group" in df else [])
     if not names and kind == "line" and len(ys) > 1:
         names = [str(y) for y in ys]
@@ -27,8 +29,10 @@ def _matplotlib_defaults(spec, *, palette="Default"):
     x_label = (" | ".join(_axis_label(c) for c in spec["categories"])
                if kind in ("box", "bar") else _axis_label(x))
     y_label = ("Probability density" if kind == "histogram" else
-               "\n".join(_axis_label(y) for y in ys) if kind == "line" and len(ys) > 1 else
+               "\n".join(_axis_label(y) for y in ys) if len(ys) > 1 else
                _axis_label(ys[0]) if ys else "Count")
+    if kind == "scatter" and len(spec.get("x_variables", [])) > 1:
+        x_label = "\n".join(_axis_label(c) for c in spec["x_variables"])
     x_label = spec.get("x_label_override") or x_label
     return dict(x_label=x_label, y_label=y_label, names=names, colors=colors)
 
@@ -43,6 +47,8 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
     if "error" in spec:
         return {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
     df, kind, x, ys = spec["data"], spec["kind"], spec["x"], spec["ys"]
+    if df.empty:
+        return {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
     bounds = {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
 
     def fill(axis, values):
@@ -147,6 +153,9 @@ def _panel_partitions(spec, panel_by):
     for value, part in spec["data"].groupby(grouper, sort=False, dropna=False):
         values = value if isinstance(value, tuple) else (value,)
         title = " | ".join("None" if pd.isna(v) else str(v) for v in values)
+        if spec.get("multi_axis") and spec["groups"] and "__plot_group" in part:
+            part = part.copy()
+            part["__plot_global_group"] = part["__plot_group"]
         if remaining:
             part = part.copy(deep=False)
             part["__plot_group"] = (_composite_labels(part, remaining))
@@ -262,7 +271,8 @@ def _fit_inside_legends(fig, axes, font_size=12, ncol=1):
                              pos.height * old_h / (old_h + extra_h) + extra_h / (old_h + extra_h)))
 
 
-def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1):
+def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1,
+                          panel_hspace=0.90, panel_wspace=0.38):
     """Use exactly the requested columns and reserve their measured footprint.
 
     A single legend is shared across panels. Only one full canvas draw is used
@@ -314,9 +324,9 @@ def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1):
         legend.set_bbox_to_anchor((.5, y), transform=fig.transFigure)
     legend.set_in_layout(False)
     if len(axes) > 1:
-        # Keep the legend reservation, but restore V77-like breathing room
+        # Keep the legend reservation, but reserve more breathing room
         # between facet axes.  This changes only the internal subplot gaps.
-        fig.subplots_adjust(wspace=0.34, hspace=0.44)
+        fig.subplots_adjust(wspace=panel_wspace, hspace=panel_hspace)
 
 def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               legend_labels="", trace_colors="", palette="Default",
@@ -325,11 +335,12 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               legend_inside=False, legend_columns=1, multi_y_color_by="group", show_grid=True, font_size=12,
                               line_width=2, marker_size=7, line_alpha="", line_style="",
                               scatter_size="", scatter_marker="", scatter_alpha="", hist_alpha="",
-                              box_showfliers=True, box_orientation="vertical",
+                              box_showfliers=True, box_orientation="vertical", bar_box_width=1.0,
                               title_font_size=14, axis_font_size=12, tick_font_size=10,
                               legend_font_size=12, panel_font_size=14, plot_dpi=100, bins=30, density=False,
                               stacked=False, histtype="bar", cumulative=0,
-                              panel_by=None, independent_panel_limits=True, panel_titles="", _axes=None,
+                              panel_by=None, independent_panel_limits=True, panel_titles="",
+                              panel_hspace=0.90, panel_wspace=0.38, _axes=None,
                               x_major_ticks=6, y_major_ticks=6, x_minor_ticks=False, y_minor_ticks=False):
     """Draw directly from the filtered/aggregated DataFrame, without Plotly."""
     import matplotlib
@@ -364,11 +375,12 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             plt.close(fig)
             ncols = (2 if len(partitions) == 4 else min(3, len(partitions)))
             nrows = math.ceil(len(partitions) / ncols)
-            fig, axes = plt.subplots(nrows, ncols, figsize=(5*ncols, 3.8*nrows), dpi=plot_dpi,
+            fig, axes = plt.subplots(nrows, ncols, figsize=(5.4*ncols, 4.7*nrows), dpi=plot_dpi,
                                      squeeze=False, sharex=False, sharey=False)
             for idx, (panel_title, panel_df, other_groups) in enumerate(partitions):
                 panel_spec = {**spec, "data": panel_df, "groups": other_groups,
-                              "_hide_ungrouped_legend": not bool(other_groups)}
+                              "_original_groups": spec["groups"],
+                              "_hide_ungrouped_legend": not bool(other_groups) and not bool(spec.get("hist_variables"))}
                 panel_ax = axes.flat[idx]
                 _matplotlib_direct_figure(panel_spec, title=panel_title_map.get(panel_title, panel_title), x_label=x_label,
                     y_label=y_label, legend_labels=legend_labels, trace_colors=trace_colors,
@@ -380,6 +392,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
                     scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
                     hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
+                    bar_box_width=bar_box_width,
                     title_font_size=panel_font_size, axis_font_size=axis_font_size,
                     tick_font_size=tick_font_size, legend_font_size=legend_font_size,
                     panel_font_size=panel_font_size, plot_dpi=plot_dpi,
@@ -394,15 +407,17 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     if panel_ax.get_legend() is not None:
                         panel_ax.get_legend().set_in_layout(False)
                 fig.tight_layout()
-                # V77 used tight_layout for facets; restore visible gutters
+                # V77 used tight_layout for facets; reserve generous gutters
                 # without changing V83's legend behaviour or column control.
-                fig.subplots_adjust(wspace=0.34, hspace=0.44)
+                fig.subplots_adjust(wspace=panel_wspace, hspace=panel_hspace)
                 _fit_inside_legends(fig, list(axes.flat)[:len(partitions)], legend_font_size, legend_columns)
             else:
                 _place_outside_legend(fig, list(axes.flat)[:len(partitions)],
-                                      legend_position, legend_font_size, legend_columns)
+                                      legend_position, legend_font_size, legend_columns,
+                                      panel_hspace=panel_hspace, panel_wspace=panel_wspace)
             return fig
-    group_col = "__plot_group" if spec["groups"] and "__plot_group" in df.columns else None
+    group_col = ("__hist_series" if kind == "histogram" and spec.get("hist_variables")
+                 else "__plot_group" if spec["groups"] and "__plot_group" in df.columns else None)
     defaults = _matplotlib_defaults(spec, palette=palette)
     rename = _parse_label_map(legend_labels)
     overrides = _parse_label_map(trace_colors)
@@ -425,11 +440,101 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     def series():
         if group_col:
             for name in labels:
-                yield name, df.loc[df[group_col] == name]
+                yield name, df.loc[df[group_col].astype(str) == str(name)]
         else:
             yield "All observations", df
 
-    if kind == "histogram":
+    if spec.get("multi_axis"):
+        from .multi_axis import records, style_maps
+        from matplotlib.lines import Line2D
+        from matplotlib.patches import Patch
+        entries = list(records(spec))
+        color_map, dash_map, style_groups = style_maps(spec, multi_y_color_by, palette, trace_colors)
+        variable_names = list(ys)
+        x_names = list(spec.get("x_variables", [x]))
+        group_names = style_groups if group_col else []
+        active = set()
+        if kind == "scatter":
+            scatter_markers = ['o', 's', 'D', 'x', '^', 'v', 'P', '*']
+            for key, group, y, xv, category, rows in entries:
+                g = group if group_col else None
+                active.add((y, g))
+                ax.scatter(rows[xv], rows[y], color=color_map[(y, g)],
+                           marker=scatter_markers[x_names.index(xv) % len(scatter_markers)],
+                           s=marker_size**2, alpha=.8)
+        else:
+            cats = list(pd.unique(df[x].astype(str)))
+            combinations = [(g, y) for g in (group_names or ['All observations']) for y in ys]
+            n = max(1, len(combinations))
+            width = .82 / n
+            from collections import defaultdict
+            buckets = defaultdict(list)
+            for key, group, y, xv, category, rows in entries:
+                g = group if group_col else None
+                active.add((y, g))
+                idx = combinations.index((group, y))
+                pos = cats.index(category) + (idx - (n - 1)/2)*width
+                values = pd.to_numeric(rows[y], errors='coerce').dropna().to_numpy(dtype=float)
+                buckets[(pos, y, g)].extend(values)
+            for (pos, y, g), values in buckets.items():
+                if not values:
+                    continue
+                color = color_map[(y, g)]
+                hatch_options = ['', '/', '\\', 'x', '.', '+', '-']
+                hatch_index = ys.index(y) if multi_y_color_by == 'group' else (group_names.index(g) if g in group_names else 0)
+                hatch = '' if multi_y_color_by in ('none', 'both') else hatch_options[hatch_index % len(hatch_options)]
+                if kind == 'bar':
+                    ax.bar(pos, sum(values), width=width*.92*bar_box_width, color=color, hatch=hatch)
+                else:
+                    bp = ax.boxplot([values], positions=[pos], widths=width*.92*bar_box_width,
+                                    manage_ticks=False, patch_artist=True,
+                                    showfliers=bool(box_showfliers),
+                                    vert=(box_orientation != 'horizontal'))
+                    bp['boxes'][0].set_facecolor(color)
+                    bp['boxes'][0].set_hatch(hatch)
+                    bp['boxes'][0].set_alpha(.7)
+            if kind == 'box' and box_orientation == 'horizontal':
+                ax.set_yticks(range(len(cats)), cats)
+                ax.set_ylim(-.5, max(.5, len(cats)-.5))
+            else:
+                ax.set_xticks(range(len(cats)), cats)
+                ax.set_xlim(-.5, max(.5, len(cats)-.5))
+        handles, legend_names = [], []
+        def legend_entry(label, color, marker=None):
+            handles.append(Line2D([], [], color=color, marker=marker or None,
+                                  linestyle='None' if marker else '-', linewidth=2))
+            legend_names.append(rename.get(label, label))
+        if multi_y_color_by == 'none':
+            for g in group_names:
+                if any((y, g) in active for y in ys):
+                    legend_entry(g, color_map[(ys[0], g)])
+        elif multi_y_color_by == 'both':
+            for g in (group_names or [None]):
+                for y in ys:
+                    if (y, g) in active:
+                        legend_entry(f'{g}, {y}' if g is not None else y, color_map[(y, g)])
+        else:
+            for y in ys:
+                pairs = [(y, g) for g in (group_names or [None]) if (y, g) in active]
+                if pairs:
+                    legend_entry(y, color_map[pairs[0]])
+            if group_names:
+                handles.append(Line2D([], [], color='none'))
+                legend_names.append(' ')
+                for g in group_names:
+                    pairs = [(y, g) for y in ys if (y, g) in active]
+                    if pairs:
+                        legend_entry(g, color_map[pairs[0]])
+        if kind == 'scatter' and len(x_names) > 1:
+            if handles:
+                handles.append(Line2D([], [], color='none'))
+                legend_names.append(' ')
+            for i, xv in enumerate(x_names):
+                if any(entry[3] == xv for entry in entries):
+                    legend_entry(xv, '#666666', ['o', 's', 'D', 'x', '^', 'v', 'P', '*'][i % 8])
+        if handles and not spec.get('_hide_ungrouped_legend', False):
+            ax.legend(handles, legend_names)
+    elif kind == "histogram":
         arrays = []
         for name, rows in series():
             vals = pd.to_numeric(rows[x], errors="coerce").to_numpy(dtype=float)
@@ -481,6 +586,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             else:
                 sets = [(str(y) if len(ys) > 1 else "All observations", line_df)]
             for name, rows in sets:
+                rows = rows.loc[rows[y].notna()]
+                if rows.empty:
+                    continue
                 segment_col = section_col or id_col
                 parts = (rows.groupby(segment_col, dropna=False, sort=False) if segment_col else [(None, rows)])
                 for _, part in parts:
@@ -540,7 +648,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             for category_index, group_index, position in zip(ci[valid_array], names, positions):
                 palette_for_positions[float(position)] = colors.get(group_names[group_index], palette_values[0])
             if xpos:
-                ax.bar(xpos, [totals[pos] for pos in xpos], width=width * .92,
+                ax.bar(xpos, [totals[pos] for pos in xpos], width=width * .92 * bar_box_width,
                        color=[palette_for_positions[pos] for pos in xpos])
         else:
             # Calculate group memberships once and make one boxplot call.
@@ -553,13 +661,25 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             if buckets:
                 box_positions = sorted(buckets)
                 bp = ax.boxplot([buckets[pos] for pos in box_positions],
-                                positions=box_positions, widths=width * .92,
+                                positions=box_positions, widths=width * .92 * bar_box_width,
                                 manage_ticks=False, patch_artist=True,
                                 showfliers=bool(box_showfliers),
                                 vert=(box_orientation != "horizontal"))
                 for patch, position in zip(bp["boxes"], box_positions):
                     patch.set_facecolor(bucket_colors[position])
                     patch.set_alpha(.7)
+                if box_showfliers:
+                    # Explicitly reset numeric limits using all observations;
+                    # avoids retaining whisker-only limits after facet changes.
+                    all_values = np.asarray(numeric, dtype=float)
+                    all_values = all_values[np.isfinite(all_values)]
+                    if all_values.size:
+                        low, high = float(all_values.min()), float(all_values.max())
+                        margin = .05 * (high - low) if high > low else max(abs(low) * .05, .5)
+                        if box_orientation == "horizontal":
+                            ax.set_xlim(low - margin, high + margin)
+                        else:
+                            ax.set_ylim(low - margin, high + margin)
                 if not box_showfliers:
                     # Autoscaling normally includes every observation in the
                     # data; instead use only the whisker endpoints.
@@ -594,7 +714,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     else:
         raise ValueError(f"Unknown plot type: {kind}")
 
-    if kind not in ("box", "bar"):
+    if kind not in ("box", "bar") and not spec.get("multi_axis"):
         handles, texts = ax.get_legend_handles_labels()
         unique = dict(zip(texts, handles))
         if unique and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
@@ -604,8 +724,13 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         # Independent legend keys for the two dimensions, with explicit headings.
         legend_handles = []
         legend_labels_out = []
+        active = {(str(y), str(g) if group_col else None)
+                  for y in ys for g in (group_names if group_col else [None])
+                  if not df.loc[(df[group_col] == g) if group_col else slice(None), y].dropna().empty}
         if multi_y_color_by == "none":
             for group in group_names if group_col else []:
+                if not any((v, group) in active for v in variable_names):
+                    continue
                 key = (variable_names[0], group)
                 legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
                 legend_labels_out.append(rename.get(group, group))
@@ -627,7 +752,10 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             legend_handles.append(Line2D([], [], color="none"))
             legend_labels_out.append(heading)
             for value in keys:
-                key = (value, group_names[0] if group_col else None) if by_var else (variable_names[0], value)
+                relevant = [pair for pair in active if (pair[0] == value if by_var else pair[1] == value)]
+                if not relevant:
+                    continue
+                key = relevant[0]
                 legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
                 legend_labels_out.append(rename.get(value, value))
         if legend_handles:

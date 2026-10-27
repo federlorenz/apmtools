@@ -21,6 +21,7 @@ def _histogram_figure(
     stacked: bool = False,
     histtype: str = "bar",
     cumulative: int = 0,
+    overlay: bool = False,
 ):
     """Build a Matplotlib-compatible histogram using shared bin boundaries.
 
@@ -98,6 +99,7 @@ def _histogram_figure(
                 y=values,
                 width=widths,
                 marker_line_width=0,
+                opacity=0.65 if overlay and not stacked else 1,
             ))
         else:
             # Horizontal steps start/end at the shared bin boundaries.
@@ -113,7 +115,7 @@ def _histogram_figure(
             ))
 
     fig.update_layout(
-        barmode="stack" if stacked else "group",
+        barmode="stack" if stacked else "overlay" if overlay else "group",
         xaxis_title=x_column,
         yaxis_title=(
             "Cumulative probability" if cumulative and density
@@ -307,6 +309,9 @@ def _style_multi_y_legend(fig, spec, mode, palette, trace_colors, line_style, le
     colors, dashes, variables, groups = multi_y_styles(variables, groups, palettes or qualitative.Plotly,
                                                         mode, _parse_label_map(trace_colors), _parse_label_map(line_style))
     rename = _parse_label_map(legend_labels)
+    active = {(str(y), str(g) if groups else None)
+              for y in spec["ys"] for g in (groups or [None])
+              if not spec["data"].loc[(spec["data"]["__plot_group"] == g) if groups else slice(None), y].dropna().empty}
     for trace in fig.data:
         if trace.type not in ("scatter", "scattergl"):
             continue
@@ -333,6 +338,8 @@ def _style_multi_y_legend(fig, spec, mode, palette, trace_colors, line_style, le
         trace.legendgroup = f"series:{group}:{variable}"
     if mode == "none":
         for group in groups:
+            if not any((v, group) in active for v in variables):
+                continue
             key = (variables[0], group)
             fig.add_trace(go.Scatter(
                 x=[None], y=[None], mode="lines", name=rename.get(group, group),
@@ -345,6 +352,8 @@ def _style_multi_y_legend(fig, spec, mode, palette, trace_colors, line_style, le
         for group in (groups or [None]):
             for variable in variables:
                 key = (variable, group)
+                if key not in active:
+                    continue
                 label = f"{group}, {variable}" if group is not None else variable
                 fig.add_trace(go.Scatter(
                     x=[None], y=[None], mode="lines", name=rename.get(label, label),
@@ -364,10 +373,28 @@ def _style_multi_y_legend(fig, spec, mode, palette, trace_colors, line_style, le
                                      line=dict(color="rgba(0,0,0,0)", width=0),
                                      showlegend=True, hoverinfo="skip", legendgroup="separator"))
         added_section = True
-        for index, item in enumerate(items):
-            key = (item, groups[0] if groups else None) if by_variable else (variables[0], item)
+        shown = 0
+        for item in items:
+            relevant = [pair for pair in active if (pair[0] == item if by_variable else pair[1] == item)]
+            if not relevant:
+                continue
+            key = relevant[0]
             fig.add_trace(go.Scatter(x=[None], y=[None], mode="lines", name=rename.get(item, item),
                                      line=dict(color=colors[key], dash={"-":"solid", "--":"dash", ":":"dot", "-.":"dashdot"}.get(dashes[key], "solid")),
-                                     legendgroup=heading, legendgrouptitle_text=heading if index == 0 else None,
+                                     legendgroup=heading, legendgrouptitle_text=heading if shown == 0 else None,
                                      showlegend=True, hoverinfo="skip"))
-    fig.update_layout(showlegend=True)
+            shown += 1
+    fig.update_layout(showlegend=bool(active))
+
+
+def _set_bar_box_width(fig, kind, factor):
+    """Scale only visible bar/box traces, leaving legend proxy traces untouched."""
+    if kind not in ("bar", "box"):
+        return fig
+    if not 0.2 <= factor <= 3.0:
+        raise ValueError("bar_box_width must be between 0.2 and 3.0")
+    traces = [trace for trace in fig.data if trace.type == kind]
+    count = max(1, len(traces))
+    for trace in traces:
+        trace.width = (0.82 / count) * factor
+    return fig

@@ -1,5 +1,6 @@
 """Figure labels and appearance controls."""
 from __future__ import annotations
+import re
 import threading
 from datetime import date, datetime, time, timedelta
 from collections.abc import Sequence
@@ -38,7 +39,7 @@ def _label_plot_axes(fig, plot_type, x_column, y_columns, *,
     elif plot_type in {"box", "bar"}:
         categories = category_columns or [x_column]
         fig.update_xaxes(title_text=" | ".join(_axis_label(c) for c in categories))
-        fig.update_yaxes(title_text=_axis_label(y_columns[0]))
+        fig.update_yaxes(title_text="<br>".join(_axis_label(y) for y in y_columns))
     elif plot_type == "line" and len(y_columns) > 1:
         fig.update_xaxes(title_text=_axis_label(x_column))
         fig.update_yaxes(title_text="<br>".join(_axis_label(y) for y in y_columns))
@@ -59,7 +60,7 @@ def _label_plot_axes(fig, plot_type, x_column, y_columns, *,
 def _parse_label_map(value):
     """Parse semicolon-separated original=replacement entries."""
     result = {}
-    for entry in (value or "").split(";"):
+    for entry in re.split(r"[;\r\n]+", value or ""):
         if "=" in entry:
             key, replacement = entry.split("=", 1)
             if key.strip() and replacement.strip():
