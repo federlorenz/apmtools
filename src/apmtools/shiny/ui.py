@@ -479,7 +479,7 @@ if (!window.__apmColorPickerInstalled) {
                         if not np.isfinite(bound):
                             continue
                         mask = values.gt(bound) if comparison == "gt" else values.lt(bound)
-                        current = current.loc[mask.fillna(False)].copy()
+                        current = current.loc[mask.fillna(False) | values.isna()].copy()
                         values = values.loc[current.index]
                 return current
 
@@ -1847,7 +1847,7 @@ if (!window.__apmColorPickerInstalled) {
                     if not np.isfinite(bound):
                         continue
                     mask = values.gt(bound) if suffix == "gt" else values.lt(bound)
-                    current = current.loc[mask.fillna(False)].copy()
+                    current = current.loc[mask.fillna(False) | values.isna()].copy()
                     values = values.loc[current.index]
             if current.empty:
                 return current

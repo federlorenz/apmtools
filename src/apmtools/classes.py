@@ -574,7 +574,7 @@ class Dataset(DictionaryPlus):
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
                                      level=level+1, monitor=monitor, levels_dict=levels_dict, utc_timezone_shift=utc_timezone_shift, interpolate=interpolate, add_m=add_m)
 
-    def save_summary(self, save_csv=True, filename="./", columns={}, merged=True):
+    def save_summary(self, save_csv=True, filename="./", all_variables=False, merged=True):
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -619,13 +619,9 @@ class Dataset(DictionaryPlus):
                         "start", "end", "length", "datetime","timedelta"]
             columns2 = list(set(d.meta()).difference(
                 set(["filter", "header", "parameters"])))
-            if "upas" not in columns.keys():
-                columns3 = ["pm25"]
-            else:
-                columns3 = ["pm25"]+columns["upas"] if columns["upas"] != "all" else ["pm25"]+list(
-                    d.set_attrib("columns"))
-            columns4 = ["pm25correctedrh",
-                        "pm25correctedrhandgrav", "filterid", "grav_not", "grav"]
+            columns3 = ["upas_pm25"] if not all_variables else ["upas_"+i for i in list(d.set_attrib("columns"))]+["upas_pm25"]
+            columns4 = ["upas_pm25_RHcorrected",
+                        "upas_pm25_RHgravcorrected", "upas_filterid", "upas_gravimetric", "upas_gravimetric_blankcorrected"]
             buffer = StringIO()
             with buffer as file:
                 df = writer(file, delimiter=",")
@@ -658,15 +654,13 @@ class Dataset(DictionaryPlus):
                                 app.append(v.m[m] if v.m[m] != None else "")
                             else:
                                 app.append("")
-                        if "upas" not in columns.keys():
-                            app.append(v["PM2_5MC"].iloc[i])
-                        else:
-                            app.append(v["PM2_5MC"].iloc[i])
-                            for col in columns3[1:]:
-                                if col in v.columns:
-                                    app.append(v[col].iloc[i])
-                                else:
-                                    app.append(None)
+
+                        for col in columns3[:-1]:
+                            if col[5:] in v.columns:
+                                app.append(v[col[5:]].iloc[i])
+                            else:
+                                app.append(None)
+                        app.append(v["PM2_5MC"].iloc[i])
                         xx = (a*v["PM2_5MC"].iloc[i])+(b*v["AtmoRH"].iloc[i])+c
                         app.append(xx)
                         if grav != "":
@@ -695,7 +689,7 @@ class Dataset(DictionaryPlus):
             columns1 = ["identifier", "monitor",
                         "start", "end", "length", "datetime", "timedelta"]
             columns2 = list(set(d.meta()))
-            columns3 = ["CO(ppm)"]
+            columns3 = ["lascar_CO(ppm)"]
 
             buffer = StringIO()
             with buffer as file:
@@ -743,9 +737,9 @@ class Dataset(DictionaryPlus):
             columns1 = ["identifier", "monitor",
                         "start", "end", "length", "datetime", "timedelta"]
             columns2 = list(set(d.meta()))
-            columns3 = ["sensorName", "deviceId", "resolution",
-                         "PM2.5", "PM10", "CO2", "NO2", "Temperature", "Humidity"]
-            columns4 = ["pm25correctedrh"]
+            columns3 = ["lcm_sensorName", "lcm_deviceId", "lcm_resolution",
+                        "lcm_PM2.5", "lcm_PM10", "lcm_CO2", "lcm_NO2", "lcm_Temperature", "lcm_Humidity"] if all_variables else ["lcm_PM2.5"]
+            columns4 = ["lcm_PM2.5correctedrh"]
 
             buffer = StringIO()
             with buffer as file:
@@ -774,7 +768,7 @@ class Dataset(DictionaryPlus):
                             else:
                                 app.append("")
                         for m in columns3:
-                            app.append(v[m].iloc[i])
+                            app.append(v[m[4:]].iloc[i])
                         xx = (a*v["PM2.5"].iloc[i])+(b*v["Humidity"].iloc[i])+c
                         app.append(xx)
                         df.writerow(list(map(str, app)))
@@ -793,13 +787,8 @@ class Dataset(DictionaryPlus):
             columns1 = ["identifier", "monitor",
                         "start", "end", "length", "datetime", "timedelta"]
             columns2 = list(set(d.meta()))
-            columns3 = ["pm2_5", "pm2_5_adj"]
-            columns4 = []
-            if "purple" not in columns.keys():
-                columns4 = []
-            else:
-                columns4 = columns["purple"] if columns["purple"] != "all" else list(
-                    d.set_attrib("columns"))
+            columns3 = ["purple_pm25", "purple_pm25_RHcorrected"]
+            columns4 = [] if not all_variables else ["purple_"+i for i in list(d.set_attrib("columns"))]
             buffer = StringIO()
             with buffer as file:
                 df = writer(file, delimiter=",")
@@ -829,17 +818,9 @@ class Dataset(DictionaryPlus):
                         app.append(
                             ((v["pm2_5_cf_1"]+v["pm2_5_cf_1_b"])/2).iloc[i])
                         app.append(v["pm_adj"].iloc[i])
-                        if "purple" in columns.keys():
-                            if columns["purple"] == "all":
-                                for col in list(d.set_attrib("columns")):
-                                    if col in v.columns:
-                                        app.append(v[col].iloc[i])
-                                    else:
-                                        app.append(None)
-                            else:
-                                for col in columns["purple"]:
-                                    if col in v.columns:
-                                        app.append(v[col].iloc[i])
+                        for col in columns4:
+                                if col[6:] in v.columns:
+                                        app.append(v[col[6:]].iloc[i])
                                     else:
                                         app.append(None)
                         df.writerow(list(map(str, app)))
