@@ -1011,7 +1011,7 @@ class Group(pd.DataFrame):
 
 class Summary(pd.DataFrame):
 
-    _metadata = ['metadata']
+    _metadata = ['metadata', 'plot']
 
     @property
     def _constructor(self):
@@ -1023,12 +1023,19 @@ class Summary(pd.DataFrame):
         self.metadata = metadata
         self.variable = variable
         self.description = description
+        self.plots = None
+
+    def __setattr__(self, name, value):
+        if name == "plot" and value is not None and not isinstance(value, list):
+            raise TypeError("Summary.plot must be None or a list")
+        super().__setattr__(name, value)
 
     def __finalize__(self, other, method=None, **kwargs):
         if isinstance(other, Summary):
             self.variable = getattr(other, "variable", None)
             self.metadata = getattr(other, "metadata", set()).copy()
             self.description = getattr(other, "description", "")
+            self.plots = getattr(other, "plot", None)
 
         return self
 
@@ -1058,6 +1065,7 @@ class Summary(pd.DataFrame):
             return
 
         return_dict = copy.deepcopy(self)
+        return_dict.plots = None
         a = {}
 
         if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
@@ -1151,7 +1159,9 @@ class Summary(pd.DataFrame):
             
         self.description = self.description + \
             f"\nFiltered by {time_start if time_start != None else ""} till {time_end if time_end != None else ""}, {date_start if date_start != None else ""} till {date_end if date_end != None else ""}, {day if day != None else ""}"
-        return self.reset_index()
+        result = self.reset_index()
+        result.plots = None
+        return result
 
     def set_attrib(self, attribute):
         """
@@ -1577,6 +1587,7 @@ class Summary(pd.DataFrame):
         
         out = self.subset({"monitor": [value]})
         out = out.dropna(axis=1,how="all")
+        out.plots = None
         return out
 
 
