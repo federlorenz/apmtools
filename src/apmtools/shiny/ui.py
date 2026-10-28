@@ -17,7 +17,7 @@ from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
 
 
-def create_summary_app(
+def _build_summary_ui_server(
     data: pd.DataFrame,
     *,
     x: str | None = None,
@@ -26,6 +26,7 @@ def create_summary_app(
     plot_type: str = "line",
     title: str = "Summary plot",
     backend: str = "plotly",
+    include_theme_picker: bool = True,
 ):
     """Create, but do not start, an interactive Shiny app for a Summary."""
     from shiny import App, reactive, render, ui, module
@@ -2142,7 +2143,7 @@ if (!window.__apmColorPickerInstalled) {
                 ),
                 # Exactly one app-wide theme picker, outside dynamically added
                 # plot modules. shinyswatch provides its full theme catalogue.
-                ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme"),
+                ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme") if include_theme_picker else ui.div(class_="summary-app-theme"),
                 class_="summary-top-toolbar",
             ),
             ui.tags.style("""
@@ -2164,7 +2165,8 @@ if (!window.__apmColorPickerInstalled) {
         # Register shinyswatch at the application root (not inside plot modules).
         # Its picker dynamically switches the app's Bootstrap theme without
         # touching plot-specific options or the plot cloning logic.
-        shinyswatch.theme_picker_server()
+        if include_theme_picker:
+            shinyswatch.theme_picker_server()
         next_tab = reactive.value(0)
         active_tabs = reactive.value(())
         tab_filters = {}
@@ -2237,8 +2239,14 @@ if (!window.__apmColorPickerInstalled) {
             # Shiny does not provide a public API to unregister an output module.
             # The removed tab cannot be selected again and tab IDs are never reused.
 
-    return App(app_ui, server)
+    return app_ui, server
 
+
+def create_summary_app(data, **kwargs):
+    """Create a dataset-bound Shiny app (legacy compatibility API)."""
+    from shiny import App
+    app_ui, server = _build_summary_ui_server(data, **kwargs)
+    return App(app_ui, server)
 
 
 def run_summary_app(

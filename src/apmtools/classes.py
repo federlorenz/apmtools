@@ -821,7 +821,7 @@ class Dataset(DictionaryPlus):
                         for col in columns4:
                                 if col[6:] in v.columns:
                                         app.append(v[col[6:]].iloc[i])
-                                    else:
+                                else:
                                         app.append(None)
                         df.writerow(list(map(str, app)))
                     count += 1
@@ -1026,9 +1026,9 @@ class Summary(pd.DataFrame):
 
     def __finalize__(self, other, method=None, **kwargs):
         if isinstance(other, Summary):
-            self.variable = other.variable
-            self.metadata = other.metadata.copy()
-            self.description = other.description
+            self.variable = getattr(other, "variable", None)
+            self.metadata = getattr(other, "metadata", set()).copy()
+            self.description = getattr(other, "description", "")
 
         return self
 
@@ -1579,79 +1579,6 @@ class Summary(pd.DataFrame):
         out = out.dropna(axis=1,how="all")
         return out
 
-    def plot_app(
-        self,
-        x=None,
-        y=None,
-        group_by=None,
-        plot_type="line",
-        title="Summary plot",
-        host="127.0.0.1",
-        port=0,
-        launch_browser=True,
-        daemon=True,
-        backend="plotly",
-    ):
-        """
-        Launch an interactive Shiny plotting application for this Summary.
-
-        Parameters
-        ----------
-        x : str, optional
-            Initial X-axis or categorical column.
-        y : str or sequence of str, optional
-            Initial numeric variable or variables.
-        group_by : str or sequence of str, optional
-            Initial grouping column or columns. Multiple columns are passed to
-            ``Summary.group_stat(grouping_by=[...])`` when aggregation is used.
-        plot_type : {"line", "bar", "histogram", "box"}, default="line"
-            Initial plot type. The user can change the plot type in the app.
-        title : str, default="Summary plot"
-            Initial plot title.
-        host : str, default="127.0.0.1"
-            Server host.
-        port : int, default=0
-            Server port. Zero selects an available port.
-        launch_browser : bool, default=True
-            Open the app in the default browser.
-        daemon : bool, default=True
-            Run the server thread as a daemon.
-
-        backend : {"plotly", "matplotlib"}, default="plotly"
-            Plot rendering backend.
-
-        Returns
-        -------
-        threading.Thread
-            Background thread running the Shiny server.
-
-        Notes
-        -----
-        Install the optional dependencies with:
-
-            pip install "apmtools[shiny]"
-        """
-        try:
-            from .shiny import run_summary_app
-        except ImportError as exc:
-            raise ImportError(
-                "Summary.plot_app() requires the optional Shiny dependencies. "
-                'Install them with: pip install "apmtools[shiny]"'
-            ) from exc
-
-        return run_summary_app(
-            self,
-            x=x,
-            y=y,
-            group_by=group_by,
-            plot_type=plot_type,
-            title=title,
-            host=host,
-            port=port,
-            launch_browser=launch_browser,
-            daemon=daemon,
-            backend=backend,
-        )
 
 class Apm(pd.DataFrame):
     monitor = "apm"
