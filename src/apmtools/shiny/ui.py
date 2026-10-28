@@ -499,7 +499,11 @@ if (!window.__apmColorPickerInstalled) {
 
             def _label_string(field):
                 # Internal adapter for the existing renderer/export APIs.
-                keys = _label_keys[field].get()
+                # Label discovery is downstream of figure rendering. Do not
+                # subscribe the figure to its own discovered key set: this
+                # otherwise forms plot -> legend keys -> plot feedback cycles.
+                with reactive.isolate():
+                    keys = _label_keys[field].get()
                 values = _label_values[field].get()
                 return "; ".join(f"{key}={values.get(key, key)}" for key in keys
                                  if values.get(key, key) != key)
@@ -532,6 +536,12 @@ if (!window.__apmColorPickerInstalled) {
                     @reactive.effect
                     def _watch():
                         keys = _label_keys[field].get()
+                        # A plot-type transition unmounts the old inputs asynchronously.
+                        # Do not consume values from the previous plot's editors while
+                        # Shiny is replacing their DOM nodes.
+                        with reactive.isolate():
+                            if not keys:
+                                return
                         # Read current mappings without subscribing this watcher to
                         # its own writes: otherwise each keystroke can retrigger it.
                         with reactive.isolate():
@@ -742,6 +752,13 @@ if (!window.__apmColorPickerInstalled) {
                 if not choices:
                     return ui.help_text(f"No compatible X variables for {kind}.")
                 selected = initial_filters.get("x", [])
+                # This control is remounted on plot-type changes. Never feed
+                # a datetime line X into a categorical box/bar selectize:
+                # Shiny otherwise has to reconcile a selection absent from
+                # the new choice set while dependent reactive plots run.
+                candidate = [selected] if isinstance(selected, str) else list(selected or [])
+                candidate = [value for value in candidate if value in choices]
+                selected = candidate if multiple else (candidate[0] if candidate else "")
                 if multiple:
                     return ui.input_selectize(
                         "x", "X-axis / variables" if kind in ("scatter", "histogram") else "X-axis / categories",
@@ -788,8 +805,11 @@ if (!window.__apmColorPickerInstalled) {
             @reactive.event(input.group_by, ignore_none=False)
             def sync_panel_group_choices():
                 selected = list(input.group_by() or [])
+                with reactive.isolate():
+                    current_panels = list(_optional_input("panel_by", []) or [])
+                valid_panels = [name for name in current_panels if name in selected]
                 ui.update_selectize("panel_by", choices={name: name for name in selected},
-                                    selected=selected)
+                                    selected=valid_panels)
 
             @render.ui
             def frequency_options():
@@ -799,6 +819,34 @@ if (!window.__apmColorPickerInstalled) {
                     ui.input_checkbox("only_complete", "Only complete intervals", value=initial_filters.get("only_complete", True)),
                     ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=initial_filters.get("flooring_timestamp", True)),
                 )
+
+            # The virtual group choices depend on plot type and selected axes,
+            # not on the Group by value. Updating a selectize control while
+            # subscribing to that same control can create an invalidation loop,
+            # especially during a line -> box/bar transition with multiple Y's.
+            _last_axis_group_choices = reactive.value(None)
+
+            @reactive.effect
+            def sync_axis_group_choices():
+                kind = input.plot_type()
+                x_raw = _optional_input("x", [])
+                y_raw = _optional_input("y", [])
+                xs = [x_raw] if isinstance(x_raw, str) else list(x_raw or [])
+                ys = [y_raw] if isinstance(y_raw, str) else list(y_raw or [])
+                choices = list(group_columns)
+                if kind in ("histogram", "scatter") and len(xs) > 1:
+                    choices.append("variables_x")
+                if kind != "histogram" and len(ys) > 1:
+                    choices.append("variables_y")
+                signature = tuple(choices)
+                with reactive.isolate():
+                    previous = _last_axis_group_choices.get()
+                    current = list(_optional_input("group_by", []) or [])
+                if signature == previous:
+                    return
+                _last_axis_group_choices.set(signature)
+                selected = [g for g in current if g in choices]
+                ui.update_selectize("group_by", choices={c: c for c in choices}, selected=selected)
 
             @reactive.calc
             def selected_data():
@@ -830,7 +878,8 @@ if (!window.__apmColorPickerInstalled) {
                 ):
                     return pd.DataFrame()
 
-                selected_groups = list(input.group_by() or [])
+                selected_groups = [g for g in (input.group_by() or [])
+                                   if g not in ("variables_x", "variables_y")]
                 # Derive hour/day/etc. through group_stat without aggregation.
                 # The returned index column identifies source rows.
                 for component in selected_groups:
@@ -908,6 +957,7 @@ if (!window.__apmColorPickerInstalled) {
                 y_input = None if selected_plot == "histogram" else input.y()
                 selected_y = ([y_input] if isinstance(y_input, str) else list(y_input or []))
                 selected_groups = list(input.group_by() or [])
+                physical_groups = [g for g in selected_groups if g not in ("variables_x", "variables_y")]
                 frequency = FREQUENCIES.get(input.frequency())
                 should_aggregate = AGGREGATES.get(input.aggregate()) is not None
 
@@ -919,6 +969,13 @@ if (!window.__apmColorPickerInstalled) {
                     selected_plot != "histogram" and not selected_y
                 ):
                     return {"error": "No data for the selected filters"}
+                # The X widget is replaced asynchronously by render.ui. Until
+                # the browser mounts it, the old line X can remain in input.x.
+                # Treat that intermediate state as unready, not as box data.
+                if selected_plot in ("box", "bar") and any(
+                    x not in categorical_columns for x in selected_x
+                ):
+                    return {"error": "Waiting for categorical X-axis selection"}
 
                 aggregate = AGGREGATES.get(input.aggregate())
                 def mapped(column):
@@ -954,15 +1011,34 @@ if (!window.__apmColorPickerInstalled) {
                 if selected_plot == "histogram" and len(x_variables) > 1:
                     from .histogram_multi import histogram_long_data
                     plot_df = histogram_long_data(plot_df, x_variables, group_columns=[
-                        column_map[c] for c in selected_groups if column_map[c] in plot_df.columns
+                        column_map[c] for c in physical_groups if column_map[c] in plot_df.columns
                     ])
+                    plot_df["variables_x"] = plot_df["__hist_variable"]
                     x_column = "__hist_value"
                     x_label_override = " | ".join(x_variables)
+
+                if (selected_plot == "scatter" and "variables_x" in selected_groups
+                        and len(x_variables) > 1):
+                    id_columns = [c for c in plot_df.columns if c not in x_variables]
+                    plot_df = plot_df.melt(id_vars=id_columns, value_vars=x_variables,
+                                           var_name="variables_x", value_name="__axis_x_value")
+                    x_column = "__axis_x_value"
+                    x_variables = [x_column]
 
                 if selected_plot in ("box", "bar"):
                     plot_df = plot_df.copy(deep=False)
                     plot_df["__plot_category"] = _composite_labels(plot_df, x_columns)
                     x_column = "__plot_category"
+
+                if "variables_y" in selected_groups and len(y_columns) > 1:
+                    # Make the selected Y variable an actual categorical dimension,
+                    # so it works with ordinary grouping and panel partitioning.
+                    id_columns = [c for c in plot_df.columns if c not in y_columns]
+                    plot_df = plot_df.melt(id_vars=id_columns, value_vars=y_columns,
+                                           var_name="variables_y", value_name="__axis_y_value")
+                    y_columns = ["__axis_y_value"]
+                    # The categorical X labels have already been computed above.
+                    # Scatter and bar/box now use the standard single-Y renderer.
 
                 # Convert durations once for Plotly, Matplotlib, editable
                 # numeric bounds, faceting and exported plots. Retain the
@@ -980,8 +1056,12 @@ if (!window.__apmColorPickerInstalled) {
                 # Multiple grouping columns are supported by group_stat(). For
                 # plotting, Plotly needs one color/category column, so combine the
                 # selected grouping columns into a readable composite label.
-                group_columns = [column_map[c] for c in selected_groups
+                group_columns = [column_map[c] for c in physical_groups
                                  if column_map[c] in plot_df.columns]
+                if "variables_x" in selected_groups and "variables_x" in plot_df:
+                    group_columns.append("variables_x")
+                if "variables_y" in selected_groups and "variables_y" in plot_df:
+                    group_columns.append("variables_y")
                 if group_columns:
                     plot_df = plot_df.copy(deep=False)
                     plot_df["__plot_group"] = (
@@ -1317,6 +1397,11 @@ if (!window.__apmColorPickerInstalled) {
                         ui.update_text(field, value="")
                 for field in ("legend_labels", "x_tick_labels", "y_tick_labels", "panel_titles"):
                     _set_label_keys(field, ())
+                # Invalidate figure-derived editor identities immediately. The
+                # previous lineplot legend/ticks must never be treated as boxplot
+                # identities during the asynchronous input transition.
+                rendered_legend_keys.set(())
+                rendered_tick_keys.set(((), ()))
                 _color_keys.set(())
                 ui.update_select("palette", selected="Default")
                 ui.update_select("template", selected="plotly")
@@ -1397,7 +1482,12 @@ if (!window.__apmColorPickerInstalled) {
                 from .appearance import _parse_label_map
                 with reactive.isolate():
                     mapping = _parse_label_map(_label_string("legend_labels"))
-                reverse = {v: k for k, v in mapping.items() if v != k}
+                # Resolve displayed labels against stable, original keys.  A
+                # reverse dictionary is unsafe: two different keys may have
+                # the same edited label, and mapping order then makes keys
+                # alternate as the figure is rendered repeatedly.
+                with reactive.isolate():
+                    known_keys = _label_keys["legend_labels"].get()
                 if is_plotly:
                     if getattr(fig.layout, "showlegend", None) is False:
                         labels = []
@@ -1408,8 +1498,22 @@ if (!window.__apmColorPickerInstalled) {
                     legends = list(getattr(fig, "legends", []))
                     legends += [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None]
                     labels = [txt.get_text() for leg in legends for txt in leg.get_texts()]
-                keys = tuple(dict.fromkeys(reverse.get(label, label) for label in labels
-                    if label.strip() and label not in ("Y variable", "Grouping", "Legend", "All observations")))
+                excluded = ("Y variable", "Grouping", "Legend", "All observations")
+                labels = [label for label in labels if label.strip() and label not in excluded]
+                # If this is merely a relabelled rendering of the existing
+                # traces, do not rediscover/rename their identities.
+                expected = [mapping.get(key, key) for key in known_keys]
+                if known_keys and set(labels) == set(expected):
+                    keys = tuple(known_keys)
+                else:
+                    reverse = {}
+                    for key in known_keys:
+                        display = mapping.get(key, key)
+                        reverse.setdefault(display, []).append(key)
+                    keys = tuple(dict.fromkeys(
+                        reverse[label][0] if len(reverse.get(label, ())) == 1
+                        else label for label in labels
+                    ))
                 with reactive.isolate():
                     old = rendered_legend_keys.get()
                 if keys != old:

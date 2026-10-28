@@ -738,6 +738,11 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             for group in (group_names or [None]):
                 for variable in variable_names:
                     key = (variable, group)
+                    # A visible element may be only one of several Y variables
+                    # within a group. Never create proxy legend entries for
+                    # combinations with no plotted observations.
+                    if key not in active:
+                        continue
                     label = f"{group}, {variable}" if group is not None else variable
                     legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
                     legend_labels_out.append(rename.get(label, label))
