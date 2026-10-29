@@ -607,16 +607,14 @@ if (!window.__apmColorPickerInstalled) {
                     _label_keys[field].set(keys)
 
             def _label_string(field):
-                # Internal adapter for the existing renderer/export APIs.
-                # Label discovery is downstream of figure rendering. Do not
-                # subscribe the figure to its own discovered key set: this
-                # otherwise forms plot -> legend keys -> plot feedback cycles.
-                with reactive.isolate():
-                    keys = _label_keys[field].get()
-                values = _editor_map(field)
-                active = keys if keys else tuple(values)
-                return "; ".join(f"{key}={values.get(key, key)}" for key in active
-                                 if values.get(key, key) != key)
+                # Pass the complete persisted mapping to the renderer, even
+                # before legend keys have been rediscovered on a loaded tab.
+                # The editor's key list controls visible inputs only; it must
+                # not decide which saved overrides reach Matplotlib.
+                # Watch appearance changes so edits invalidate the figure.
+                values = _editor_map(field, watch=(field == "legend_labels"))
+                return "; ".join(f"{key}={value}" for key, value in values.items()
+                                 if value != key)
 
             for _field in _label_fields:
                 def _make_editor(field):
@@ -679,9 +677,11 @@ if (!window.__apmColorPickerInstalled) {
                 return _editor_map("trace_colors", watch=watch)
 
             def _color_string():
-                keys = _color_keys.get()
+                # The colour-key discovery effect can run after the first
+                # restored render.  Do not discard persisted overrides while
+                # the key list is empty (or temporarily incomplete).
                 values = _color_map(watch=True)
-                return "; ".join(f"{key}={values[key]}" for key in keys if key in values)
+                return "; ".join(f"{key}={value}" for key, value in values.items())
 
             # Each rendered colour key has a stable swatch button. The popup
             # itself is mounted only on demand, avoiding text-input remounts
@@ -1420,6 +1420,11 @@ if (!window.__apmColorPickerInstalled) {
             # appearance inputs, so editing a label or colour cannot reset it.
             _last_line_style_keys = [None]
             _last_scatter_style_keys = [None]
+            # Arm automatic axis-label regeneration only after the restored
+            # X/Y selectors have actually reached their saved values. This
+            # avoids treating intermediate selector initialization as an edit.
+            _restored_axis_selection = [None]
+            _axis_selection_armed = [not bool(initial_filters)]
 
             @reactive.effect
             @reactive.event(prepared_plot, lambda: _optional_input("multi_panel", False) if input.group_by() else False,
@@ -1458,9 +1463,31 @@ if (!window.__apmColorPickerInstalled) {
                 )
                 if not same_restored_data or "title" not in initial_filters:
                     ui.update_text("title", value="Summary plot")
-                if not same_restored_data or "x_axis_label" not in initial_filters:
+                # Preserve restored labels during initialization, then reset
+                # them when the user changes either axis variable selection.
+                # Changes to grouping, panels or appearance do not reset labels.
+                current_axis_selection = (
+                    tuple(_optional_input("x", []) or []),
+                    tuple(_optional_input("y", []) or []),
+                )
+                saved_axis_selection = (
+                    tuple(initial_filters.get("x", []) or []),
+                    tuple(initial_filters.get("y", []) or []),
+                )
+                axis_selection_changed = False
+                if not _axis_selection_armed[0]:
+                    if current_axis_selection == saved_axis_selection:
+                        _axis_selection_armed[0] = True
+                        _restored_axis_selection[0] = current_axis_selection
+                elif _restored_axis_selection[0] is None:
+                    _restored_axis_selection[0] = current_axis_selection
+                elif current_axis_selection != _restored_axis_selection[0]:
+                    axis_selection_changed = True
+                    _restored_axis_selection[0] = current_axis_selection
+
+                if axis_selection_changed or "x_axis_label" not in initial_filters:
                     ui.update_text("x_axis_label", value=defaults["x_label"])
-                if not same_restored_data or "y_axis_label" not in initial_filters:
+                if axis_selection_changed or "y_axis_label" not in initial_filters:
                     ui.update_text_area("y_axis_label", value=defaults["y_label"])
                 limits = _axis_bounds_from_spec(
                     spec,
@@ -2032,12 +2059,18 @@ if (!window.__apmColorPickerInstalled) {
                 for field in _label_fields:
                     with reactive.isolate():
                         values = dict(_editor_map(field))
+                    # A restored tab may snapshot before its dynamic editors
+                    # have mounted. Preserve the saved mapping in that case.
+                    if not values and initial_filters.get(field):
+                        values = dict(_parse_label_map(initial_filters[field]))
                     result[field] = "; ".join(f"{key}={value}" for key, value in values.items()
                                               if value != key)
                 with reactive.isolate():
                     colors = dict(_color_map())
-                    chosen = configured_visibility()
-                    visible_keys = tuple(available_elements())
+                if not colors and initial_filters.get("trace_colors"):
+                    colors = dict(_parse_label_map(initial_filters["trace_colors"]))
+                chosen = configured_visibility()
+                visible_keys = tuple(available_elements())
                 result["trace_colors"] = "; ".join(f"{key}={value}" for key, value in colors.items())
                 # No available components must not erase visibility in a
                 # retained configuration (e.g. threshold above maximum).
@@ -2395,6 +2428,8 @@ if (!window.__apmColorPickerInstalled) {
                     ui.input_action_button("close_tab", "Close selected tab", class_="btn-outline-danger"),
                     ui.input_action_button("retain_plot", "Save selected plot", class_="btn-outline-primary"),
                     ui.input_action_button("restore_plot", "Load saved plot", class_="btn-outline-primary"),
+                    ui.input_action_button("delete_saved_plot", "Delete plot", class_="btn-outline-danger"),
+                    ui.input_action_button("save_dataset_pickle", "Save dataset", class_="btn-outline-primary"),
                     class_="summary-toolbar-actions",
                 ),
                 # Exactly one app-wide theme picker, outside dynamically added
@@ -2472,6 +2507,86 @@ if (!window.__apmColorPickerInstalled) {
                 ui.notification_show("Plot configuration retained in Summary.plots", type="message")
             except Exception as exc:
                 ui.notification_show(f"Could not save configuration: {exc}", type="error")
+
+        @reactive.effect
+        @reactive.event(input.delete_saved_plot)
+        def choose_plot_to_delete():
+            presets = [p for p in manager.saved() if p.get("type") == "plot"]
+            if not presets:
+                ui.notification_show("No saved plots to delete", type="warning")
+                return
+            ui.modal_show(ui.modal(
+                ui.input_select("delete_saved_plot_choice", "Saved plot to delete",
+                                choices={p["id"]: p.get("name", p["id"]) for p in presets}),
+                ui.p("This deletes the saved configuration from Summary.plots. Open tabs are not closed."),
+                title="Delete saved plot",
+                footer=ui.div(ui.modal_button("Cancel"),
+                              ui.input_action_button("confirm_delete_saved_plot", "Delete", class_="btn-danger")),
+            ))
+
+        @reactive.effect
+        @reactive.event(input.confirm_delete_saved_plot)
+        def confirm_delete_saved_plot():
+            try:
+                with reactive.isolate():
+                    manager.delete_saved(input.delete_saved_plot_choice())
+                saved_revision.set(saved_revision.get() + 1)
+                ui.modal_remove()
+                ui.notification_show("Saved plot deleted. Save the dataset to persist this change to disk.", type="message")
+            except Exception as exc:
+                ui.notification_show(f"Could not delete saved plot: {exc}", type="error")
+
+        @reactive.effect
+        @reactive.event(input.save_dataset_pickle)
+        def show_save_dataset_dialog():
+            ui.modal_show(ui.modal(
+                ui.p("Save the current Summary, including saved plot configurations, as a pickle file."),
+                ui.input_text("dataset_pickle_path", "Destination path on the computer running Shiny",
+                              value="summary.pkl", placeholder="/path/to/drive/summary.pkl"),
+                ui.p("For a mounted drive, enter its full directory path. Existing files will not be overwritten."),
+                title="Save dataset",
+                footer=ui.div(ui.modal_button("Cancel"),
+                              ui.input_action_button("confirm_save_dataset_pickle", "Save pickle", class_="btn-primary")),
+            ))
+
+        @reactive.effect
+        @reactive.event(input.confirm_save_dataset_pickle)
+        def confirm_save_dataset_pickle():
+            import os
+            import pickle
+            import tempfile
+            from pathlib import Path
+            try:
+                with reactive.isolate():
+                    raw = (input.dataset_pickle_path() or "").strip()
+                    if not raw:
+                        raise ValueError("Provide a destination path")
+                    target = Path(raw).expanduser().resolve()
+                    if target.suffix.lower() != ".pkl":
+                        raise ValueError("The filename must end in .pkl")
+                    if not target.parent.is_dir():
+                        raise FileNotFoundError(f"Directory does not exist: {target.parent}")
+                    if target.exists():
+                        raise FileExistsError(f"File already exists: {target}")
+                    # Serialize to a temporary file, then publish atomically without
+                    # overwriting an existing file. Preserve the original on errors.
+                    temp_path = None
+                    try:
+                        with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent,
+                                                         prefix=".apmtools-", suffix=".tmp",
+                                                         delete=False) as stream:
+                            temp_path = Path(stream.name)
+                            pickle.dump(manager.summary, stream, protocol=pickle.HIGHEST_PROTOCOL)
+                            stream.flush()
+                            os.fsync(stream.fileno())
+                        os.link(temp_path, target)  # fails if target already exists
+                    finally:
+                        if temp_path is not None:
+                            temp_path.unlink(missing_ok=True)
+                ui.modal_remove()
+                ui.notification_show(f"Dataset saved to {target}", type="message", duration=8)
+            except Exception as exc:
+                ui.notification_show(f"Could not save dataset: {exc}", type="error", duration=10)
 
         @reactive.effect
         @reactive.event(input.restore_plot)

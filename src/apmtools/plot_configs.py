@@ -130,6 +130,15 @@ class PlotConfigManager:
         self.revision += 1
         return preset_id
 
+    def delete_saved(self, preset_id):
+        """Delete one explicitly saved plot by stable ID, not its open draft."""
+        items = copy.deepcopy(self.summary.plots or [])
+        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') == 'plot')]
+        if len(remaining) == len(items):
+            raise KeyError(f'Unknown saved plot: {preset_id}')
+        self.summary.plots = remaining
+        self.revision += 1
+
     def saved(self):
         return copy.deepcopy(self.summary.plots or [])
 
