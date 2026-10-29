@@ -1,5 +1,6 @@
 """Shiny application controls, reactive server and launch."""
 from __future__ import annotations
+from .filter_config import filter_config_fields as _filter_config_fields
 import threading
 from datetime import date, datetime, time, timedelta
 from collections.abc import Sequence
@@ -27,6 +28,7 @@ def _build_summary_ui_server(
     title: str = "Summary plot",
     backend: str = "plotly",
     include_theme_picker: bool = True,
+    config_manager=None,
 ):
     """Create, but do not start, an interactive Shiny app for a Summary."""
     from shiny import App, reactive, render, ui, module
@@ -369,7 +371,7 @@ if (!window.__apmColorPickerInstalled) {
         )
 
     @module.server
-    def plot_tab_server(input, output, session, initial_filters=None):
+    def plot_tab_server(input, output, session, initial_filters=None, config_tab_id=None):
             initial_filters = initial_filters or {}
             # One stable output per stage: changing a later stage does not
             # recreate the inputs belonging to earlier stages.
@@ -382,7 +384,7 @@ if (!window.__apmColorPickerInstalled) {
                     if name not in column_map:
                         return ui.div()
                     choices, _ = cached_subset_choices(name)
-                    saved = initial_filters.get("subset_chain", [])
+                    saved = _live_setting("subset_chain", []) or []
                     selected = (saved[stage].get("values", [])
                                 if stage < len(saved) and saved[stage].get("column") == name else [])
                     return ui.input_selectize(f"subset_values_{stage}", f"{name} values",
@@ -403,7 +405,7 @@ if (!window.__apmColorPickerInstalled) {
                         continue
                     # Stable IDs per column preserve entered bounds when selections change.
                     index = numeric_columns.index(name)
-                    bounds = initial_filters.get("numeric_subset_bounds", {}).get(name, {})
+                    bounds = (_live_setting("numeric_subset_bounds", {}) or {}).get(name, {})
                     controls.append(ui.div(
                         ui.tags.strong(name),
                         ui.input_text(f"numeric_gt_{index}", "Greater than",
@@ -414,28 +416,133 @@ if (!window.__apmColorPickerInstalled) {
                     ))
                 return ui.div(*controls)
 
-            @reactive.calc
-            def filter_state():
+
+            def _restored_subset_chain():
+                """Read mounted controls, falling back to saved values if absent.
+
+                A hidden/dynamic input may not exist until its UI output mounts.
+                An existing empty selection, however, is an intentional user edit.
+                """
+                saved = _live_setting("subset_chain", []) or []
                 stages = []
                 for i in range(max_subset_stages):
+                    prior = saved[i] if i < len(saved) else {}
                     try:
                         name = input[f"subset_column_{i}"]()
                     except Exception:
-                        break
+                        name = prior.get("column", "")
                     if name not in column_map:
                         break
+                    same_column = name == prior.get("column")
                     try:
                         keys = list(input[f"subset_values_{i}"]() or [])
                     except Exception:
-                        keys = []
+                        keys = list(prior.get("values", []) or []) if same_column else []
                     try:
                         style = input[f"subset_style_{i}"]() or "all"
                     except Exception:
-                        style = "all"
+                        style = prior.get("style", "all") if same_column else "all"
                     stages.append({"column": name, "values": keys, "style": style})
-                return {"stages": stages,
-                        "start": input.datetime_start().strip(),
-                        "end": input.datetime_end().strip()}
+                return stages
+
+            def _restored_numeric_bounds():
+                saved = _live_setting("numeric_subset_bounds", {}) or {}
+                try:
+                    names = list(input.numeric_subset_columns() or [])
+                except Exception:
+                    names = list(_live_setting("numeric_subset_columns", []) or [])
+                result = {}
+                for name in names:
+                    if name not in numeric_columns:
+                        continue
+                    index = numeric_columns.index(name)
+                    result[name] = {}
+                    for suffix in ("gt", "lt"):
+                        try:
+                            raw = input[f"numeric_{suffix}_{index}"]()
+                        except Exception:
+                            raw = saved.get(name, {}).get(suffix, "")
+                        result[name][suffix] = raw
+                return result
+
+            def _patch_live_config(tab_id, changes):
+                """Update a tab draft with older and newer config managers."""
+                if hasattr(config_manager, "patch"):
+                    return config_manager.patch(tab_id, changes)
+                current = config_manager.get(tab_id) if tab_id in config_manager.drafts else {}
+                current.update(changes)
+                return config_manager.update(tab_id, current)
+
+            def _live_setting(name, default=None):
+                """Read the current tab draft, without subscribing to draft writes.
+
+                Shiny controls remain the source of user events during migration;
+                the canonical draft supplies values for unmounted controls.
+                """
+                if config_manager is not None and config_tab_id is not None:
+                    with reactive.isolate():
+                        if config_tab_id in config_manager.drafts:
+                            return config_manager.value(config_tab_id, name, default) if hasattr(config_manager, "value") else config_manager.get(config_tab_id).get(name, default)
+                return initial_filters.get(name, default)
+
+            @reactive.calc
+            def filter_state():
+                def text_value(name):
+                    try:
+                        return str(getattr(input, name)() or "").strip()
+                    except Exception:
+                        return str(_live_setting(name, "") or "").strip()
+
+                return {"stages": _restored_subset_chain(),
+                        "numeric_bounds": _restored_numeric_bounds(),
+                        "start": text_value("datetime_start"),
+                        "end": text_value("datetime_end")}
+
+
+            def _commit_filter_event():
+                """Commit a user filter event without subscribing to configuration writes.
+
+                Reading all effective controls in an isolated scope prevents an
+                unrelated input from becoming a dependency of this event handler.
+                Missing dynamic controls retain their canonical draft values.
+                """
+                if config_manager is None or config_tab_id is None:
+                    return
+                with reactive.isolate():
+                    changes = _filter_config_fields(filter_state())
+                    _patch_live_config(config_tab_id, changes)
+
+            def _register_filter_event(input_name):
+                """Register a per-control event, including dynamically mounted inputs."""
+                def _event_value():
+                    try:
+                        return input[input_name]()
+                    except Exception:
+                        return None
+
+                @reactive.effect
+                @reactive.event(_event_value, ignore_init=True)
+                def _on_filter_change():
+                    _commit_filter_event()
+
+                return _on_filter_change
+
+            # Retain references for the lifetime of this plot module. Unlike a
+            # broad synchronization effect, each handler observes one UI input;
+            # no handler subscribes to the draft it writes.
+            _filter_event_handlers = []
+            for _name in ("numeric_subset_columns", "datetime_start", "datetime_end"):
+                _filter_event_handlers.append(_register_filter_event(_name))
+            for _stage in range(max_subset_stages):
+                for _prefix in ("subset_column", "subset_values", "subset_style"):
+                    _filter_event_handlers.append(
+                        _register_filter_event(f"{_prefix}_{_stage}")
+                    )
+            for _index in range(len(numeric_columns)):
+                for _suffix in ("gt", "lt"):
+                    _filter_event_handlers.append(
+                        _register_filter_event(f"numeric_{_suffix}_{_index}")
+                    )
 
             @reactive.calc
             def filtered_summary():
@@ -446,7 +553,7 @@ if (!window.__apmColorPickerInstalled) {
                 # Preserve original row adjacency before numerical filtering so a
                 # line cannot bridge observations removed by a numeric bound.
                 source = summary
-                if input.plot_type() == "line" and AGGREGATES.get(input.aggregate()) is None and list(input.numeric_subset_columns() or []):
+                if input.plot_type() == "line" and AGGREGATES.get(input.aggregate()) is None and state["numeric_bounds"]:
                     source = summary.copy()
                     order = source.sort_values((["identifier"] if "identifier" in source.columns else []) + ["datetime"], kind="stable")
                     if "identifier" in order.columns:
@@ -463,20 +570,14 @@ if (!window.__apmColorPickerInstalled) {
                             filter_style=stage["style"],
                         )
                 current = _apply_filters(current, {}, state["start"], state["end"])
-                for name in list(input.numeric_subset_columns() or []):
-                    if name not in numeric_columns:
-                        continue
-                    index = numeric_columns.index(name)
+                for name, bounds in state["numeric_bounds"].items():
                     values = pd.to_numeric(current[column_map[name]], errors="coerce")
                     for suffix, comparison in (("gt", "gt"), ("lt", "lt")):
-                        try:
-                            raw = input[f"numeric_{suffix}_{index}"]()
-                        except Exception:
-                            raw = ""
+                        raw = bounds.get(suffix, "")
                         try:
                             bound = float(str(raw).strip())
                         except (TypeError, ValueError):
-                            continue  # Empty/incomplete inputs do not filter.
+                            continue
                         if not np.isfinite(bound):
                             continue
                         mask = values.gt(bound) if comparison == "gt" else values.lt(bound)
@@ -489,7 +590,14 @@ if (!window.__apmColorPickerInstalled) {
             import hashlib
             _label_fields = ("legend_labels", "panel_titles", "x_tick_labels", "y_tick_labels")
             _label_keys = {name: reactive.value(()) for name in _label_fields}
-            _label_values = {name: reactive.value({}) for name in _label_fields}
+            from .appearance import _parse_label_map
+            def _editor_map(field, *, watch=False):
+                # The tab draft owns edited mappings; no parallel reactive dictionary.
+                if config_manager is not None and config_tab_id is not None:
+                    if watch and config_tab_id in config_manager.drafts:
+                        config_manager.watch(config_tab_id, "appearance")
+                    return _parse_label_map(_live_setting(field, initial_filters.get(field, "")))
+                return _parse_label_map(initial_filters.get(field, ""))
 
             def _set_label_keys(field, keys):
                 keys = tuple(dict.fromkeys(str(k) for k in keys if str(k).strip()))
@@ -505,8 +613,9 @@ if (!window.__apmColorPickerInstalled) {
                 # otherwise forms plot -> legend keys -> plot feedback cycles.
                 with reactive.isolate():
                     keys = _label_keys[field].get()
-                values = _label_values[field].get()
-                return "; ".join(f"{key}={values.get(key, key)}" for key in keys
+                values = _editor_map(field)
+                active = keys if keys else tuple(values)
+                return "; ".join(f"{key}={values.get(key, key)}" for key in active
                                  if values.get(key, key) != key)
 
             for _field in _label_fields:
@@ -516,7 +625,7 @@ if (!window.__apmColorPickerInstalled) {
                     def _editor():
                         keys = _label_keys[field].get()
                         with reactive.isolate():
-                            values = _label_values[field].get()
+                            values = _editor_map(field, watch=True)
                         headings = {
                             "legend_labels": "Legend labels",
                             "panel_titles": "Panel titles",
@@ -546,7 +655,7 @@ if (!window.__apmColorPickerInstalled) {
                         # Read current mappings without subscribing this watcher to
                         # its own writes: otherwise each keystroke can retrigger it.
                         with reactive.isolate():
-                            updated = dict(_label_values[field].get())
+                            updated = dict(_editor_map(field))
                         changed = False
                         for key in keys:
                             ident = f"edit_{field}_{hashlib.sha1(key.encode()).hexdigest()[:16]}"
@@ -555,7 +664,10 @@ if (!window.__apmColorPickerInstalled) {
                                 updated[key] = value
                                 changed = True
                         if changed:
-                            _label_values[field].set(updated)
+                            if config_manager is not None and config_tab_id is not None:
+                                _patch_live_config(config_tab_id, {
+                                    field: "; ".join(f"{k}={v}" for k, v in updated.items() if v != k)
+                                })
                 _make_watcher(_field)
 
             # Colour keys describe the actual colour encoding, not the number
@@ -563,11 +675,12 @@ if (!window.__apmColorPickerInstalled) {
             # determining the active within-panel grouping.
             from .color_editor import active_color_keys, color_defaults, valid_hex_color
             _color_keys = reactive.value(())
-            _color_values = reactive.value({})
+            def _color_map(*, watch=False):
+                return _editor_map("trace_colors", watch=watch)
 
             def _color_string():
                 keys = _color_keys.get()
-                values = _color_values.get()
+                values = _color_map(watch=True)
                 return "; ".join(f"{key}={values[key]}" for key in keys if key in values)
 
             # Each rendered colour key has a stable swatch button. The popup
@@ -582,7 +695,7 @@ if (!window.__apmColorPickerInstalled) {
             @render.ui
             def trace_colors_editor():
                 keys = _color_keys.get()
-                values = _color_values.get()
+                values = _color_map(watch=True)
                 with reactive.isolate():
                     palette = _optional_input("palette", "Default")
                     spec = prepared_plot()
@@ -619,7 +732,7 @@ if (!window.__apmColorPickerInstalled) {
                 if clicked is None:
                     return
                 with reactive.isolate():
-                    values = _color_values.get()
+                    values = _color_map()
                     defaults = color_defaults(prepared_plot(), (clicked,),
                                               _optional_input("palette", "Default"))
                     current = values.get(clicked, defaults.get(clicked, "#636efa"))
@@ -650,9 +763,12 @@ if (!window.__apmColorPickerInstalled) {
                 value = str(_optional_input("picker_hex", "")).strip()
                 if key is not None and valid_hex_color(value):
                     with reactive.isolate():
-                        values = dict(_color_values.get())
+                        values = dict(_color_map())
                     values[key] = value.upper()
-                    _color_values.set(values)
+                    if config_manager is not None and config_tab_id is not None:
+                        _patch_live_config(config_tab_id, {
+                            "trace_colors": "; ".join(f"{k}={v}" for k, v in values.items())
+                        })
                     ui.modal_remove()
                 else:
                     ui.notification_show("Enter a valid six-digit hex colour (#RRGGBB).",
@@ -1082,34 +1198,62 @@ if (!window.__apmColorPickerInstalled) {
             def available_elements():
                 return element_keys(unfiltered_plot())
 
-            # Visibility is owned by the plot, not by the dynamically mounted
-            # checkbox widget. Rebuilding the widget must not feed back into
-            # its own render dependency (which previously caused a render loop).
+            # The live configuration is authoritative for component visibility.
+            # Keep only the previous *available keys* locally: this is derived
+            # renderer metadata, not another copy of the user's selection.
             inherited_visible = initial_filters.get("visible_elements")
-            visible_element_selection = reactive.Value(
-                tuple(inherited_visible) if inherited_visible is not None else None
-            )
             element_key_signature = reactive.Value(None)
 
+            def configured_visibility():
+                """Read canonical visibility; None means all components visible."""
+                if config_manager is not None and config_tab_id is not None:
+                    if config_tab_id in config_manager.drafts:
+                        return config_manager.value(config_tab_id, "visible_elements", inherited_visible)
+                return inherited_visible
+
             @reactive.effect
-            def reset_visibility_for_new_elements():
+            def reconcile_visible_elements():
                 keys = tuple(available_elements())
                 with reactive.isolate():
                     previous = element_key_signature.get()
-                if previous != keys:
-                    if previous is not None:
-                        visible_element_selection.set(tuple(default_visible_keys(unfiltered_plot())))
-                    element_key_signature.set(keys)
+                    saved = configured_visibility()
+                # Dynamic controls can briefly expose no components on restore.
+                # Never overwrite saved visibility during that transient phase.
+                if not keys:
+                    return
+                if previous == keys:
+                    return
+                if saved is None:
+                    selected = keys
+                else:
+                    selected = tuple(k for k in keys if k in saved)
+                    if previous is None and not selected:
+                        # Old snapshots may contain stale/empty component IDs.
+                        selected = keys
+                    elif previous is not None:
+                        old_keys = set(previous)
+                        selected = tuple(k for k in keys if k in selected or k not in old_keys)
+                element_key_signature.set(keys)
+                if config_manager is not None and config_tab_id is not None:
+                    _patch_live_config(config_tab_id, {"visible_elements": list(selected)})
 
             @render.ui
             def element_visibility_ui():
                 keys = tuple(available_elements())
                 with reactive.isolate():
-                    current = visible_element_selection.get()
-                    chosen = (tuple(default_visible_keys(unfiltered_plot())) if current is None else
-                              tuple(k for k in current if k in keys))
+                    saved = configured_visibility()
+                    chosen = keys if saved is None else tuple(k for k in keys if k in saved)
                 if not keys:
-                    return ui.help_text("No plotted elements available")
+                    # An empty filtered dataset is temporary. Keep the last
+                    # component controls mounted instead of replacing them
+                    # with help text: unmounting sends an empty checkbox value
+                    # which can later hide every line when data returns.
+                    with reactive.isolate():
+                        previous = element_key_signature.get() or ()
+                    if not previous:
+                        return ui.help_text("No plotted elements available")
+                    keys = previous
+                    chosen = keys if saved is None else tuple(k for k in keys if k in saved)
                 return ui.input_checkbox_group(
                     "visible_elements", "Visible plotted elements",
                     choices={key: key for key in keys}, selected=list(chosen),
@@ -1122,18 +1266,26 @@ if (!window.__apmColorPickerInstalled) {
                 if chosen is None:
                     return
                 keys = tuple(available_elements())
-                chosen = tuple(k for k in chosen if k in keys)
                 with reactive.isolate():
-                    current = visible_element_selection.get()
-                    effective = tuple(default_visible_keys(unfiltered_plot())) if current is None else current
-                if chosen != effective:
-                    visible_element_selection.set(chosen)
+                    signature = element_key_signature.get()
+                    saved = configured_visibility()
+                # Ignore stale events from an unmounted/rebuilt checkbox group.
+                if not keys or signature != keys:
+                    return
+                chosen = tuple(k for k in chosen if k in keys)
+                effective = keys if saved is None else tuple(k for k in keys if k in saved)
+                if chosen != effective and config_manager is not None and config_tab_id is not None:
+                    _patch_live_config(config_tab_id, {"visible_elements": list(chosen)})
 
             @reactive.calc
             def prepared_plot():
                 raw = unfiltered_plot()
-                keys = tuple(available_elements())
-                chosen = visible_element_selection.get()
+                # Visibility changes alter the plot specification. Other appearance
+                # edits (labels, colours, panel spacing) must not invalidate it:
+                # renderers can reuse the already prepared data/specification.
+                if config_manager is not None and config_tab_id is not None:
+                    config_manager.watch(config_tab_id, "visibility")
+                chosen = configured_visibility()
                 if chosen is None:
                     chosen = tuple(default_visible_keys(raw))
                 return filter_elements(raw, chosen)
@@ -1212,6 +1364,8 @@ if (!window.__apmColorPickerInstalled) {
             # Populate appearance controls only after a valid plot has been
             # prepared.  The effect depends on the plot specification, not on
             # appearance inputs, so editing a label or colour cannot reset it.
+            _last_line_style_keys = [None]
+
             @reactive.effect
             @reactive.event(prepared_plot, lambda: _optional_input("multi_panel", False) if input.group_by() else False,
                             lambda: tuple(_optional_input("panel_by", []) or []) if input.group_by() and len(input.group_by()) > 1 else (),
@@ -1237,9 +1391,22 @@ if (!window.__apmColorPickerInstalled) {
                         )
                         names = trace_defaults["names"]
                         defaults["colors"] = trace_defaults["colors"]
-                ui.update_text("title", value="Summary plot")
-                ui.update_text("x_axis_label", value=defaults["x_label"])
-                ui.update_text_area("y_axis_label", value=defaults["y_label"])
+                # On a restored tab, the saved labels/title are authoritative.
+                # The preparation effect can run after the controls mount and
+                # otherwise overwrite the saved values with generated defaults.
+                # Resume automatic labels when the underlying data selection changes.
+                restored_data_keys = ("plot_type", "x", "y", "group_by", "frequency", "aggregate")
+                same_restored_data = bool(initial_filters) and all(
+                    (list(_optional_input(k, []) or []) if k in ("x", "y", "group_by") else _optional_input(k, None))
+                    == (list(initial_filters.get(k, []) or []) if k in ("x", "y", "group_by") else initial_filters.get(k))
+                    for k in restored_data_keys if k in initial_filters
+                )
+                if not same_restored_data or "title" not in initial_filters:
+                    ui.update_text("title", value="Summary plot")
+                if not same_restored_data or "x_axis_label" not in initial_filters:
+                    ui.update_text("x_axis_label", value=defaults["x_label"])
+                if not same_restored_data or "y_axis_label" not in initial_filters:
+                    ui.update_text_area("y_axis_label", value=defaults["y_label"])
                 limits = _axis_bounds_from_spec(
                     spec,
                     bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
@@ -1290,8 +1457,26 @@ if (!window.__apmColorPickerInstalled) {
                 # active plot and never reset by appearance defaults.
                 kind = spec["kind"]
                 if kind == "line":
-                    ui.update_text_area("line_alpha", value="\n".join(f"{name}=1" for name in names))
-                    ui.update_text_area("line_style", value="\n".join(f"{name}=solid" for name in names))
+                    # Only reconcile the editors when their trace identities change.
+                    # Plot preparation may rerun for unrelated reasons (filters,
+                    # panels, etc.); resetting these inputs on each run races with
+                    # the user's edits and makes repeated style changes unreliable.
+                    current_keys = tuple(names)
+                    previous_keys = _last_line_style_keys[0]
+                    _last_line_style_keys[0] = current_keys
+                    if previous_keys != current_keys:
+                        for field, default in (("line_alpha", "1"), ("line_style", "solid")):
+                            if previous_keys is None and same_restored_data and field in initial_filters:
+                                # The saved configuration is already mounted.
+                                continue
+                            with reactive.isolate():
+                                existing = _parse_label_map(_optional_input(field, ""))
+                            # Preserve edits for identities that survive a data
+                            # change; initialize only newly discovered traces.
+                            updated = "\n".join(
+                                f"{name}={existing.get(name, default)}" for name in names
+                            )
+                            ui.update_text_area(field, value=updated)
                 elif kind == "histogram":
                     ui.update_text_area("hist_alpha", value="\n".join(f"{name}=0.65" for name in names))
                 elif kind == "scatter":
@@ -1481,8 +1666,11 @@ if (!window.__apmColorPickerInstalled) {
 
             def _capture_legend(fig, is_plotly=False):
                 from .appearance import _parse_label_map
+                # Use the full saved mapping during initial legend discovery.
+                # _label_string() deliberately filters by discovered keys, which
+                # are still empty when a restored tab first renders.
                 with reactive.isolate():
-                    mapping = _parse_label_map(_label_string("legend_labels"))
+                    mapping = dict(_editor_map("legend_labels"))
                 # Resolve displayed labels against stable, original keys.  A
                 # reverse dictionary is unsafe: two different keys may have
                 # the same edited label, and mapping order then makes keys
@@ -1678,6 +1866,11 @@ if (!window.__apmColorPickerInstalled) {
                 def matplotlib_options():
                     # Shared with the export so that all appearance options,
                     # including per-panel overrides, are reproduced exactly.
+                    # Read grouping/panel controls once per reactive evaluation.
+                    # These options affect rendering, not selected_data().
+                    active_groups = list(input.group_by() or [])
+                    multi_panel = bool(_optional_input("multi_panel", False)) if active_groups else False
+                    panel_groups = (list(_optional_input("panel_by", []) or []) or active_groups) if len(active_groups) > 1 else active_groups
                     return dict(title=_optional_input("title", ""),
                         x_label=_optional_input("x_axis_label", ""), y_label=_optional_input("y_axis_label", ""),
                         legend_labels=_label_string("legend_labels"), trace_colors=_color_string(),
@@ -1694,24 +1887,23 @@ if (!window.__apmColorPickerInstalled) {
                         panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
                         box_showfliers=_optional_input("box_showfliers", True), box_orientation=_optional_input("box_orientation", "vertical"),
                         bar_box_width=float(_optional_input("bar_box_width", 1.0)),
-                        line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2), line_alpha=_optional_input("line_alpha", ""),
-                        line_style=_optional_input("line_style", ""), scatter_size=_optional_input("scatter_size", ""),
-                        scatter_marker=_optional_input("scatter_marker", ""), scatter_alpha=_optional_input("scatter_alpha", ""),
+                        line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2),
+                        line_alpha=(_optional_input("line_alpha", "") if input.plot_type() == "line" else ""),
+                        line_style=(_optional_input("line_style", "") if input.plot_type() == "line" else ""),
+                        scatter_size=(_optional_input("scatter_size", "") if input.plot_type() == "scatter" else ""),
+                        scatter_marker=(_optional_input("scatter_marker", "") if input.plot_type() == "scatter" else ""),
+                        scatter_alpha=(_optional_input("scatter_alpha", "") if input.plot_type() == "scatter" else ""),
                         bins=int(_optional_input("bins", 30)) if input.plot_type() == "histogram" else 30,
                         density=_optional_input("hist_density", "False") == "True" if input.plot_type() == "histogram" else False,
                         stacked=_optional_input("hist_stacked", "False") == "True" if input.plot_type() == "histogram" else False,
                         histtype=_optional_input("hist_type", "bar") if input.plot_type() == "histogram" else "bar",
                         cumulative=int(_optional_input("hist_cumulative", "0")) if input.plot_type() == "histogram" else 0,
-                        panel_by=(
-                            ((list(_optional_input("panel_by", []) or []) or list(input.group_by() or [])) if len(list(input.group_by() or [])) > 1
-                             else list(input.group_by() or []))
-                            if list(input.group_by() or []) and bool(_optional_input("multi_panel", False)) else None
-                        ),
+                        panel_by=(panel_groups if multi_panel else None),
                         independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
-                                                  if input.group_by() and _optional_input("multi_panel", False) else True),
-                        panel_titles=(_label_string("panel_titles") if input.group_by() and _optional_input("multi_panel", False) else ""),
-                        panel_hspace=float(_optional_input("panel_hspace", 0.90) or 0),
-                        panel_wspace=float(_optional_input("panel_wspace", 0.38) or 0),
+                                                  if multi_panel else True),
+                        panel_titles=(_label_string("panel_titles") if multi_panel else ""),
+                        panel_hspace=(float(_optional_input("panel_hspace", 0.90) or 0) if multi_panel else 0.90),
+                        panel_wspace=(float(_optional_input("panel_wspace", 0.38) or 0) if multi_panel else 0.38),
                     )
 
                 @render.download(filename="plot_export.zip", media_type="application/zip")
@@ -1750,7 +1942,13 @@ if (!window.__apmColorPickerInstalled) {
                         "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation", "bar_box_width",
                         "multi_panel", "independent_panel_limits", "panel_by", "panel_titles",
                         "panel_font_size", "panel_hspace", "panel_wspace", "visible_elements")
-                result = dict(initial_filters)
+                # The live draft is the canonical state. UI controls contribute
+                # only the fields currently mounted, preserving settings from
+                # inactive/dynamic panels instead of silently dropping them.
+                with reactive.isolate():
+                    result = (config_manager.get(config_tab_id)
+                              if config_manager is not None and config_tab_id in config_manager.drafts
+                              else dict(initial_filters))
                 for key in keys:
                     try:
                         value = (_label_string(key) if key in _label_fields else getattr(input, key)())
@@ -1759,39 +1957,30 @@ if (!window.__apmColorPickerInstalled) {
                     except Exception:
                         # Inputs in inactive tabs may not have been initialized yet.
                         pass
-                chain = []
-                for i in range(max_subset_stages):
-                    try:
-                        name = input[f"subset_column_{i}"]()
-                    except Exception:
-                        break
-                    if name not in column_map:
-                        break
-                    try:
-                        values = list(input[f"subset_values_{i}"]() or [])
-                    except Exception:
-                        values = []
-                    try:
-                        style = input[f"subset_style_{i}"]() or "all"
-                    except Exception:
-                        style = "all"
-                    chain.append({"column": name, "values": values, "style": style})
-                result["subset_chain"] = chain
-                numeric_bounds = {}
-                for name in result.get("numeric_subset_columns", []) or []:
-                    if name not in numeric_columns:
-                        continue
-                    index = numeric_columns.index(name)
-                    numeric_bounds[name] = {}
-                    for suffix in ("gt", "lt"):
-                        try:
-                            numeric_bounds[name][suffix] = input[f"numeric_{suffix}_{index}"]()
-                        except Exception:
-                            numeric_bounds[name][suffix] = initial_filters.get("numeric_subset_bounds", {}).get(name, {}).get(suffix, "")
-                result["numeric_subset_bounds"] = numeric_bounds
+                # Snapshot the same effective filter state used by the renderer,
+                # including saved values for controls not yet mounted.
                 with reactive.isolate():
-                    chosen = visible_element_selection.get()
-                    result["visible_elements"] = list(default_visible_keys(unfiltered_plot()) if chosen is None else chosen)
+                    effective_filters = filter_state()
+                result.update(_filter_config_fields(effective_filters))
+                # These editors are reactive dictionaries, not Shiny inputs.
+                # Persist their full mappings rather than relying on input.*.
+                for field in _label_fields:
+                    with reactive.isolate():
+                        values = dict(_editor_map(field))
+                    result[field] = "; ".join(f"{key}={value}" for key, value in values.items()
+                                              if value != key)
+                with reactive.isolate():
+                    colors = dict(_color_map())
+                    chosen = configured_visibility()
+                    visible_keys = tuple(available_elements())
+                result["trace_colors"] = "; ".join(f"{key}={value}" for key, value in colors.items())
+                # No available components must not erase visibility in a
+                # retained configuration (e.g. threshold above maximum).
+                if not visible_keys:
+                    result["visible_elements"] = None if chosen is None else list(chosen)
+                else:
+                    result["visible_elements"] = list(visible_keys if chosen is None else
+                                                      (k for k in chosen if k in visible_keys))
                 return result
 
             # Expose the same dataframe that feeds plot preparation/export.
@@ -2139,6 +2328,8 @@ if (!window.__apmColorPickerInstalled) {
                     ui.input_action_button("add_tab", "+ New plot", class_="btn-primary"),
                     ui.input_action_button("add_table", "+ New table", class_="btn-primary"),
                     ui.input_action_button("close_tab", "Close selected tab", class_="btn-outline-danger"),
+                    ui.input_action_button("retain_plot", "Save selected plot", class_="btn-outline-primary"),
+                    ui.input_action_button("restore_plot", "Load saved plot", class_="btn-outline-primary"),
                     class_="summary-toolbar-actions",
                 ),
                 # Exactly one app-wide theme picker, outside dynamically added
@@ -2162,6 +2353,7 @@ if (!window.__apmColorPickerInstalled) {
     )
 
     def server(input, output, session):
+        nonlocal config_manager
         # Register shinyswatch at the application root (not inside plot modules).
         # Its picker dynamically switches the app's Bootstrap theme without
         # touching plot-specific options or the plot cloning logic.
@@ -2172,6 +2364,84 @@ if (!window.__apmColorPickerInstalled) {
         tab_filters = {}
         table_frames = {}
         next_table = reactive.value(0)
+        from ..plot_configs import PlotConfigManager
+        manager = config_manager or PlotConfigManager(data)
+        # Use the same manager in each plot module and in the toolbar actions.
+        config_manager = manager
+        saved_revision = reactive.value(0)
+        # Drafts track live input state; only Save selected plot changes Summary.plots.
+        def register_draft(tab_id, snapshot):
+            @reactive.effect
+            def sync_draft():
+                try:
+                    state = snapshot()
+                    manager.update(tab_id, state)
+                except (TypeError, ValueError):
+                    # A transient invalid input must not overwrite the last good draft.
+                    pass
+
+        @reactive.effect
+        @reactive.event(input.retain_plot)
+        def retain_selected():
+            selected = input.plot_tabs()
+            if selected not in tab_filters:
+                ui.notification_show("Select a plot tab to save", type="warning")
+                return
+            ui.modal_show(ui.modal(
+                ui.input_text("retained_plot_name", "Configuration name", value=f"Saved {selected}"),
+                title="Save plot configuration",
+                footer=ui.div(ui.modal_button("Cancel"),
+                              ui.input_action_button("confirm_retain_plot", "Save", class_="btn-primary")),
+            ))
+
+        @reactive.effect
+        @reactive.event(input.confirm_retain_plot)
+        def confirm_retain():
+            selected = input.plot_tabs()
+            try:
+                with reactive.isolate():
+                    manager.update(selected, tab_filters[selected]())
+                    manager.retain(selected, input.retained_plot_name())
+                saved_revision.set(saved_revision.get() + 1)
+                ui.modal_remove()
+                ui.notification_show("Plot configuration retained in Summary.plots", type="message")
+            except Exception as exc:
+                ui.notification_show(f"Could not save configuration: {exc}", type="error")
+
+        @reactive.effect
+        @reactive.event(input.restore_plot)
+        def choose_saved():
+            saved_revision.get()
+            presets = [p for p in manager.saved() if p.get("type") == "plot"]
+            if not presets:
+                ui.notification_show("No retained plot configurations", type="warning")
+                return
+            ui.modal_show(ui.modal(
+                ui.input_select("retained_plot_choice", "Saved plot",
+                                choices={p["id"]: p.get("name", p["id"]) for p in presets}),
+                title="Load saved plot",
+                footer=ui.div(ui.modal_button("Cancel"),
+                              ui.input_action_button("confirm_restore_plot", "Load", class_="btn-primary")),
+            ))
+
+        @reactive.effect
+        @reactive.event(input.confirm_restore_plot)
+        def restore_selected():
+            try:
+                with reactive.isolate():
+                    preset_id = input.retained_plot_choice()
+                    number = next_tab.get() + 1
+                    tab_id = f"plot_{number}"
+                    inherited = manager.restore(preset_id, tab_id)
+                    panel = ui.nav_panel(f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id)
+                    tab_filters[tab_id] = plot_tab_server(tab_id, inherited, config_tab_id=tab_id)
+                    register_draft(tab_id, tab_filters[tab_id])
+                    next_tab.set(number)
+                    active_tabs.set((*active_tabs.get(), tab_id))
+                    ui.insert_nav_panel("plot_tabs", panel, select=True)
+                ui.modal_remove()
+            except Exception as exc:
+                ui.notification_show(f"Could not restore plot: {exc}", type="error")
 
         @reactive.effect
         @reactive.event(input.add_tab)
@@ -2191,7 +2461,8 @@ if (!window.__apmColorPickerInstalled) {
             # Build the new UI before registering the server module. This also
             # avoids leaving a half-registered module when UI creation fails.
             new_panel = ui.nav_panel(f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id)
-            tab_filters[tab_id] = plot_tab_server(tab_id, inherited)
+            tab_filters[tab_id] = plot_tab_server(tab_id, inherited, config_tab_id=tab_id)
+            register_draft(tab_id, tab_filters[tab_id])
             active_tabs.set((*active_tabs.get(), tab_id))
             ui.insert_nav_panel("plot_tabs", new_panel, select=True)
 
@@ -2235,6 +2506,7 @@ if (!window.__apmColorPickerInstalled) {
             ui.remove_nav_panel("plot_tabs", target=selected)
             table_frames.pop(selected, None)
             tab_filters.pop(selected, None)
+            manager.discard(selected)
             active_tabs.set(tuple(t for t in tabs if t != selected))
             # Shiny does not provide a public API to unregister an output module.
             # The removed tab cannot be selected again and tab IDs are never reused.

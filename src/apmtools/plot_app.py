@@ -71,11 +71,15 @@ class PlotApp:
         # Do not change process-wide pandas settings here.
         # With older pandas and CoW disabled, a shallow copy may share writes.
         self.summary = summary.copy(deep=False)
+        # Explicitly retained presets belong to the source Summary. Avoid
+        # mutating a shared list accidentally through the working frame.
+        self.summary.plots = None if getattr(summary, "plots", None) is None else list(summary.plots)
 
     def create_app(self):
         """Build an app whose complete plotting workspace is replaced on load."""
         from shiny import App, module, reactive, render, ui
         from .shiny.ui import _build_summary_ui_server
+        from .plot_configs import PlotConfigManager
         import shinyswatch
 
         app_ui = ui.page_fluid(
@@ -150,16 +154,17 @@ class PlotApp:
                 # Building inner_ui before entering @module.ui leaves toolbar
                 # inputs unprefixed, while the module server listens for
                 # dataset_N-add_tab / dataset_N-add_table.
+                manager = PlotConfigManager(self.original_summary)
                 @module.ui
                 def workspace_ui():
                     inner_ui, _ = _build_summary_ui_server(
-                        data, **self.options, include_theme_picker=False)
+                        data, **self.options, include_theme_picker=False, config_manager=manager)
                     return inner_ui
 
                 @module.server
                 def workspace_server(input, output, session):
                     _, inner_server = _build_summary_ui_server(
-                        data, **self.options, include_theme_picker=False)
+                        data, **self.options, include_theme_picker=False, config_manager=manager)
                     return inner_server(input, output, session)
 
                 ui_factories[name] = workspace_ui

@@ -44,10 +44,16 @@ def multi_y_styles(variables, groups, palette, mode="group", colors=None, styles
             # For colour-by-variable, the grouping dimension must control dashes.
             # Do not let a variable-level style override erase that distinction.
             default_dash = dash_values[secondary.index(q) % len(dash_values)] if q in secondary else "-"
+            # With a single Y variable, newly introduced groups should not
+            # inherit a previous ungrouped line style or an implicit dash cycle.
+            if len(variables) == 1 and groups and mode == "group":
+                default_dash = "-"
             # The Shiny appearance panel automatically populates each group with
             # "solid".  Those generated defaults must not collapse the
             # group-specific dash cycle in colour-by-variable mode.
             override = styles.get(q)
+            if override is None and not groups:
+                override = styles.get(var, styles.get("All observations"))
             if mode == "variable" and groups and override in ("solid", "-"):
                 override = None
             dash_map[(var, group)] = override if override is not None else default_dash

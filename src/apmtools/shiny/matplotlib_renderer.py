@@ -170,11 +170,15 @@ def _panel_trace_defaults(spec, panel_by, *, palette="Default"):
     columns are facets, each panel contains an ungrouped "All observations"
     trace; when some grouping columns remain, their values label the traces.
     """
+    # Preserve first-seen order while avoiding a linear scan for every
+    # repeated trace name across panels (particularly with many facets).
     names = []
+    seen_names = set()
     for _, part, remaining in _panel_partitions(spec, panel_by):
         panel_spec = {**spec, "data": part, "groups": remaining}
         for name in _matplotlib_defaults(panel_spec, palette=palette)["names"]:
-            if name not in names:
+            if name not in seen_names:
+                seen_names.add(name)
                 names.append(name)
     if not names:
         return _matplotlib_defaults(spec, palette=palette)
@@ -596,7 +600,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     key = (str(y), str(name) if group_col else None)
                     ax.plot(part[x], part[y], color=(multi_colors[key] if multi_y else colors.get(name, palette_values[0])),
                             linewidth=float(line_width),
-                            linestyle=(multi_dashes[key] if multi_y else _line_style(styles, name)),
+                            linestyle=(_line_style(styles, name) if not multi_y else
+                                       _line_style(styles, name) if name in styles and len(ys) == 1 else
+                                       multi_dashes[key]),
                             alpha=_bounded_float(alphas, name, 1, 0, 1),
                             label=("_nolegend_" if multi_y else rename.get(name, name)))
     elif kind in ("box", "bar"):

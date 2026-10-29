@@ -1011,7 +1011,7 @@ class Group(pd.DataFrame):
 
 class Summary(pd.DataFrame):
 
-    _metadata = ['metadata', 'plot']
+    _metadata = ['metadata', 'plots']
 
     @property
     def _constructor(self):
@@ -1026,7 +1026,7 @@ class Summary(pd.DataFrame):
         self.plots = None
 
     def __setattr__(self, name, value):
-        if name == "plot" and value is not None and not isinstance(value, list):
+        if name == "plots" and value is not None and not isinstance(value, list):
             raise TypeError("Summary.plot must be None or a list")
         super().__setattr__(name, value)
 
@@ -1035,7 +1035,7 @@ class Summary(pd.DataFrame):
             self.variable = getattr(other, "variable", None)
             self.metadata = getattr(other, "metadata", set()).copy()
             self.description = getattr(other, "description", "")
-            self.plots = getattr(other, "plot", None)
+            self.plots = getattr(other, "plots", None)
 
         return self
 
