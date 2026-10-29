@@ -47,6 +47,17 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
     if "error" in spec:
         return {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
     df, kind, x, ys = spec["data"], spec["kind"], spec["x"], spec["ys"]
+    # A long-form Y grouping must render its value column, not a source
+    # column removed by melt(). Normalize the local spec before faceting.
+    if kind == "scatter" and "__axis_y_value" in df.columns and any(y not in df.columns for y in ys):
+        ys = ["__axis_y_value"]
+        spec = {**spec, "ys": ys}
+
+    # Reactive selection changes can briefly expose a specification whose
+    # original Y names are no longer present after a melt/reshape.
+    ys = [y for y in ys if y in df.columns]
+    if x not in df.columns or (kind != "histogram" and not ys):
+        return {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
     if df.empty:
         return {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
     bounds = {key: "" for key in ("x_min", "x_max", "y_min", "y_max")}
@@ -364,6 +375,12 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         return fig
 
     df, kind, x, ys = spec["data"], spec["kind"], spec["x"], spec["ys"]
+    # A long-form Y grouping must render its value column, not a source
+    # column removed by melt(). Normalize the local spec before faceting.
+    if kind == "scatter" and "__axis_y_value" in df.columns and any(y not in df.columns for y in ys):
+        ys = ["__axis_y_value"]
+        spec = {**spec, "ys": ys}
+
     # Facet only the native Matplotlib renderer.  Each panel receives the
     # same filtered/aggregated data subset and the same appearance settings.
     if panel_by and _axes is None:
@@ -404,19 +421,23 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
                     x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
                     x_minor_ticks=x_minor_ticks, y_minor_ticks=y_minor_ticks)
-            for extra in list(axes.flat)[len(partitions):]:
-                extra.set_visible(False)
+            # Resolve the axes once; reuse the same ordered panel collection for
+            # legend layout rather than repeatedly materializing axes.flat.
+            flat_axes = axes.flat
+            active_axes = [flat_axes[i] for i in range(len(partitions))]
+            for i in range(len(partitions), axes.size):
+                flat_axes[i].set_visible(False)
             if legend_inside:
-                for panel_ax in list(axes.flat)[:len(partitions)]:
+                for panel_ax in active_axes:
                     if panel_ax.get_legend() is not None:
                         panel_ax.get_legend().set_in_layout(False)
                 fig.tight_layout()
                 # V77 used tight_layout for facets; reserve generous gutters
                 # without changing V83's legend behaviour or column control.
                 fig.subplots_adjust(wspace=panel_wspace, hspace=panel_hspace)
-                _fit_inside_legends(fig, list(axes.flat)[:len(partitions)], legend_font_size, legend_columns)
+                _fit_inside_legends(fig, active_axes, legend_font_size, legend_columns)
             else:
-                _place_outside_legend(fig, list(axes.flat)[:len(partitions)],
+                _place_outside_legend(fig, active_axes,
                                       legend_position, legend_font_size, legend_columns,
                                       panel_hspace=panel_hspace, panel_wspace=panel_wspace)
             return fig
@@ -457,27 +478,45 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         variable_names = list(ys)
         x_names = list(spec.get("x_variables", [x]))
         group_names = style_groups if group_col else []
+        # Reuse stable positions for per-variable markers and hatches.
+        x_position = {name: i for i, name in enumerate(x_names)}
+        y_position = {name: i for i, name in enumerate(ys)}
+        group_position = {name: i for i, name in enumerate(group_names)}
         active = set()
         if kind == "scatter":
             scatter_markers = ['o', 's', 'D', 'x', '^', 'v', 'P', '*']
             for key, group, y, xv, category, rows in entries:
                 g = group if group_col else None
                 active.add((y, g))
+                # Use the same editable series keys as the appearance controls.
+                # Previously this multi-axis branch ignored all three overrides.
+                candidates = (key, f"{g}, {y}" if g is not None else str(y),
+                              str(g) if g is not None else str(y), str(y))
+                def override(mapping, fallback):
+                    return next((mapping[name] for name in candidates if name in mapping), fallback)
+                size = _bounded_float({"value": override(sizes, marker_size)}, "value", marker_size, 0.1, 100)
+                alpha = _bounded_float({"value": override(marker_alphas, 1)}, "value", 1, 0, 1)
+                default_marker = scatter_markers[x_position[xv] % len(scatter_markers)]
+                marker = (_scatter_marker({"value": override(markers, "dot")}, "value")
+                          if any(name in markers for name in candidates) else default_marker)
                 ax.scatter(rows[xv], rows[y], color=color_map[(y, g)],
-                           marker=scatter_markers[x_names.index(xv) % len(scatter_markers)],
-                           s=marker_size**2, alpha=.8)
+                           marker=marker, s=size**2, alpha=alpha)
         else:
             cats = list(pd.unique(df[x].astype(str)))
             combinations = [(g, y) for g in (group_names or ['All observations']) for y in ys]
             n = max(1, len(combinations))
             width = .82 / n
+            # Resolve categorical positions once rather than scanning both
+            # lists for every multi-axis trace. Keep the original ordering.
+            combination_index = {item: i for i, item in enumerate(combinations)}
+            category_index = {item: i for i, item in enumerate(cats)}
             from collections import defaultdict
             buckets = defaultdict(list)
             for key, group, y, xv, category, rows in entries:
                 g = group if group_col else None
                 active.add((y, g))
-                idx = combinations.index((group, y))
-                pos = cats.index(category) + (idx - (n - 1)/2)*width
+                idx = combination_index[(group, y)]
+                pos = category_index[category] + (idx - (n - 1)/2)*width
                 values = pd.to_numeric(rows[y], errors='coerce').dropna().to_numpy(dtype=float)
                 buckets[(pos, y, g)].extend(values)
             for (pos, y, g), values in buckets.items():
@@ -485,7 +524,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     continue
                 color = color_map[(y, g)]
                 hatch_options = ['', '/', '\\', 'x', '.', '+', '-']
-                hatch_index = ys.index(y) if multi_y_color_by == 'group' else (group_names.index(g) if g in group_names else 0)
+                hatch_index = y_position[y] if multi_y_color_by == 'group' else group_position.get(g, 0)
                 hatch = '' if multi_y_color_by in ('none', 'both') else hatch_options[hatch_index % len(hatch_options)]
                 if kind == 'bar':
                     ax.bar(pos, sum(values), width=width*.92*bar_box_width, color=color, hatch=hatch)
@@ -584,11 +623,14 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         elif spec["frequency"] is not None and id_col is None:
             line_df = _add_gap_sections(df, x_column=x, group_columns=spec["groups"], frequency=spec["frequency"])
             section_col = "__line_section"
+        # Partition the line data once, not once per Y variable.  This
+        # preserves group order and the existing equality semantics while
+        # avoiding repeated full-column masks for multi-Y plots.
+        grouped_line_rows = ([(n, line_df.loc[line_df[group_col] == n]) for n in labels]
+                             if group_col else None)
         for y in ys:
-            if group_col:
-                sets = [(n, line_df.loc[line_df[group_col] == n]) for n in labels]
-            else:
-                sets = [(str(y) if len(ys) > 1 else "All observations", line_df)]
+            sets = (grouped_line_rows if grouped_line_rows is not None else
+                    [(str(y) if len(ys) > 1 else "All observations", line_df)])
             for name, rows in sets:
                 rows = rows.loc[rows[y].notna()]
                 if rows.empty:

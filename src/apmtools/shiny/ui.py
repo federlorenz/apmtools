@@ -963,6 +963,18 @@ if (!window.__apmColorPickerInstalled) {
                     return
                 _last_axis_group_choices.set(signature)
                 selected = [g for g in current if g in choices]
+                # The virtual axis groups are not part of the static selectize
+                # choices at mount time. On restoring a saved plot, Shiny may
+                # discard them before this effect populates the choices.
+                # Restore only eligible saved virtual groups; do not override
+                # physical groups or subsequent user changes.
+                if previous is None:
+                    restored = initial_filters.get("group_by", []) or []
+                    if isinstance(restored, str):
+                        restored = [restored]
+                    for name in restored:
+                        if name in ("variables_x", "variables_y") and name in choices and name not in selected:
+                            selected.append(name)
                 ui.update_selectize("group_by", choices={c: c for c in choices}, selected=selected)
 
             @reactive.calc
@@ -1136,9 +1148,24 @@ if (!window.__apmColorPickerInstalled) {
 
                 if (selected_plot == "scatter" and "variables_x" in selected_groups
                         and len(x_variables) > 1):
-                    id_columns = [c for c in plot_df.columns if c not in x_variables]
-                    plot_df = plot_df.melt(id_vars=id_columns, value_vars=x_variables,
+                    # Melt copies rather than the original X columns.  A source
+                    # variable can simultaneously be an X and a Y selection;
+                    # removing it here leaves the subsequent Y melt and the
+                    # renderer with a stale reference to a missing column.
+                    plot_df = plot_df.copy()
+                    x_copies = []
+                    x_names = {}
+                    for index, column in enumerate(x_variables):
+                        temporary = f"__plot_x_melt_{index}"
+                        while temporary in plot_df.columns:
+                            temporary += "_"
+                        plot_df[temporary] = plot_df[column]
+                        x_copies.append(temporary)
+                        x_names[temporary] = column
+                    id_columns = [c for c in plot_df.columns if c not in x_copies]
+                    plot_df = plot_df.melt(id_vars=id_columns, value_vars=x_copies,
                                            var_name="variables_x", value_name="__axis_x_value")
+                    plot_df["variables_x"] = plot_df["variables_x"].map(x_names)
                     x_column = "__axis_x_value"
                     x_variables = [x_column]
 
@@ -1150,9 +1177,30 @@ if (!window.__apmColorPickerInstalled) {
                 if "variables_y" in selected_groups and len(y_columns) > 1:
                     # Make the selected Y variable an actual categorical dimension,
                     # so it works with ordinary grouping and panel partitioning.
-                    id_columns = [c for c in plot_df.columns if c not in y_columns]
-                    plot_df = plot_df.melt(id_vars=id_columns, value_vars=y_columns,
-                                           var_name="variables_y", value_name="__axis_y_value")
+                    # A variable may be selected as both scatter X and Y.
+                    # Melting the original Y columns would remove it from the
+                    # frame, leaving the X axis pointing at a missing column.
+                    # Melt temporary Y copies instead, retaining X columns.
+                    overlapping = set(y_columns).intersection(x_variables)
+                    if overlapping:
+                        plot_df = plot_df.copy()
+                        copies = []
+                        original_names = {}
+                        for index, column in enumerate(y_columns):
+                            temporary = f"__plot_y_melt_{index}"
+                            while temporary in plot_df.columns:
+                                temporary += "_"
+                            plot_df[temporary] = plot_df[column]
+                            copies.append(temporary)
+                            original_names[temporary] = column
+                        id_columns = [c for c in plot_df.columns if c not in copies]
+                        plot_df = plot_df.melt(id_vars=id_columns, value_vars=copies,
+                                               var_name="variables_y", value_name="__axis_y_value")
+                        plot_df["variables_y"] = plot_df["variables_y"].map(original_names)
+                    else:
+                        id_columns = [c for c in plot_df.columns if c not in y_columns]
+                        plot_df = plot_df.melt(id_vars=id_columns, value_vars=y_columns,
+                                               var_name="variables_y", value_name="__axis_y_value")
                     y_columns = ["__axis_y_value"]
                     # The categorical X labels have already been computed above.
                     # Scatter and bar/box now use the standard single-Y renderer.
@@ -1184,6 +1232,12 @@ if (!window.__apmColorPickerInstalled) {
                     plot_df["__plot_group"] = (
                         _composite_labels(plot_df, group_columns)
                     )
+
+                # The scatter Y-variable grouping uses a long-form value column.
+                # Keep the spec synchronized with that column even during
+                # reactive transitions between single- and multi-Y selections.
+                if selected_plot == "scatter" and "__axis_y_value" in plot_df.columns:
+                    y_columns = ["__axis_y_value"]
 
                 return {"data": plot_df, "kind": selected_plot, "x": x_column,
                         "ys": y_columns, "groups": group_columns,
@@ -1365,6 +1419,7 @@ if (!window.__apmColorPickerInstalled) {
             # prepared.  The effect depends on the plot specification, not on
             # appearance inputs, so editing a label or colour cannot reset it.
             _last_line_style_keys = [None]
+            _last_scatter_style_keys = [None]
 
             @reactive.effect
             @reactive.event(prepared_plot, lambda: _optional_input("multi_panel", False) if input.group_by() else False,
@@ -1480,9 +1535,19 @@ if (!window.__apmColorPickerInstalled) {
                 elif kind == "histogram":
                     ui.update_text_area("hist_alpha", value="\n".join(f"{name}=0.65" for name in names))
                 elif kind == "scatter":
-                    ui.update_text_area("scatter_size", value="\n".join(f"{name}=7" for name in names))
-                    ui.update_text_area("scatter_marker", value="\n".join(f"{name}=dot" for name in names))
-                    ui.update_text_area("scatter_alpha", value="\n".join(f"{name}=1" for name in names))
+                    # Preserve user edits across preparation updates; only
+                    # synchronize when the actual trace identities change.
+                    current_keys = tuple(names)
+                    previous_keys = _last_scatter_style_keys[0]
+                    _last_scatter_style_keys[0] = current_keys
+                    if previous_keys != current_keys:
+                        for field, default in (("scatter_size", "7"), ("scatter_marker", "dot"), ("scatter_alpha", "1")):
+                            if previous_keys is None and same_restored_data and field in initial_filters:
+                                continue
+                            with reactive.isolate():
+                                existing = _parse_label_map(_optional_input(field, ""))
+                            ui.update_text_area(field, value="\n".join(
+                                f"{name}={existing.get(name, default)}" for name in names))
                 if backend == "matplotlib":
                     panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
                                        else selected_groups)
