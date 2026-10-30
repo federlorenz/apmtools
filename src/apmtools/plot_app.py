@@ -83,12 +83,26 @@ class PlotApp:
         import shinyswatch
 
         app_ui = ui.page_fluid(
+            ui.tags.button("Hide toolbars", type="button", class_="btn btn-sm btn-outline-secondary my-0", id="standalone-toolbar-collapse-toggle", **{"aria-expanded": "true"}),
             ui.div(
-                ui.input_action_button("open_dataset", "Open Dataset", class_="btn-primary"),
+                ui.input_action_button("open_dataset", "Open Dataset", class_="btn-outline-primary"),
+                ui.div(id="standalone-save-dataset-slot"),
                 ui.output_text("dataset_status", inline=True),
-                class_="d-flex align-items-center gap-3 my-2",
+                ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme ms-auto"),
+                class_="d-flex align-items-center gap-1 my-0 standalone-dataset-toolbar",
             ),
-            ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme", style="position:absolute;right:1.5rem;top:.5rem;z-index:10"),
+            ui.tags.script("""
+              (() => {
+                const move = () => {
+                  const slot = document.getElementById('standalone-save-dataset-slot');
+                  const button = document.querySelector('#summary-dataset-toolbar button');
+                  if (slot && button && button.parentElement !== slot) slot.appendChild(button);
+                };
+                new MutationObserver(move).observe(document.body, {childList:true, subtree:true});
+                document.addEventListener('DOMContentLoaded', move);
+                move();
+              })();
+            """),
             ui.output_ui("dataset_workspace"),
             title="PlotApp",
         )

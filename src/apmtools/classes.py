@@ -1011,7 +1011,7 @@ class Group(pd.DataFrame):
 
 class Summary(pd.DataFrame):
 
-    _metadata = ['metadata', 'plots']
+    _metadata = ['metadata', 'plots', 'variable', 'description']
 
     @property
     def _constructor(self):
@@ -1029,6 +1029,17 @@ class Summary(pd.DataFrame):
         if name == "plots" and value is not None and not isinstance(value, list):
             raise TypeError("Summary.plot must be None or a list")
         super().__setattr__(name, value)
+
+    def __setstate__(self, state):
+        """Restore DataFrame state and default metadata absent in older pickles."""
+        super().__setstate__(state)
+        # Some older pickles contain an instance-level _metadata list, which
+        # masks the corrected class declaration and breaks future copies.
+        self.__dict__.pop("_metadata", None)
+        for name, default in (("plots", None), ("variable", None),
+                              ("description", ""), ("metadata", set())):
+            if name not in self.__dict__:
+                object.__setattr__(self, name, default)
 
     def __finalize__(self, other, method=None, **kwargs):
         if isinstance(other, Summary):

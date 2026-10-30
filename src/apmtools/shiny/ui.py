@@ -2,6 +2,7 @@
 from __future__ import annotations
 from .filter_config import filter_config_fields as _filter_config_fields
 import threading
+import json
 from datetime import date, datetime, time, timedelta
 from collections.abc import Sequence
 import numpy as np
@@ -1528,6 +1529,21 @@ if (!window.__apmColorPickerInstalled) {
                         panel_bounds = {name: _pad_axis_bounds(bounds) for name, bounds in panel_bounds.items()}
                         limits = {key: _format_panel_bounds(panel_bounds, key) for key in limits}
                 for field, value in limits.items():
+                    # A restored plot's explicit axis bounds are authoritative.
+                    # The preparation observer fires after the saved inputs mount;
+                    # overwriting them here caused the saved limits to flash and
+                    # then revert to automatically calculated limits.  Continue
+                    # recalculating defaults when the user changes X/Y variables.
+                    # Restoration is asynchronous: the group, aggregation and
+                    # plot selectors can briefly disagree with the saved values
+                    # while mounting. That is NOT a user edit and must never
+                    # erase a persisted bound. Release the guard only when an
+                    # actual X/Y selection change has been observed after the
+                    # saved selectors were fully initialized.
+                    if (not axis_selection_changed
+                            and field in initial_filters
+                            and str(initial_filters[field]).strip()):
+                        continue
                     if backend == "matplotlib":
                         ui.update_text_area(field, value=value)
                     else:
@@ -1653,6 +1669,12 @@ if (!window.__apmColorPickerInstalled) {
             @reactive.effect
             @reactive.event(input.plot_type, ignore_init=True)
             def reset_on_plot_type_change():
+                # During a restored tab's initial mount, Shiny can report a
+                # transient plot type. Do not clear persisted axis bounds (or
+                # other appearance settings) until the restored selectors have
+                # settled and a real plot-type change can be observed.
+                if initial_filters and not _axis_selection_armed[0]:
+                    return
                 # Reset every plot-specific selection when the plot type changes.
                 for _i in range(max_subset_stages):
                     ui.update_select(f"subset_column_{_i}", selected="")
@@ -1781,6 +1803,16 @@ if (!window.__apmColorPickerInstalled) {
                     labels = [txt.get_text() for leg in legends for txt in leg.get_texts()]
                 excluded = ("Y variable", "Grouping", "Legend", "All observations")
                 labels = [label for label in labels if label.strip() and label not in excluded]
+                # A faceted plot can temporarily expose no legend while Shiny
+                # swaps axes (or when the panel variable consumes the only
+                # grouping dimension). Do not clear the editor identities in
+                # that transient state: remounting the text inputs on every
+                # panel transition can disconnect their reactive watchers.
+                with reactive.isolate():
+                    panel_mode = (backend == "matplotlib" and
+                                  bool(_optional_input("multi_panel", False)))
+                if panel_mode and not labels and known_keys:
+                    return
                 # If this is merely a relabelled rendering of the existing
                 # traces, do not rediscover/rename their identities.
                 expected = [mapping.get(key, key) for key in known_keys]
@@ -2370,17 +2402,34 @@ if (!window.__apmColorPickerInstalled) {
             .summary-plot-container {width:100%; height:auto; aspect-ratio: 2 / 1; min-width:0; position:relative;}
             .summary-plot-container > * {width:100% !important;}
             .summary-plot-container .shiny-plot-output {min-height:400px;}
-            /* Keep the shared app theme picker right-aligned in the top toolbar.
-               This selector is independent of each plot's Plot appearance theme. */
-            .summary-top-toolbar {display:flex; align-items:flex-end; gap:0.75rem;
-                                  flex-wrap:wrap; margin-bottom:1rem;}
-            .summary-toolbar-actions {display:flex; gap:0.5rem; flex-wrap:wrap; align-items:center;}
-            .summary-app-theme {margin-left:auto; width:220px; max-width:100%;}
+            .summary-top-toolbar {display:flex; align-items:center; gap:0.5rem;
+                                  flex-wrap:nowrap; margin-bottom:0; min-width:0;}
+            .summary-toolbar-actions {display:flex; gap:0.4rem; flex-wrap:nowrap;
+                                      align-items:center; min-width:0; overflow-x:auto;}
+            .summary-toolbar-actions .btn {white-space:nowrap;}
+            .summary-toolbar-right {display:flex; gap:0.4rem; align-items:center;
+                                    margin-left:auto; flex-shrink:0;}
+            .summary-app-theme {width:200px; flex-shrink:0;}
             .summary-app-theme .shiny-input-container {width:100%; margin-bottom:0;}
-            @media (max-width: 480px) {
-                .summary-app-theme {width:100%;}
-            }
-        """),
+            .summary-dataset-toolbar {display:flex; align-items:center; gap:0.5rem;
+                                      margin-bottom:0; min-width:0;}
+            .summary-dataset-toolbar .btn {white-space:nowrap;}
+            .summary-dataset-toolbar .summary-app-theme {margin-left:auto;}
+            .summary-toolbar-collapse-toggle {margin-bottom:0; padding-top:0.12rem; padding-bottom:0.12rem;}
+            .summary-dataset-toolbar .shiny-input-container,
+            .summary-toolbar-actions .shiny-input-container {margin-bottom:0 !important;}
+             .summary-dataset-toolbar .btn, .summary-toolbar-actions .btn {padding:0.22rem 0.65rem; font-size:0.875rem; line-height:1.5;}
+            .summary-dataset-toolbar .shiny-input-container,
+            .standalone-dataset-toolbar .shiny-input-container {width:auto !important; flex:0 0 auto;}
+            .standalone-dataset-toolbar {margin-bottom:0 !important; gap:0.35rem !important;}
+            .standalone-dataset-toolbar .btn {padding:0.22rem 0.65rem; font-size:0.875rem; line-height:1.5;}
+            .summary-dataset-toolbar {gap:0.35rem;}
+            .summary-toolbar-collapsed .summary-dataset-toolbar,
+            .summary-toolbar-collapsed .summary-toolbar-actions {display:none !important;}
+            body:has(#standalone-toolbar-collapse-toggle) .summary-toolbar-collapse-toggle {display:none;}
+            body:has(#standalone-toolbar-collapse-toggle).summary-toolbar-collapsed
+                .standalone-dataset-toolbar {display:none !important;}
+                """),
         ui.tags.script("""
         (() => {
           // A Plotly relayout mutates its DOM. Observing all descendants and
@@ -2418,24 +2467,34 @@ if (!window.__apmColorPickerInstalled) {
           }).observe(document.body, {childList:true, subtree:true});
           document.addEventListener('shown.bs.tab', () => requestAnimationFrame(install));
           install();
+          // Delegated listener also works when a dataset workspace is replaced.
+          document.addEventListener('click', (event) => {
+            const toggle = event.target.closest('#summary-toolbar-collapse-toggle, #standalone-toolbar-collapse-toggle');
+            if (!toggle) return;
+            const collapsed = document.body.classList.toggle('summary-toolbar-collapsed');
+            document.querySelectorAll('#summary-toolbar-collapse-toggle, #standalone-toolbar-collapse-toggle').forEach(button => {
+              button.textContent = collapsed ? 'Show toolbars' : 'Hide toolbars';
+              button.setAttribute('aria-expanded', String(!collapsed));
+            });
+          });
         })();
         """),
         ui.div(
+            ui.tags.button("Hide toolbars", type="button", class_="btn btn-sm btn-outline-secondary summary-toolbar-collapse-toggle", id="summary-toolbar-collapse-toggle", **{"aria-expanded": "true"}),
             ui.div(
-                ui.div(
-                    ui.input_action_button("add_tab", "+ New plot", class_="btn-primary"),
-                    ui.input_action_button("add_table", "+ New table", class_="btn-primary"),
-                    ui.input_action_button("close_tab", "Close selected tab", class_="btn-outline-danger"),
-                    ui.input_action_button("retain_plot", "Save selected plot", class_="btn-outline-primary"),
-                    ui.input_action_button("restore_plot", "Load saved plot", class_="btn-outline-primary"),
-                    ui.input_action_button("delete_saved_plot", "Delete plot", class_="btn-outline-danger"),
-                    ui.input_action_button("save_dataset_pickle", "Save dataset", class_="btn-outline-primary"),
-                    class_="summary-toolbar-actions",
-                ),
-                # Exactly one app-wide theme picker, outside dynamically added
-                # plot modules. shinyswatch provides its full theme catalogue.
-                ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme") if include_theme_picker else ui.div(class_="summary-app-theme"),
-                class_="summary-top-toolbar",
+                ui.input_action_button("save_dataset_pickle", "Save dataset", class_="btn-outline-primary"),
+                ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme") if include_theme_picker else ui.div(),
+                class_="summary-dataset-toolbar",
+                id="summary-dataset-toolbar",
+            ),
+            ui.div(
+                ui.input_action_button("add_tab", "New plot", class_="btn-primary"),
+                ui.input_action_button("add_table", "New table", class_="btn-primary"),
+                ui.input_action_button("retain_plot", "Save Plot", class_="btn-outline-primary"),
+                ui.input_action_button("restore_plot", "Load Plot", class_="btn-outline-primary"),
+                ui.input_action_button("delete_saved_plot", "Delete Plot", class_="btn-outline-danger"),
+                ui.input_action_button("close_tab", "Close tab", class_="btn-outline-danger"),
+                class_="summary-toolbar-actions summary-top-toolbar",
             ),
             ui.tags.style("""
                 .summary-info-content {max-width: 980px; margin: 1.2rem auto 3rem;
@@ -2503,6 +2562,19 @@ if (!window.__apmColorPickerInstalled) {
                     manager.update(selected, tab_filters[selected]())
                     manager.retain(selected, input.retained_plot_name())
                 saved_revision.set(saved_revision.get() + 1)
+                # Update the existing tab label without remounting its Shiny module.
+                # Replacing the nav panel would destroy the live plot controls.
+                saved_label = str(input.retained_plot_name()).strip()
+                ui.insert_ui(
+                    ui.tags.script(
+                        "(function(){const tab=" + json.dumps(selected) +
+                        ", label=" + json.dumps(saved_label) +
+                        "; const a=document.querySelector('[data-value=\"'+CSS.escape(tab)+'\"]');" +
+                        "if(a){const span=a.querySelector('span'); if(span)span.textContent=label; else a.textContent=label;}" +
+                        "})();"
+                    ),
+                    selector="body", where="beforeEnd",
+                )
                 ui.modal_remove()
                 ui.notification_show("Plot configuration retained in Summary.plots", type="message")
             except Exception as exc:
@@ -2543,7 +2615,8 @@ if (!window.__apmColorPickerInstalled) {
                 ui.p("Save the current Summary, including saved plot configurations, as a pickle file."),
                 ui.input_text("dataset_pickle_path", "Destination path on the computer running Shiny",
                               value="summary.pkl", placeholder="/path/to/drive/summary.pkl"),
-                ui.p("For a mounted drive, enter its full directory path. Existing files will not be overwritten."),
+                ui.p("For a mounted drive, enter its full directory path. Existing files can be overwritten if you confirm."),
+                ui.input_checkbox("overwrite_dataset_pickle", "Overwrite existing file", value=False),
                 title="Save dataset",
                 footer=ui.div(ui.modal_button("Cancel"),
                               ui.input_action_button("confirm_save_dataset_pickle", "Save pickle", class_="btn-primary")),
@@ -2566,8 +2639,11 @@ if (!window.__apmColorPickerInstalled) {
                         raise ValueError("The filename must end in .pkl")
                     if not target.parent.is_dir():
                         raise FileNotFoundError(f"Directory does not exist: {target.parent}")
-                    if target.exists():
-                        raise FileExistsError(f"File already exists: {target}")
+                    overwrite = bool(input.overwrite_dataset_pickle())
+                    if target.exists() and not overwrite:
+                        raise FileExistsError(f"File already exists: {target}. Check Overwrite existing file to replace it.")
+                    if target.exists() and not target.is_file():
+                        raise ValueError(f"Destination is not a regular file: {target}")
                     # Serialize to a temporary file, then publish atomically without
                     # overwriting an existing file. Preserve the original on errors.
                     temp_path = None
@@ -2576,10 +2652,32 @@ if (!window.__apmColorPickerInstalled) {
                                                          prefix=".apmtools-", suffix=".tmp",
                                                          delete=False) as stream:
                             temp_path = Path(stream.name)
-                            pickle.dump(manager.summary, stream, protocol=pickle.HIGHEST_PROTOCOL)
+                            # The manager owns retained plot presets. Never serialize
+                            # the working plotting frame, which may have stale metadata.
+                            source = manager.summary
+                            retained = manager.saved()
+                            if not hasattr(source, "plots"):
+                                raise RuntimeError("Source Summary has no plots attribute")
+                            # Serialize an independent snapshot so that a concurrent
+                            # Shiny event cannot mutate metadata during the write.
+                            snapshot = source.copy(deep=False)
+                            snapshot.plots = retained
+                            pickle.dump(snapshot, stream, protocol=pickle.HIGHEST_PROTOCOL)
                             stream.flush()
                             os.fsync(stream.fileno())
-                        os.link(temp_path, target)  # fails if target already exists
+                        # Verify what was actually written before publishing it.
+                        with temp_path.open("rb") as check_stream:
+                            restored = pickle.load(check_stream)
+                        restored_plots = getattr(restored, "plots", None)
+                        if restored_plots != retained:
+                            raise RuntimeError(
+                                "Pickle verification failed: saved plot configurations "
+                                "were not preserved; no dataset file was published"
+                            )
+                        if overwrite:
+                            os.replace(temp_path, target)  # atomic replacement after verification
+                        else:
+                            os.link(temp_path, target)  # never overwrite unless explicitly requested
                     finally:
                         if temp_path is not None:
                             temp_path.unlink(missing_ok=True)
@@ -2613,7 +2711,8 @@ if (!window.__apmColorPickerInstalled) {
                     number = next_tab.get() + 1
                     tab_id = f"plot_{number}"
                     inherited = manager.restore(preset_id, tab_id)
-                    panel = ui.nav_panel(f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id)
+                    saved_name = next((p.get("name") for p in manager.saved() if p.get("id") == preset_id), None)
+                    panel = ui.nav_panel(saved_name or f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id)
                     tab_filters[tab_id] = plot_tab_server(tab_id, inherited, config_tab_id=tab_id)
                     register_draft(tab_id, tab_filters[tab_id])
                     next_tab.set(number)
