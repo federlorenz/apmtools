@@ -8,6 +8,8 @@ from __future__ import annotations
 from pathlib import Path
 import pickle
 import threading
+import os
+import tempfile
 
 
 def load_summary_pickle(path):
@@ -35,6 +37,47 @@ def load_summary_pickle(path):
     return data
 
 
+def save_summary_pickle(summary, destination, *, overwrite=False):
+    """Atomically persist the current source Summary and retained plot presets."""
+    from .classes import Summary
+    if not isinstance(summary, Summary):
+        raise TypeError("No Summary dataset is loaded")
+    target = Path(destination).expanduser().resolve()
+    if target.suffix.lower() != ".pkl":
+        raise ValueError("The filename must end in .pkl")
+    if not target.parent.is_dir():
+        raise FileNotFoundError(f"Directory does not exist: {target.parent}")
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"File already exists: {target}")
+    if target.exists() and not target.is_file():
+        raise ValueError(f"Destination is not a regular file: {target}")
+    from .plot_configs import validate_saved_plots
+    retained = validate_saved_plots(getattr(summary, "plots", None))
+    temporary = None
+    try:
+        with tempfile.NamedTemporaryFile(mode="wb", dir=target.parent,
+                                         prefix=".apmtools-", suffix=".tmp",
+                                         delete=False) as stream:
+            temporary = Path(stream.name)
+            snapshot = summary.copy(deep=False)
+            snapshot.plots = retained
+            pickle.dump(snapshot, stream, protocol=pickle.HIGHEST_PROTOCOL)
+            stream.flush()
+            os.fsync(stream.fileno())
+        with temporary.open("rb") as stream:
+            restored = pickle.load(stream)
+        if getattr(restored, "plots", None) != retained:
+            raise RuntimeError("Saved plot configurations failed pickle verification")
+        if overwrite:
+            os.replace(temporary, target)
+        else:
+            os.link(temporary, target)
+    finally:
+        if temporary is not None:
+            temporary.unlink(missing_ok=True)
+    return target
+
+
 class PlotApp:
     """Launch a Shiny plot workspace with an optional initial Summary.
 
@@ -45,7 +88,7 @@ class PlotApp:
     """
 
     def __init__(self, summary=None, *, x=None, y=None, group_by=None,
-                 plot_type="line", title="Summary plot", backend="plotly"):
+                 plot_type="line", title="Summary plot", backend="matplotlib"):
         from .classes import Summary
         if summary is not None and not isinstance(summary, Summary):
             raise TypeError("PlotApp expects an apmtools Summary or None")
@@ -86,22 +129,13 @@ class PlotApp:
             ui.tags.button("Hide toolbars", type="button", class_="btn btn-sm btn-outline-secondary my-0", id="standalone-toolbar-collapse-toggle", **{"aria-expanded": "true"}),
             ui.div(
                 ui.input_action_button("open_dataset", "Open Dataset", class_="btn-outline-primary"),
-                ui.div(id="standalone-save-dataset-slot"),
+                ui.input_action_button("save_dataset_root", "Save dataset", class_="btn-outline-primary"),
                 ui.output_text("dataset_status", inline=True),
                 ui.div(shinyswatch.theme_picker_ui(), class_="summary-app-theme ms-auto"),
                 class_="d-flex align-items-center gap-1 my-0 standalone-dataset-toolbar",
             ),
-            ui.tags.script("""
-              (() => {
-                const move = () => {
-                  const slot = document.getElementById('standalone-save-dataset-slot');
-                  const button = document.querySelector('#summary-dataset-toolbar button');
-                  if (slot && button && button.parentElement !== slot) slot.appendChild(button);
-                };
-                new MutationObserver(move).observe(document.body, {childList:true, subtree:true});
-                document.addEventListener('DOMContentLoaded', move);
-                move();
-              })();
+            ui.tags.style("""
+              body:has(#standalone-toolbar-collapse-toggle) #summary-dataset-toolbar {display:none !important;}
             """),
             ui.output_ui("dataset_workspace"),
             title="PlotApp",
@@ -123,6 +157,34 @@ class PlotApp:
             @render.text
             def dataset_status():
                 return status.get()
+
+            @reactive.effect
+            @reactive.event(input.save_dataset_root)
+            def show_root_save_dialog():
+                if self.original_summary is None:
+                    ui.notification_show("Open a dataset before saving", type="warning")
+                    return
+                ui.modal_show(ui.modal(
+                    ui.p("Save the loaded Summary and its saved plot configurations as a pickle."),
+                    ui.input_text("root_dataset_path", "Destination path on the computer running Shiny",
+                                  value="summary.pkl"),
+                    ui.input_checkbox("root_dataset_overwrite", "Overwrite existing file", value=False),
+                    title="Save dataset",
+                    footer=ui.div(ui.modal_button("Cancel"),
+                                  ui.input_action_button("root_confirm_save", "Save pickle", class_="btn-primary")),
+                ))
+
+            @reactive.effect
+            @reactive.event(input.root_confirm_save)
+            def save_root_dataset():
+                try:
+                    target = save_summary_pickle(
+                        self.original_summary, input.root_dataset_path(),
+                        overwrite=bool(input.root_dataset_overwrite()))
+                    ui.modal_remove()
+                    ui.notification_show(f"Dataset saved to {target}", type="message", duration=8)
+                except Exception as exc:
+                    ui.notification_show(f"Could not save dataset: {exc}", type="error", duration=10)
 
             @reactive.effect
             @reactive.event(input.open_dataset)

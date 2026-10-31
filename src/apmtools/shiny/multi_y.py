@@ -1,8 +1,12 @@
 """Independent categorical colour and line-style encodings for multi-Y lines."""
 
 
-def multi_y_styles(variables, groups, palette, mode="group", colors=None, styles=None):
+def multi_y_styles(variables, groups, palette, mode="group", colors=None, styles=None, aliases=None):
+    # Only colour identities are canonicalized; callers retain their actual
+    # processed columns as keys for drawing and geometry.
     variables = [str(v) for v in variables]
+    aliases = aliases or {}
+    stable_variables = [aliases.get(v, v) for v in variables]
     groups = [str(g) for g in groups] if groups else []
     colors = colors or {}
     styles = styles or {}
@@ -19,13 +23,13 @@ def multi_y_styles(variables, groups, palette, mode="group", colors=None, styles
                 style = styles.get(group, "-") if group is not None else "-"
                 dash_map[(var, group)] = {"solid":"-", "dashed":"--", "dotted":":", "dashdot":"-."}.get(style, style)
         return color_map, dash_map, variables, groups
-    primary = groups if mode == "group" and groups else variables
+    primary = groups if mode == "group" and groups else stable_variables
     secondary = variables if mode == "group" and groups else groups
     dash_values = ["-", "--", ":", "-."]
     color_map, dash_map = {}, {}
     for var in variables:
         for group in (groups or [None]):
-            p = group if mode == "group" and groups else var
+            p = group if mode == "group" and groups else aliases.get(var, var)
             q = var if mode == "group" and groups else group
             if mode == "both":
                 index = combinations.index((var, group))
@@ -36,11 +40,14 @@ def multi_y_styles(variables, groups, palette, mode="group", colors=None, styles
                     hue = (index * 0.618033988749895) % 1.0
                     rgb = colorsys.hsv_to_rgb(hue, 0.72, 0.88)
                     default_color = "#{:02x}{:02x}{:02x}".format(*(round(255 * c) for c in rgb))
-                combined = f"{group}, {var}" if group is not None else var
-                color_map[(var, group)] = colors.get(combined, default_color)
+                combined = f"{group}, {aliases.get(var, var)}" if group is not None else aliases.get(var, var)
+                legacy = f"{group}, {var}" if group is not None else var
+                color_map[(var, group)] = colors.get(combined, colors.get(legacy, default_color))
                 dash_map[(var, group)] = styles.get(combined, "-")
                 continue
-            color_map[(var, group)] = colors.get(p, colors.get(f"{group}, {var}", palette[primary.index(p) % len(palette)]))
+            color_map[(var, group)] = colors.get(p, colors.get(var, colors.get(
+                f"{group}, {aliases.get(var, var)}", colors.get(f"{group}, {var}",
+                palette[primary.index(p) % len(palette)]))))
             # For colour-by-variable, the grouping dimension must control dashes.
             # Do not let a variable-level style override erase that distinction.
             default_dash = dash_values[secondary.index(q) % len(dash_values)] if q in secondary else "-"

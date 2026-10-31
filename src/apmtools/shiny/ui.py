@@ -3,6 +3,8 @@ from __future__ import annotations
 from .filter_config import filter_config_fields as _filter_config_fields
 import threading
 import json
+import os
+import sys
 from datetime import date, datetime, time, timedelta
 from collections.abc import Sequence
 import numpy as np
@@ -12,11 +14,12 @@ from ..units import upas_units, lascar_units, purple_units
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
 from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices
-from .appearance import _apply_plot_appearance, _label_plot_axes
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
-from .plotly_renderer import _barplot_figure, _boxplot_figure, _histogram_figure, _lineplot_figure, _scatter_figure
 from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
+from .inherited_source import source_frame, source_steps
+from .state import SNAPSHOT_INPUT_KEYS, reconcile_visibility, snapshot_inputs
+
 
 
 def _build_summary_ui_server(
@@ -27,7 +30,7 @@ def _build_summary_ui_server(
     group_by: str | Sequence[str] | None = None,
     plot_type: str = "line",
     title: str = "Summary plot",
-    backend: str = "plotly",
+    backend: str = "matplotlib",
     include_theme_picker: bool = True,
     config_manager=None,
 ):
@@ -40,10 +43,8 @@ def _build_summary_ui_server(
             "Summary.plot_app() requires shinyswatch for the app theme selector. "
             'Install the optional dependencies with: pip install "apmtools[shiny]"'
         ) from exc
-    if backend not in ("plotly", "matplotlib"):
-        raise ValueError("backend must be 'plotly' or 'matplotlib'")
-    if backend == "plotly":
-        from shinywidgets import output_widget, render_plotly
+    if backend != "matplotlib":
+        raise ValueError("Stage 3 supports only backend='matplotlib'; Plotly has been removed")
     # Keep the Summary object intact: subset(), dtfilter() and group_stat()
     # are methods on Summary and are intentionally used below.
     summary_description = str(getattr(data, "description", "") or "")
@@ -287,24 +288,24 @@ if (!window.__apmColorPickerInstalled) {
                                        ui.input_action_button("increase_plot_dpi", "+ DPI"),
                                        class_="d-flex flex-wrap gap-2"),
                                 ui.help_text("DPI affects Matplotlib plot rendering. Export DPI is set separately when exporting."),
-                            ) if backend == "matplotlib" else ui.div())),
+                            ) if True else ui.div())),
                         ui.nav_panel("Legend",
                             ui.panel_conditional("(input.plot_type === 'line' || input.plot_type === 'box' || input.plot_type === 'bar' || input.plot_type === 'scatter') && input.y && input.y.length > 1", ui.input_select("multi_y_color_by", "Multiple Y variables: colour by", choices={"group":"Grouping (default)", "variable":"Y variable", "both":"Both", "none":"None"}, selected=initial("multi_y_color_by", "group"))),
                             ui.input_select("legend_position", "Legend position", choices={k:k.title() for k in ("right", "left", "top", "bottom")}, selected=initial("legend_position", "right")),
                             ui.input_checkbox("legend_inside", "Place legend inside plot", value=initial("legend_inside", False)),
                             ui.output_ui("legend_labels_editor"),
-                            (ui.input_numeric("legend_columns", "Legend columns", value=initial("legend_columns", 1), min=1, max=100, step=1) if backend == "matplotlib" else ui.div()),
+                            (ui.input_numeric("legend_columns", "Legend columns", value=initial("legend_columns", 1), min=1, max=100, step=1) if True else ui.div()),
                             ui.input_numeric("legend_font_size", "Legend font size", value=initial("legend_font_size", 12), min=6, max=72)),
                         ui.nav_panel("Axes",
                             ui.input_text("x_axis_label", "X-axis label", value=initial("x_axis_label", "")),
                             ui.input_text_area("y_axis_label", "Y-axis label", value=initial("y_axis_label", ""), rows=3),
                             ui.layout_columns(
-                                (ui.input_text_area("x_min", "X minimum", value=initial("x_min", ""), rows=4) if backend == "matplotlib" else ui.input_text("x_min", "X minimum", value="")),
-                                (ui.input_text_area("x_max", "X maximum", value=initial("x_max", ""), rows=4) if backend == "matplotlib" else ui.input_text("x_max", "X maximum", value="")),
+                                (ui.input_text_area("x_min", "X minimum", value=initial("x_min", ""), rows=4) if True else ui.div()),
+                                (ui.input_text_area("x_max", "X maximum", value=initial("x_max", ""), rows=4) if True else ui.div()),
                                 col_widths=(6, 6)),
                             ui.layout_columns(
-                                (ui.input_text_area("y_min", "Y minimum", value=initial("y_min", ""), rows=4) if backend == "matplotlib" else ui.input_text("y_min", "Y minimum", value="")),
-                                (ui.input_text_area("y_max", "Y maximum", value=initial("y_max", ""), rows=4) if backend == "matplotlib" else ui.input_text("y_max", "Y maximum", value="")),
+                                (ui.input_text_area("y_min", "Y minimum", value=initial("y_min", ""), rows=4) if True else ui.div()),
+                                (ui.input_text_area("y_max", "Y maximum", value=initial("y_max", ""), rows=4) if True else ui.div()),
                                 col_widths=(6, 6)),
                             ui.output_ui("x_tick_labels_editor"),
                             ui.output_ui("y_tick_labels_editor"),
@@ -356,17 +357,17 @@ if (!window.__apmColorPickerInstalled) {
                                     ui.input_numeric("panel_hspace", "Vertical panel spacing", value=initial("panel_hspace", 0.90), min=0, max=5, step=0.05),
                                     ui.input_numeric("panel_wspace", "Horizontal panel spacing", value=initial("panel_wspace", 0.38), min=0, max=5, step=0.05)),
                                 ui.input_numeric("panel_font_size", "Panel title font size", value=initial("panel_font_size", 14), min=6, max=72))
-                                if backend == "matplotlib" else ui.help_text("Panel formatting is available with the Matplotlib backend."))),
+                                if True else ui.div())),
                         id="right_sidebar_tabs"), class_="summary-sidebar-tabs"),
                         title="Plot appearance", position="right", open="closed", width="320px",
                     ),
                     ui.card(ui.card_header("Plot"),
-                        ui.div((output_widget("plot", height="100%", width="100%") if backend == "plotly" else ui.output_plot("plot", height="100%", width="100%")),
+                        ui.div((ui.output_plot("plot", height="100%", width="100%")),
                             class_="summary-plot-container"),
                         ui.input_action_button("export_csv", "Export plotted data as CSV", class_="btn-primary mt-3"),
                         ui.input_action_button("export_plot", "Export plot", class_="btn-secondary mt-3"),
                         (ui.download_button("export_python", "Export as a Python file and associated data",
-                                            class_="btn-secondary mt-3") if backend == "matplotlib" else ui.div())),
+                                            class_="btn-secondary mt-3") if True else ui.div())),
                 ),
             ),
         )
@@ -494,10 +495,11 @@ if (!window.__apmColorPickerInstalled) {
                     except Exception:
                         return str(_live_setting(name, "") or "").strip()
 
-                return {"stages": _restored_subset_chain(),
+                result = {"stages": _restored_subset_chain(),
                         "numeric_bounds": _restored_numeric_bounds(),
                         "start": text_value("datetime_start"),
                         "end": text_value("datetime_end")}
+                return result
 
 
             def _commit_filter_event():
@@ -592,13 +594,24 @@ if (!window.__apmColorPickerInstalled) {
             _label_fields = ("legend_labels", "panel_titles", "x_tick_labels", "y_tick_labels")
             _label_keys = {name: reactive.value(()) for name in _label_fields}
             from .appearance import _parse_label_map
+            def _canonical_editor_mapping(field, mapping):
+                if field != "legend_labels":
+                    return mapping
+                from .legend_identity import canonical_legend_map
+                from .legend_identity import variable_aliases
+                with reactive.isolate():
+                    aggregate = AGGREGATES.get(_optional_input("aggregate", "None"))
+                    source_y = _optional_input("y", [])
+                sources = [source_y] if isinstance(source_y, str) else list(source_y or [])
+                return canonical_legend_map(mapping, aliases=variable_aliases(sources, aggregate))
+
             def _editor_map(field, *, watch=False):
                 # The tab draft owns edited mappings; no parallel reactive dictionary.
                 if config_manager is not None and config_tab_id is not None:
                     if watch and config_tab_id in config_manager.drafts:
                         config_manager.watch(config_tab_id, "appearance")
-                    return _parse_label_map(_live_setting(field, initial_filters.get(field, "")))
-                return _parse_label_map(initial_filters.get(field, ""))
+                    return _canonical_editor_mapping(field, _parse_label_map(_live_setting(field, initial_filters.get(field, ""))))
+                return _canonical_editor_mapping(field, _parse_label_map(initial_filters.get(field, "")))
 
             def _set_label_keys(field, keys):
                 keys = tuple(dict.fromkeys(str(k) for k in keys if str(k).strip()))
@@ -662,6 +675,9 @@ if (!window.__apmColorPickerInstalled) {
                             if value is not None and updated.get(key, key) != value:
                                 updated[key] = value
                                 changed = True
+                        if field == "legend_labels":
+                            from .legend_identity import canonical_legend_map
+                            updated = _canonical_editor_mapping(field, updated)
                         if changed:
                             if config_manager is not None and config_tab_id is not None:
                                 _patch_live_config(config_tab_id, {
@@ -782,7 +798,7 @@ if (!window.__apmColorPickerInstalled) {
                     keys = ()
                 else:
                     groups = list(input.group_by() or [])
-                    faceted = backend == "matplotlib" and bool(groups) and bool(_optional_input("multi_panel", False))
+                    faceted = True and bool(groups) and bool(_optional_input("multi_panel", False))
                     panel_by = ((list(_optional_input("panel_by", []) or []) or groups)
                                 if faceted and len(groups) > 1 else groups if faceted else [])
                     keys = active_color_keys(spec, mode=_optional_input("multi_y_color_by", "group"),
@@ -825,27 +841,15 @@ if (!window.__apmColorPickerInstalled) {
                     raise ValueError("Invalid plot export dimensions or resolution")
                 if width * dpi * height * dpi > 100_000_000:
                     raise ValueError("Export exceeds 100 megapixels; reduce size or DPI")
-                if backend == "matplotlib":
-                    import matplotlib.pyplot as plt
-                    fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
-                    try:
-                        fig.set_size_inches(width, height, forward=True)
-                        buffer = io.BytesIO()
-                        fig.savefig(buffer, format="png", dpi=dpi)
-                        yield buffer.getvalue()
-                    finally:
-                        plt.close(fig)
-                else:
-                    # Plotly static image export requires kaleido.
-                    # Use the same styled figure as the interactive plot.
-                    fig = styled_plotly_figure()
-                    try:
-                        yield fig.to_image(format="png", width=round(width * dpi),
-                                           height=round(height * dpi), scale=1)
-                    except Exception as exc:
-                        raise RuntimeError(
-                            'Plotly PNG export requires kaleido: pip install kaleido'
-                        ) from exc
+                import matplotlib.pyplot as plt
+                fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+                try:
+                    fig.set_size_inches(width, height, forward=True)
+                    buffer = io.BytesIO()
+                    fig.savefig(buffer, format="png", dpi=dpi)
+                    yield buffer.getvalue()
+                finally:
+                    plt.close(fig)
 
             @render.download(filename=lambda: _safe_csv_filename(input.export_filename()))
             def download_csv():
@@ -1202,6 +1206,13 @@ if (!window.__apmColorPickerInstalled) {
                         id_columns = [c for c in plot_df.columns if c not in y_columns]
                         plot_df = plot_df.melt(id_vars=id_columns, value_vars=y_columns,
                                                var_name="variables_y", value_name="__axis_y_value")
+                    # Virtual Y grouping is a *source-variable* identity, not
+                    # the temporary aggregated column name. Keep its colours
+                    # and group keys unchanged across mean/median/etc.
+                    from .legend_identity import variable_aliases
+                    source_aliases = variable_aliases(selected_y, aggregate)
+                    plot_df["variables_y"] = plot_df["variables_y"].map(
+                        lambda value: source_aliases.get(str(value), str(value)))
                     y_columns = ["__axis_y_value"]
                     # The categorical X labels have already been computed above.
                     # Scatter and bar/box now use the standard single-Y renderer.
@@ -1240,8 +1251,10 @@ if (!window.__apmColorPickerInstalled) {
                 if selected_plot == "scatter" and "__axis_y_value" in plot_df.columns:
                     y_columns = ["__axis_y_value"]
 
+                from .legend_identity import variable_aliases
                 return {"data": plot_df, "kind": selected_plot, "x": x_column,
                         "ys": y_columns, "groups": group_columns,
+                        "legend_aliases": variable_aliases(selected_y, aggregate),
                         "categories": x_columns if selected_plot in ("box", "bar") else None,
                         "frequency": frequency, "x_label_override": x_label_override,
                         "x_variables": x_variables,
@@ -1278,16 +1291,7 @@ if (!window.__apmColorPickerInstalled) {
                     return
                 if previous == keys:
                     return
-                if saved is None:
-                    selected = keys
-                else:
-                    selected = tuple(k for k in keys if k in saved)
-                    if previous is None and not selected:
-                        # Old snapshots may contain stale/empty component IDs.
-                        selected = keys
-                    elif previous is not None:
-                        old_keys = set(previous)
-                        selected = tuple(k for k in keys if k in selected or k not in old_keys)
+                selected = reconcile_visibility(keys, previous, saved)
                 element_key_signature.set(keys)
                 if config_manager is not None and config_tab_id is not None:
                     _patch_live_config(config_tab_id, {"visible_elements": list(selected)})
@@ -1345,77 +1349,6 @@ if (!window.__apmColorPickerInstalled) {
                     chosen = tuple(default_visible_keys(raw))
                 return filter_elements(raw, chosen)
 
-            @reactive.calc
-            def base_figure():
-                import plotly.express as px
-                spec = prepared_plot()
-                if "error" in spec:
-                    return px.scatter(title=spec["error"])
-                plot_df = spec["data"]
-                if plot_df.empty:
-                    return px.scatter(title="No visible plot elements")
-                selected_plot = spec["kind"]
-                x_column = spec["x"]
-                y_columns = spec["ys"]
-                group_columns = spec["groups"]
-                frequency = spec["frequency"]
-                x_columns = spec["categories"]
-                if spec.get("multi_axis"):
-                    from .multi_axis import plotly_multi_axis
-                    fig = plotly_multi_axis(spec, mode=_optional_input("multi_y_color_by", "group"),
-                                            palette=input.palette(), legend_labels=_label_string("legend_labels"),
-                                            trace_colors=_color_string())
-                elif selected_plot == "histogram":
-                    fig = _histogram_figure(
-                        plot_df, x_column,
-                        group_column="__hist_series" if spec.get("hist_variables") else
-                                     ("__plot_group" if group_columns else None),
-                        bins=int(input.bins()),
-                        density=input.hist_density() == "True",
-                        stacked=input.hist_stacked() == "True",
-                        histtype=input.hist_type(),
-                        cumulative=int(input.hist_cumulative()),
-                        overlay=bool(spec.get("hist_variables")),
-                    )
-                elif selected_plot == "box":
-                    fig = _boxplot_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
-                elif selected_plot == "bar":
-                    fig = _barplot_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
-                elif selected_plot == "scatter":
-                    fig = _scatter_figure(plot_df, x_column, y_columns[0], group_column="__plot_group" if group_columns else None)
-                else:
-                    fig = _lineplot_figure(plot_df, x_column, y_columns, group_columns=group_columns, frequency=frequency, column_map=column_map)
-
-                # A removed group/variable must not leave an empty Plotly trace
-                # or a legend entry behind.
-                if selected_plot == "line":
-                    fig.data = tuple(trace for trace in fig.data
-                                     if getattr(trace, "y", None) is not None
-                                     and any(pd.notna(v) for v in trace.y))
-                if not group_columns and not spec.get("multi_axis") and not spec.get("hist_variables"):
-                    # Retain trace names/colours for appearance editing, but
-                    # suppress the redundant ungrouped legend.
-                    fig.update_traces(showlegend=False)
-                    fig.update_layout(showlegend=False)
-
-                _label_plot_axes(
-                    fig, selected_plot, x_column, y_columns,
-                    category_columns=x_columns if selected_plot in ("box", "bar") else None,
-                    x_label_override=spec.get("x_label_override"),
-                )
-                if spec.get("multi_axis"):
-                    from .appearance import _axis_label
-                    if selected_plot == "scatter" and len(spec["x_variables"]) > 1:
-                        fig.update_xaxes(title_text="<br>".join(_axis_label(c) for c in spec["x_variables"]))
-                    if len(y_columns) > 1:
-                        fig.update_yaxes(title_text="<br>".join(_axis_label(c) for c in y_columns))
-                fig.update_layout(
-                    hovermode="x unified" if selected_plot == "line" else "closest",
-                    margin=dict(l=60, r=30, t=70, b=60),
-                    autosize=True,
-                )
-                return fig
-
             # Populate appearance controls only after a valid plot has been
             # prepared.  The effect depends on the plot specification, not on
             # appearance inputs, so editing a label or colour cannot reset it.
@@ -1439,7 +1372,7 @@ if (!window.__apmColorPickerInstalled) {
                 defaults = _matplotlib_defaults(spec, palette="Default")
                 names = defaults["names"]
                 selected_groups_for_legend = list(input.group_by() or [])
-                if (backend == "matplotlib" and selected_groups_for_legend
+                if (True and selected_groups_for_legend
                         and bool(_optional_input("multi_panel", False))):
                     panel_variables_for_legend = (
                         (list(_optional_input("panel_by", []) or []) or selected_groups_for_legend)
@@ -1506,7 +1439,7 @@ if (!window.__apmColorPickerInstalled) {
                         limits[f"{axis}_min"], limits[f"{axis}_max"] = map(str, whiskers)
                 limits = _pad_axis_bounds(limits)
                 selected_groups = list(input.group_by() or [])
-                if (backend == "matplotlib" and selected_groups and bool(_optional_input("multi_panel", False))
+                if (True and selected_groups and bool(_optional_input("multi_panel", False))
                         and bool(_optional_input("independent_panel_limits", True))):
                     panel_variable = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
                                       else selected_groups)
@@ -1544,7 +1477,7 @@ if (!window.__apmColorPickerInstalled) {
                             and field in initial_filters
                             and str(initial_filters[field]).strip()):
                         continue
-                    if backend == "matplotlib":
+                    if True:
                         ui.update_text_area(field, value=value)
                     else:
                         ui.update_text(field, value=value)
@@ -1591,7 +1524,7 @@ if (!window.__apmColorPickerInstalled) {
                                 existing = _parse_label_map(_optional_input(field, ""))
                             ui.update_text_area(field, value="\n".join(
                                 f"{name}={existing.get(name, default)}" for name in names))
-                if backend == "matplotlib":
+                if True:
                     panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
                                        else selected_groups)
                     panel_names = (list(dict.fromkeys(name for name, part, _ in _panel_partitions(spec, panel_variables)
@@ -1636,7 +1569,7 @@ if (!window.__apmColorPickerInstalled) {
                     return (low - margin, high + margin)
 
                 groups = list(input.group_by() or [])
-                panels = (backend == "matplotlib" and groups
+                panels = (True and groups
                           and bool(_optional_input("multi_panel", False))
                           and bool(_optional_input("independent_panel_limits", True)))
                 if panels:
@@ -1654,14 +1587,14 @@ if (!window.__apmColorPickerInstalled) {
                     bounds = box_bounds(spec["data"], spec["groups"])
                     if bounds is not None:
                         for suffix, value in zip(("min", "max"), bounds):
-                            if backend == "matplotlib":
+                            if True:
                                 ui.update_text_area(f"{value_axis}_{suffix}", value=str(value))
                             else:
                                 ui.update_text(f"{value_axis}_{suffix}", value=str(value))
                 # Categorical positions are determined by the renderer.
                 # Clearing these prevents old numeric limits from clipping them.
                 for suffix in ("min", "max"):
-                    if backend == "matplotlib":
+                    if True:
                         ui.update_text_area(f"{category_axis}_{suffix}", value="")
                     else:
                         ui.update_text(f"{category_axis}_{suffix}", value="")
@@ -1691,7 +1624,7 @@ if (!window.__apmColorPickerInstalled) {
                 ui.update_text("x_axis_label", value="")
                 ui.update_text_area("y_axis_label", value="")
                 for field in ("x_min", "x_max", "y_min", "y_max"):
-                    if backend == "matplotlib":
+                    if True:
                         ui.update_text_area(field, value="")
                     else:
                         ui.update_text(field, value="")
@@ -1707,14 +1640,14 @@ if (!window.__apmColorPickerInstalled) {
                 ui.update_select("template", selected="plotly")
                 ui.update_select("legend_position", selected="right")
                 ui.update_checkbox("legend_inside", value=False)
-                if backend == "matplotlib":
+                if True:
                     ui.update_numeric("legend_columns", value=1)
                 ui.update_checkbox("show_grid", value=True)
                 for field, value in (("title_font_size", 14), ("axis_font_size", 12),
                                      ("tick_font_size", 10), ("legend_font_size", 12),
                                      ("panel_font_size", 14)):
                     ui.update_numeric(field, value=value)
-                if backend == "matplotlib":
+                if True:
                     ui.update_numeric("plot_dpi", value=100)
                 ui.update_numeric("line_width", value=2)
                 ui.update_checkbox("box_showfliers", value=True)
@@ -1730,7 +1663,7 @@ if (!window.__apmColorPickerInstalled) {
                 ui.update_checkbox("only_complete", value=True)
                 ui.update_checkbox("flooring_timestamp", value=True)
 
-            if backend == "matplotlib":
+            if True:
                 _font_fields = ("title_font_size", "axis_font_size", "tick_font_size",
                                 "legend_font_size", "panel_font_size")
 
@@ -1778,7 +1711,7 @@ if (!window.__apmColorPickerInstalled) {
             # feedback loops when the user edits the mapping.
             rendered_legend_keys = reactive.value(())
 
-            def _capture_legend(fig, is_plotly=False):
+            def _capture_legend(fig):
                 from .appearance import _parse_label_map
                 # Use the full saved mapping during initial legend discovery.
                 # _label_string() deliberately filters by discovered keys, which
@@ -1791,16 +1724,9 @@ if (!window.__apmColorPickerInstalled) {
                 # alternate as the figure is rendered repeatedly.
                 with reactive.isolate():
                     known_keys = _label_keys["legend_labels"].get()
-                if is_plotly:
-                    if getattr(fig.layout, "showlegend", None) is False:
-                        labels = []
-                    else:
-                        labels = [str(t.name) for t in fig.data
-                                  if getattr(t, "showlegend", None) is True and t.name]
-                else:
-                    legends = list(getattr(fig, "legends", []))
-                    legends += [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None]
-                    labels = [txt.get_text() for leg in legends for txt in leg.get_texts()]
+                legends = list(getattr(fig, "legends", []))
+                legends += [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None]
+                labels = [txt.get_text() for leg in legends for txt in leg.get_texts()]
                 excluded = ("Y variable", "Grouping", "Legend", "All observations")
                 labels = [label for label in labels if label.strip() and label not in excluded]
                 # A faceted plot can temporarily expose no legend while Shiny
@@ -1809,7 +1735,7 @@ if (!window.__apmColorPickerInstalled) {
                 # that transient state: remounting the text inputs on every
                 # panel transition can disconnect their reactive watchers.
                 with reactive.isolate():
-                    panel_mode = (backend == "matplotlib" and
+                    panel_mode = (True and
                                   bool(_optional_input("multi_panel", False)))
                 if panel_mode and not labels and known_keys:
                     return
@@ -1819,14 +1745,19 @@ if (!window.__apmColorPickerInstalled) {
                 if known_keys and set(labels) == set(expected):
                     keys = tuple(known_keys)
                 else:
-                    reverse = {}
-                    for key in known_keys:
-                        display = mapping.get(key, key)
-                        reverse.setdefault(display, []).append(key)
-                    keys = tuple(dict.fromkeys(
-                        reverse[label][0] if len(reverse.get(label, ())) == 1
-                        else label for label in labels
-                    ))
+                    from .legend_identity import original_legend_keys
+                    # An aggregated bar plot may carry both legacy raw and
+                    # suffixed saved mappings (e.g. pm25 and pm25_mean -> PM).
+                    # Resolve the ambiguous display name against the columns
+                    # actually rendered, not against the display text itself.
+                    with reactive.isolate():
+                        active_aggregate = AGGREGATES.get(_optional_input("aggregate", "None"))
+                    suffix = f"_{active_aggregate}" if active_aggregate is not None else ""
+                    source_y = _optional_input("y", [])
+                    sources = [source_y] if isinstance(source_y, str) else list(source_y or [])
+                    from .legend_identity import variable_aliases
+                    keys = original_legend_keys(labels, mapping, known_keys,
+                                                aliases=variable_aliases(sources, active_aggregate))
                 with reactive.isolate():
                     old = rendered_legend_keys.get()
                 if keys != old:
@@ -1842,28 +1773,13 @@ if (!window.__apmColorPickerInstalled) {
             # Keep the unmodified keys separate from user-visible replacements.
             rendered_tick_keys = reactive.value(((), ()))
 
-            def _capture_ticks(fig, is_plotly=False):
-                if is_plotly:
-                    keys = []
-                    for axis_name in ("xaxis", "yaxis"):
-                        axis = getattr(fig.layout, axis_name)
-                        if axis.tickmode == "array" and axis.ticktext:
-                            labels = tuple(map(str, axis.ticktext))
-                        elif axis.type == "category" and axis.categoryarray:
-                            labels = tuple(map(str, axis.categoryarray))
-                        else:
-                            # Plotly chooses automatic numeric ticks in the
-                            # browser, not in the Python figure.
-                            labels = ()
-                        keys.append(tuple(dict.fromkeys(labels)))
-                    keys = tuple(keys)
-                else:
-                    fig.canvas.draw()
-                    keys = tuple(tuple(dict.fromkeys(
-                        text.get_text() for ax in fig.axes if ax.get_visible()
-                        for text in (ax.get_xticklabels() if direction == "x" else ax.get_yticklabels())
-                        if text.get_text().strip()
-                    )) for direction in ("x", "y"))
+            def _capture_ticks(fig):
+                fig.canvas.draw()
+                keys = tuple(tuple(dict.fromkeys(
+                    text.get_text() for ax in fig.axes if ax.get_visible()
+                    for text in (ax.get_xticklabels() if direction == "x" else ax.get_yticklabels())
+                    if text.get_text().strip()
+                )) for direction in ("x", "y"))
                 with reactive.isolate():
                     previous = rendered_tick_keys.get()
                 if keys != previous:
@@ -1895,177 +1811,75 @@ if (!window.__apmColorPickerInstalled) {
                             axis.set_major_formatter(FixedFormatter(
                                 [mapping.get(label, label) for label in labels]))
 
-            def _apply_plotly_tick_labels(fig):
-                from .appearance import _parse_label_map
-                maps = tuple(_parse_label_map(_label_string(field))
-                             for field in ("x_tick_labels", "y_tick_labels"))
-                for axis_name, mapping in zip(("xaxis", "yaxis"), maps):
-                    if not mapping:
-                        continue
-                    axis = getattr(fig.layout, axis_name)
-                    if axis.tickmode == "array" and axis.tickvals:
-                        original = list(axis.ticktext or [str(v) for v in axis.tickvals])
-                        axis.ticktext = [mapping.get(str(t), str(t)) for t in original]
-                    else:
-                        # Plotly category tick positions are category strings.
-                        # Explicit tick arrays avoid changing category order.
-                        values = list(axis.categoryarray or ())
-                        if values:
-                            axis.tickmode = "array"
-                            axis.tickvals = values
-                            axis.ticktext = [mapping.get(str(v), str(v)) for v in values]
+            @reactive.calc
+            def matplotlib_options():
+                # Shared with the export so that all appearance options,
+                # including per-panel overrides, are reproduced exactly.
+                # Read grouping/panel controls once per reactive evaluation.
+                # These options affect rendering, not selected_data().
+                active_groups = list(input.group_by() or [])
+                multi_panel = bool(_optional_input("multi_panel", False)) if active_groups else False
+                panel_groups = (list(_optional_input("panel_by", []) or []) or active_groups) if len(active_groups) > 1 else active_groups
+                return dict(title=_optional_input("title", ""),
+                    x_label=_optional_input("x_axis_label", ""), y_label=_optional_input("y_axis_label", ""),
+                    legend_labels=_label_string("legend_labels"), trace_colors=_color_string(),
+                    palette=_optional_input("palette", "Default"), x_min=_optional_input("x_min", ""), x_max=_optional_input("x_max", ""),
+                    y_min=_optional_input("y_min", ""), y_max=_optional_input("y_max", ""), template=_optional_input("template", "plotly"),
+                    legend_position=_optional_input("legend_position", "right"), legend_inside=_optional_input("legend_inside", False),
+                    legend_columns=max(1, int(_optional_input("legend_columns", 1) or 1)),
+                    multi_y_color_by=_optional_input("multi_y_color_by", "group"),
+                    show_grid=_optional_input("show_grid", True),
+                    x_major_ticks=_optional_input("x_major_ticks", 6), y_major_ticks=_optional_input("y_major_ticks", 6),
+                    x_minor_ticks=_optional_input("x_minor_ticks", False), y_minor_ticks=_optional_input("y_minor_ticks", False),
+                    title_font_size=_optional_input("title_font_size", 14), axis_font_size=_optional_input("axis_font_size", 12),
+                    tick_font_size=_optional_input("tick_font_size", 10), legend_font_size=_optional_input("legend_font_size", 12),
+                    panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
+                    box_showfliers=_optional_input("box_showfliers", True), box_orientation=_optional_input("box_orientation", "vertical"),
+                    bar_box_width=float(_optional_input("bar_box_width", 1.0)),
+                    line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2),
+                    line_alpha=(_optional_input("line_alpha", "") if input.plot_type() == "line" else ""),
+                    line_style=(_optional_input("line_style", "") if input.plot_type() == "line" else ""),
+                    scatter_size=(_optional_input("scatter_size", "") if input.plot_type() == "scatter" else ""),
+                    scatter_marker=(_optional_input("scatter_marker", "") if input.plot_type() == "scatter" else ""),
+                    scatter_alpha=(_optional_input("scatter_alpha", "") if input.plot_type() == "scatter" else ""),
+                    bins=int(_optional_input("bins", 30)) if input.plot_type() == "histogram" else 30,
+                    density=_optional_input("hist_density", "False") == "True" if input.plot_type() == "histogram" else False,
+                    stacked=_optional_input("hist_stacked", "False") == "True" if input.plot_type() == "histogram" else False,
+                    histtype=_optional_input("hist_type", "bar") if input.plot_type() == "histogram" else "bar",
+                    cumulative=int(_optional_input("hist_cumulative", "0")) if input.plot_type() == "histogram" else 0,
+                    panel_by=(panel_groups if multi_panel else None),
+                    independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
+                                              if multi_panel else True),
+                    panel_titles=(_label_string("panel_titles") if multi_panel else ""),
+                    panel_hspace=(float(_optional_input("panel_hspace", 0.90) or 0) if multi_panel else 0.90),
+                    panel_wspace=(float(_optional_input("panel_wspace", 0.38) or 0) if multi_panel else 0.38),
+                )
 
-            if backend == "plotly":
-                @reactive.calc
-                def styled_plotly_figure():
-                    import plotly.graph_objects as go
-                    fig = go.Figure(base_figure())
-                    styled = _apply_plot_appearance(
-                        fig, title=input.title(), x_label=input.x_axis_label(),
-                        y_label=input.y_axis_label(), legend_labels=_label_string("legend_labels"),
-                        trace_colors=_color_string(), palette=input.palette(),
-                        x_min=input.x_min(), x_max=input.x_max(),
-                        y_min=input.y_min(), y_max=input.y_max(),
-                        template=input.template(), legend_position=input.legend_position(),
-                        legend_inside=input.legend_inside(), show_grid=input.show_grid(),
-                        x_major_ticks=input.x_major_ticks(), y_major_ticks=input.y_major_ticks(),
-                        x_minor_ticks=input.x_minor_ticks(), y_minor_ticks=input.y_minor_ticks(),
-                        line_width=(input.line_width() if input.plot_type() == "line" else 2),
-                        hist_alpha=input.hist_alpha(), box_showfliers=input.box_showfliers(),
-                        box_orientation=input.box_orientation(),
-                        title_font_size=input.title_font_size(), axis_font_size=input.axis_font_size(),
-                        tick_font_size=input.tick_font_size(), legend_font_size=input.legend_font_size(),
-                        line_alpha=input.line_alpha(), line_style=input.line_style(),
-                        scatter_size=input.scatter_size(), scatter_marker=input.scatter_marker(),
-                        scatter_alpha=input.scatter_alpha(), plot_kind=input.plot_type(),
-                    )
-                    if input.plot_type() in ("bar", "box"):
-                        from .plotly_renderer import _set_bar_box_width
-                        _set_bar_box_width(styled, input.plot_type(), float(input.bar_box_width()))
-                    if prepared_plot().get("multi_axis"):
-                        # The generic appearance helper applies palette colours
-                        # per trace and resets scatter symbols. Preserve the
-                        # multi-variable colour/shape mapping after styling.
-                        original = base_figure()
-                        for target, source in zip(styled.data, original.data):
-                            if getattr(source, "marker", None) is not None:
-                                if source.marker.color is not None:
-                                    target.marker.color = source.marker.color
-                                if getattr(source.marker, "symbol", None) is not None:
-                                    target.marker.symbol = source.marker.symbol
-                                if getattr(source.marker, "pattern", None) is not None:
-                                    target.marker.pattern = source.marker.pattern
-                            if getattr(source, "line", None) is not None and source.line.color is not None:
-                                target.line.color = source.line.color
-                    if input.plot_type() == "line" and len(prepared_plot().get("ys", [])) > 1:
-                        from .plotly_renderer import _style_multi_y_legend
-                        _style_multi_y_legend(styled, prepared_plot(), input.multi_y_color_by(),
-                                              input.palette(), _color_string(), input.line_style(),
-                                              _label_string("legend_labels"))
-                    if input.plot_type() == "box" and not input.box_showfliers():
-                        from .data import _box_whisker_limits
-                        spec = prepared_plot()
-                        if "error" not in spec:
-                            axis = "x" if input.box_orientation() == "horizontal" else "y"
-                            lower_input = input.x_min() if axis == "x" else input.y_min()
-                            upper_input = input.x_max() if axis == "x" else input.y_max()
-                            if not str(lower_input or "").strip() and not str(upper_input or "").strip():
-                                limits = _box_whisker_limits(
-                                    spec["data"], spec["ys"][0],
-                                    [spec["x"]] + (["__plot_group"] if spec["groups"] else []),
-                                )
-                                if limits is not None:
-                                    styled.update_layout(**{f"{axis}axis_range": limits})
-                    return styled
+            @render.download(filename="plot_export.zip", media_type="application/zip")
+            def export_python():
+                import io
+                import zipfile
+                spec = prepared_plot()
+                if "error" in spec:
+                    raise ValueError(spec["error"])
+                frame = pd.DataFrame(spec["data"])
+                script = _standalone_matplotlib_script(spec, matplotlib_options())
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
+                    archive.writestr("plot_data.csv", frame.to_csv(index=False))
+                    archive.writestr("plot_script.py", script)
+                yield buffer.getvalue()
 
-                @render_plotly
-                def plot():
-                    fig = styled_plotly_figure()
-                    _capture_legend(fig, is_plotly=True)
-                    _capture_ticks(fig, is_plotly=True)
-                    _apply_plotly_tick_labels(fig)
-                    return fig
-            else:
-                @reactive.calc
-                def matplotlib_options():
-                    # Shared with the export so that all appearance options,
-                    # including per-panel overrides, are reproduced exactly.
-                    # Read grouping/panel controls once per reactive evaluation.
-                    # These options affect rendering, not selected_data().
-                    active_groups = list(input.group_by() or [])
-                    multi_panel = bool(_optional_input("multi_panel", False)) if active_groups else False
-                    panel_groups = (list(_optional_input("panel_by", []) or []) or active_groups) if len(active_groups) > 1 else active_groups
-                    return dict(title=_optional_input("title", ""),
-                        x_label=_optional_input("x_axis_label", ""), y_label=_optional_input("y_axis_label", ""),
-                        legend_labels=_label_string("legend_labels"), trace_colors=_color_string(),
-                        palette=_optional_input("palette", "Default"), x_min=_optional_input("x_min", ""), x_max=_optional_input("x_max", ""),
-                        y_min=_optional_input("y_min", ""), y_max=_optional_input("y_max", ""), template=_optional_input("template", "plotly"),
-                        legend_position=_optional_input("legend_position", "right"), legend_inside=_optional_input("legend_inside", False),
-                        legend_columns=max(1, int(_optional_input("legend_columns", 1) or 1)),
-                        multi_y_color_by=_optional_input("multi_y_color_by", "group"),
-                        show_grid=_optional_input("show_grid", True),
-                        x_major_ticks=_optional_input("x_major_ticks", 6), y_major_ticks=_optional_input("y_major_ticks", 6),
-                        x_minor_ticks=_optional_input("x_minor_ticks", False), y_minor_ticks=_optional_input("y_minor_ticks", False),
-                        title_font_size=_optional_input("title_font_size", 14), axis_font_size=_optional_input("axis_font_size", 12),
-                        tick_font_size=_optional_input("tick_font_size", 10), legend_font_size=_optional_input("legend_font_size", 12),
-                        panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
-                        box_showfliers=_optional_input("box_showfliers", True), box_orientation=_optional_input("box_orientation", "vertical"),
-                        bar_box_width=float(_optional_input("bar_box_width", 1.0)),
-                        line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2),
-                        line_alpha=(_optional_input("line_alpha", "") if input.plot_type() == "line" else ""),
-                        line_style=(_optional_input("line_style", "") if input.plot_type() == "line" else ""),
-                        scatter_size=(_optional_input("scatter_size", "") if input.plot_type() == "scatter" else ""),
-                        scatter_marker=(_optional_input("scatter_marker", "") if input.plot_type() == "scatter" else ""),
-                        scatter_alpha=(_optional_input("scatter_alpha", "") if input.plot_type() == "scatter" else ""),
-                        bins=int(_optional_input("bins", 30)) if input.plot_type() == "histogram" else 30,
-                        density=_optional_input("hist_density", "False") == "True" if input.plot_type() == "histogram" else False,
-                        stacked=_optional_input("hist_stacked", "False") == "True" if input.plot_type() == "histogram" else False,
-                        histtype=_optional_input("hist_type", "bar") if input.plot_type() == "histogram" else "bar",
-                        cumulative=int(_optional_input("hist_cumulative", "0")) if input.plot_type() == "histogram" else 0,
-                        panel_by=(panel_groups if multi_panel else None),
-                        independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
-                                                  if multi_panel else True),
-                        panel_titles=(_label_string("panel_titles") if multi_panel else ""),
-                        panel_hspace=(float(_optional_input("panel_hspace", 0.90) or 0) if multi_panel else 0.90),
-                        panel_wspace=(float(_optional_input("panel_wspace", 0.38) or 0) if multi_panel else 0.38),
-                    )
-
-                @render.download(filename="plot_export.zip", media_type="application/zip")
-                def export_python():
-                    import io
-                    import zipfile
-                    spec = prepared_plot()
-                    if "error" in spec:
-                        raise ValueError(spec["error"])
-                    frame = pd.DataFrame(spec["data"])
-                    script = _standalone_matplotlib_script(spec, matplotlib_options())
-                    buffer = io.BytesIO()
-                    with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
-                        archive.writestr("plot_data.csv", frame.to_csv(index=False))
-                        archive.writestr("plot_script.py", script)
-                    yield buffer.getvalue()
-
-                @render.plot
-                def plot():
-                    fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
-                    _capture_legend(fig)
-                    _capture_ticks(fig)
-                    _apply_matplotlib_tick_labels(fig)
-                    return fig
+            @render.plot
+            def plot():
+                fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+                _capture_legend(fig)
+                _capture_ticks(fig)
+                _apply_matplotlib_tick_labels(fig)
+                return fig
 
             def snapshot():
-                keys = ("plot_type", "x", "y", "numeric_subset_columns", "datetime_start", "datetime_end",
-                        "group_by", "frequency", "aggregate", "only_complete", "flooring_timestamp",
-                        "palette", "template", "title", "title_font_size", "plot_dpi", "legend_position",
-                        "legend_inside", "legend_labels", "legend_columns", "legend_font_size", "multi_y_color_by",
-                        "x_axis_label", "y_axis_label", "x_tick_labels", "y_tick_labels", "x_min", "x_max", "y_min", "y_max",
-                        "show_grid", "x_major_ticks", "x_minor_ticks", "y_major_ticks",
-                        "y_minor_ticks", "axis_font_size", "tick_font_size",
-                        "line_width", "line_alpha", "line_style", "scatter_size", "scatter_marker",
-                        "scatter_alpha", "bins", "hist_density", "hist_stacked", "hist_type",
-                        "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation", "bar_box_width",
-                        "multi_panel", "independent_panel_limits", "panel_by", "panel_titles",
-                        "panel_font_size", "panel_hspace", "panel_wspace", "visible_elements")
+                keys = SNAPSHOT_INPUT_KEYS
                 # The live draft is the canonical state. UI controls contribute
                 # only the fields currently mounted, preserving settings from
                 # inactive/dynamic panels instead of silently dropping them.
@@ -2073,14 +1887,15 @@ if (!window.__apmColorPickerInstalled) {
                     result = (config_manager.get(config_tab_id)
                               if config_manager is not None and config_tab_id in config_manager.drafts
                               else dict(initial_filters))
+                mounted = {}
                 for key in keys:
                     try:
-                        value = (_label_string(key) if key in _label_fields else getattr(input, key)())
-                        if value is not None:
-                            result[key] = list(value) if isinstance(value, (list, tuple)) else value
+                        mounted[key] = (_label_string(key) if key in _label_fields
+                                        else getattr(input, key)())
                     except Exception:
                         # Inputs in inactive tabs may not have been initialized yet.
-                        pass
+                        continue
+                result = snapshot_inputs(result, mounted)
                 # Snapshot the same effective filter state used by the renderer,
                 # including saved values for controls not yet mounted.
                 with reactive.isolate():
@@ -2094,7 +1909,7 @@ if (!window.__apmColorPickerInstalled) {
                     # A restored tab may snapshot before its dynamic editors
                     # have mounted. Preserve the saved mapping in that case.
                     if not values and initial_filters.get(field):
-                        values = dict(_parse_label_map(initial_filters[field]))
+                        values = dict(_canonical_editor_mapping(field, _parse_label_map(initial_filters[field])))
                     result[field] = "; ".join(f"{key}={value}" for key, value in values.items()
                                               if value != key)
                 with reactive.isolate():
@@ -2120,7 +1935,8 @@ if (!window.__apmColorPickerInstalled) {
 
 
     @module.ui
-    def table_tab_ui(frame):
+    def table_tab_ui(frame, settings=None):
+        settings = settings or {}
         available = _alphabetical(frame.columns)
         numeric = _alphabetical(_numeric_columns(frame))
         groups = _alphabetical([c for c in available if c not in numeric])
@@ -2133,38 +1949,43 @@ if (!window.__apmColorPickerInstalled) {
                             *[
                                 ui.div(
                                     ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
-                                        choices={"": "Select a column", **{c: c for c in available}}),
+                                        choices={"": "Select a column", **{c: c for c in available}},
+                                        selected=(settings.get("subset_chain", [])[i].get("column", "") if i < len(settings.get("subset_chain", [])) else "")),
                                     ui.output_ui(f"subset_values_ui_{i}"),
                                     ui.input_select(f"subset_style_{i}", "Filter style",
-                                        choices={k: k for k in ("all", "any", "negative all", "negative any")}),
+                                        choices={k: k for k in ("all", "any", "negative all", "negative any")},
+                                        selected=(settings.get("subset_chain", [])[i].get("style", "all") if i < len(settings.get("subset_chain", [])) else "all")),
                                     class_="mb-3",
                                 ) if i == 0 else ui.panel_conditional(
                                     " && ".join(f"input.subset_column_{j} !== ''" for j in range(i)),
                                     ui.div(
                                         ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
-                                            choices={"": "Select a column", **{c: c for c in available}}),
+                                            choices={"": "Select a column", **{c: c for c in available}},
+                                        selected=(settings.get("subset_chain", [])[i].get("column", "") if i < len(settings.get("subset_chain", [])) else "")),
                                         ui.output_ui(f"subset_values_ui_{i}"),
                                         ui.input_select(f"subset_style_{i}", "Filter style",
-                                            choices={k: k for k in ("all", "any", "negative all", "negative any")}),
+                                            choices={k: k for k in ("all", "any", "negative all", "negative any")},
+                                        selected=(settings.get("subset_chain", [])[i].get("style", "all") if i < len(settings.get("subset_chain", [])) else "all")),
                                         class_="mb-3",
                                     ),
                                 ) for i in range(stages)
                             ],
                             ui.input_selectize("numeric_subset_columns", "Numerical subset",
-                                choices={c: c for c in numeric}, multiple=True),
+                                choices={c: c for c in numeric}, multiple=True,
+                                selected=settings.get("numeric_subset_columns", [])),
                             ui.output_ui("numeric_subset_bounds"),
-                            ui.input_text("datetime_start", "Start datetime",
+                            ui.input_text("datetime_start", "Start datetime", value=settings.get("datetime_start", ""),
                                 placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
-                            ui.input_text("datetime_end", "End datetime",
+                            ui.input_text("datetime_end", "End datetime", value=settings.get("datetime_end", ""),
                                 placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
                         ),
                         ui.nav_panel("Frequency/Grouping/Statistical aggregation",
                             ui.input_selectize("group_by", "Group by", choices={c: c for c in groups},
-                                multiple=True),
+                                multiple=True, selected=settings.get("group_by", [])),
                             ui.input_select("frequency", "Frequency / aggregation mode",
-                                choices={k: k for k in FREQUENCIES}),
+                                choices={k: k for k in FREQUENCIES}, selected=settings.get("frequency", "None")),
                             ui.input_select("aggregate", "Apply statistical function",
-                                choices={k: k for k in AGGREGATES}),
+                                choices={k: k for k in AGGREGATES}, selected=settings.get("aggregate", "None")),
                             ui.output_ui("frequency_options"),
                         ),
                         id="table_sidebar_tabs"), class_="summary-sidebar-tabs"),
@@ -2180,7 +2001,8 @@ if (!window.__apmColorPickerInstalled) {
         )
 
     @module.server
-    def table_tab_server(input, output, session, frame):
+    def table_tab_server(input, output, session, frame, settings=None):
+        settings = settings or {}
         # Preserve Summary methods on snapshots made from plots and tables.
         if hasattr(summary, "subset") and not hasattr(frame, "subset"):
             frame = summary._constructor(frame)
@@ -2205,7 +2027,9 @@ if (!window.__apmColorPickerInstalled) {
                     return ui.div()
                 choices, _ = choices_for(name)
                 return ui.input_selectize(f"subset_values_{stage}", f"{name} values",
-                    choices=choices, multiple=True)
+                    choices=choices, multiple=True,
+                    selected=(settings.get("subset_chain", [])[stage].get("values", [])
+                        if stage < len(settings.get("subset_chain", [])) else []))
             values_ui.__name__ = f"subset_values_ui_{stage}"
             return render.ui(values_ui)
 
@@ -2221,8 +2045,10 @@ if (!window.__apmColorPickerInstalled) {
                 index = numeric.index(name)
                 controls.append(ui.div(
                     ui.tags.strong(name),
-                    ui.input_text(f"numeric_gt_{index}", "Greater than", placeholder="No lower bound"),
-                    ui.input_text(f"numeric_lt_{index}", "Less than", placeholder="No upper bound"),
+                    ui.input_text(f"numeric_gt_{index}", "Greater than", placeholder="No lower bound",
+                        value=settings.get("numeric_subset_bounds", {}).get(name, {}).get("gt", "")),
+                    ui.input_text(f"numeric_lt_{index}", "Less than", placeholder="No upper bound",
+                        value=settings.get("numeric_subset_bounds", {}).get(name, {}).get("lt", "")),
                 ))
             return ui.div(*controls)
 
@@ -2231,8 +2057,8 @@ if (!window.__apmColorPickerInstalled) {
             if FREQUENCIES.get(input.frequency()) is None:
                 return ui.div()
             return ui.div(
-                ui.input_checkbox("only_complete", "Only complete intervals", value=True),
-                ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=True),
+                ui.input_checkbox("only_complete", "Only complete intervals", value=settings.get("only_complete", True)),
+                ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=settings.get("flooring_timestamp", True)),
             )
 
         @reactive.calc
@@ -2352,6 +2178,48 @@ if (!window.__apmColorPickerInstalled) {
             return render.DataGrid(result, filters=True, width="100%", height="100%")
 
 
+        @reactive.calc
+        def table_settings():
+            chain = []
+            for stage in range(stages):
+                try:
+                    column = input[f"subset_column_{stage}"]()
+                except Exception:
+                    break
+                if column not in frame.columns:
+                    break
+                try:
+                    values = list(input[f"subset_values_{stage}"]() or [])
+                except Exception:
+                    values = (settings.get("subset_chain", [])[stage].get("values", [])
+                              if stage < len(settings.get("subset_chain", [])) else [])
+                try:
+                    style = input[f"subset_style_{stage}"]() or "all"
+                except Exception:
+                    style = "all"
+                chain.append({"column": column, "values": values, "style": style})
+            bounds = {}
+            for name in list(input.numeric_subset_columns() or []):
+                if name not in numeric:
+                    continue
+                index = numeric.index(name)
+                bounds[name] = {}
+                for suffix in ("gt", "lt"):
+                    try:
+                        bounds[name][suffix] = input[f"numeric_{suffix}_{index}"]() or ""
+                    except Exception:
+                        bounds[name][suffix] = ""
+            freq = input.frequency()
+            return {"subset_chain": chain, "numeric_subset_columns": list(input.numeric_subset_columns() or []),
+                    "numeric_subset_bounds": bounds, "datetime_start": input.datetime_start() or "",
+                    "datetime_end": input.datetime_end() or "", "group_by": list(input.group_by() or []),
+                    "frequency": freq, "aggregate": input.aggregate(),
+                    "only_complete": bool(input.only_complete()) if FREQUENCIES.get(freq) is not None else True,
+                    "flooring_timestamp": bool(input.flooring_timestamp()) if FREQUENCIES.get(freq) is not None else True}
+
+        return table_settings
+
+
     app_ui = ui.page_fluid(
         ui.tags.style("""
             .container, .container-fluid {max-width: none !important;}
@@ -2432,8 +2300,7 @@ if (!window.__apmColorPickerInstalled) {
                 """),
         ui.tags.script("""
         (() => {
-          // A Plotly relayout mutates its DOM. Observing all descendants and
-          // triggering another relayout causes a self-sustaining render loop.
+          // Keep a stable plot aspect ratio without observing child redraws.
           const observed = new WeakSet();
           const install = () => document.querySelectorAll('.summary-plot-container').forEach(el => {
             if (observed.has(el)) return;
@@ -2451,14 +2318,12 @@ if (!window.__apmColorPickerInstalled) {
                 if (width === lastWidth && el.style.height === height + 'px') return;
                 lastWidth = width;
                 el.style.height = height + 'px';
-                const graph = el.querySelector('.js-plotly-plot');
-                if (graph && window.Plotly) window.Plotly.relayout(graph, {width, height});
               });
             };
             new ResizeObserver(resize).observe(el);
             resize();
           });
-          // Only watch tab/container insertions, never individual Plotly nodes.
+          // Only watch tab/container insertions, never individual plot nodes.
           let installPending = false;
           new MutationObserver(() => {
             if (installPending) return;
@@ -2490,9 +2355,9 @@ if (!window.__apmColorPickerInstalled) {
             ui.div(
                 ui.input_action_button("add_tab", "New plot", class_="btn-primary"),
                 ui.input_action_button("add_table", "New table", class_="btn-primary"),
-                ui.input_action_button("retain_plot", "Save Plot", class_="btn-outline-primary"),
-                ui.input_action_button("restore_plot", "Load Plot", class_="btn-outline-primary"),
-                ui.input_action_button("delete_saved_plot", "Delete Plot", class_="btn-outline-danger"),
+                ui.input_action_button("retain_plot", "Save", class_="btn-outline-primary"),
+                ui.input_action_button("restore_plot", "Load", class_="btn-outline-primary"),
+                ui.input_action_button("delete_saved_plot", "Delete", class_="btn-outline-danger"),
                 ui.input_action_button("close_tab", "Close tab", class_="btn-outline-danger"),
                 class_="summary-toolbar-actions summary-top-toolbar",
             ),
@@ -2522,13 +2387,15 @@ if (!window.__apmColorPickerInstalled) {
         active_tabs = reactive.value(())
         tab_filters = {}
         table_frames = {}
+        table_settings_by_tab = {}
+        table_source_steps = {}
         next_table = reactive.value(0)
         from ..plot_configs import PlotConfigManager
         manager = config_manager or PlotConfigManager(data)
         # Use the same manager in each plot module and in the toolbar actions.
         config_manager = manager
         saved_revision = reactive.value(0)
-        # Drafts track live input state; only Save selected plot changes Summary.plots.
+        # Drafts track live input state; only Save selected plot changes Summary.views.
         def register_draft(tab_id, snapshot):
             @reactive.effect
             def sync_draft():
@@ -2543,12 +2410,12 @@ if (!window.__apmColorPickerInstalled) {
         @reactive.event(input.retain_plot)
         def retain_selected():
             selected = input.plot_tabs()
-            if selected not in tab_filters:
-                ui.notification_show("Select a plot tab to save", type="warning")
+            if selected not in tab_filters and selected not in table_frames:
+                ui.notification_show("Select a plot or table tab to save", type="warning")
                 return
             ui.modal_show(ui.modal(
                 ui.input_text("retained_plot_name", "Configuration name", value=f"Saved {selected}"),
-                title="Save plot configuration",
+                title="Save configuration",
                 footer=ui.div(ui.modal_button("Cancel"),
                               ui.input_action_button("confirm_retain_plot", "Save", class_="btn-primary")),
             ))
@@ -2559,8 +2426,16 @@ if (!window.__apmColorPickerInstalled) {
             selected = input.plot_tabs()
             try:
                 with reactive.isolate():
-                    manager.update(selected, tab_filters[selected]())
-                    manager.retain(selected, input.retained_plot_name())
+                    if selected in tab_filters:
+                        manager.update(selected, tab_filters[selected]())
+                        manager.retain(selected, input.retained_plot_name())
+                    elif selected in table_frames:
+                        manager.retain_table(input.retained_plot_name(),
+                                             {**table_settings_by_tab[selected](),
+                                              "source_steps": table_source_steps.get(selected, [])},
+                                             table_frames[selected])
+                    else:
+                        raise ValueError("No active plot or table tab")
                 saved_revision.set(saved_revision.get() + 1)
                 # Update the existing tab label without remounting its Shiny module.
                 # Replacing the nav panel would destroy the live plot controls.
@@ -2576,22 +2451,22 @@ if (!window.__apmColorPickerInstalled) {
                     selector="body", where="beforeEnd",
                 )
                 ui.modal_remove()
-                ui.notification_show("Plot configuration retained in Summary.plots", type="message")
+                ui.notification_show("Configuration retained in Summary.views", type="message")
             except Exception as exc:
                 ui.notification_show(f"Could not save configuration: {exc}", type="error")
 
         @reactive.effect
         @reactive.event(input.delete_saved_plot)
         def choose_plot_to_delete():
-            presets = [p for p in manager.saved() if p.get("type") == "plot"]
+            presets = [p for p in manager.saved() if p.get("type") in ("plot", "table")]
             if not presets:
-                ui.notification_show("No saved plots to delete", type="warning")
+                ui.notification_show("No saved configurations to delete", type="warning")
                 return
             ui.modal_show(ui.modal(
-                ui.input_select("delete_saved_plot_choice", "Saved plot to delete",
+                ui.input_select("delete_saved_plot_choice", "Saved configuration to delete",
                                 choices={p["id"]: p.get("name", p["id"]) for p in presets}),
-                ui.p("This deletes the saved configuration from Summary.plots. Open tabs are not closed."),
-                title="Delete saved plot",
+                ui.p("This deletes the saved configuration from Summary.views. Open tabs are not closed."),
+                title="Delete saved configuration",
                 footer=ui.div(ui.modal_button("Cancel"),
                               ui.input_action_button("confirm_delete_saved_plot", "Delete", class_="btn-danger")),
             ))
@@ -2604,7 +2479,7 @@ if (!window.__apmColorPickerInstalled) {
                     manager.delete_saved(input.delete_saved_plot_choice())
                 saved_revision.set(saved_revision.get() + 1)
                 ui.modal_remove()
-                ui.notification_show("Saved plot deleted. Save the dataset to persist this change to disk.", type="message")
+                ui.notification_show("Saved configuration deleted. Save the dataset to persist this change to disk.", type="message")
             except Exception as exc:
                 ui.notification_show(f"Could not delete saved plot: {exc}", type="error")
 
@@ -2661,7 +2536,7 @@ if (!window.__apmColorPickerInstalled) {
                             # Serialize an independent snapshot so that a concurrent
                             # Shiny event cannot mutate metadata during the write.
                             snapshot = source.copy(deep=False)
-                            snapshot.plots = retained
+                            snapshot.views = retained
                             pickle.dump(snapshot, stream, protocol=pickle.HIGHEST_PROTOCOL)
                             stream.flush()
                             os.fsync(stream.fileno())
@@ -2669,7 +2544,11 @@ if (!window.__apmColorPickerInstalled) {
                         with temp_path.open("rb") as check_stream:
                             restored = pickle.load(check_stream)
                         restored_plots = getattr(restored, "plots", None)
-                        if restored_plots != retained:
+                        if not isinstance(restored_plots, list) or len(restored_plots) != len(retained) or any(
+                            a.get("id") != b.get("id") or a.get("type") != b.get("type")
+                            or a.get("settings") != b.get("settings")
+                            for a, b in zip(restored_plots, retained)
+                        ):
                             raise RuntimeError(
                                 "Pickle verification failed: saved plot configurations "
                                 "were not preserved; no dataset file was published"
@@ -2690,14 +2569,16 @@ if (!window.__apmColorPickerInstalled) {
         @reactive.event(input.restore_plot)
         def choose_saved():
             saved_revision.get()
-            presets = [p for p in manager.saved() if p.get("type") == "plot"]
+            # Loading is independent of the currently selected tab. The
+            # selected preset's type determines which new tab to create.
+            presets = [p for p in manager.saved() if p.get("type", "plot") in ("plot", "table")]
             if not presets:
-                ui.notification_show("No retained plot configurations", type="warning")
+                ui.notification_show("No saved plot or table configurations", type="warning")
                 return
             ui.modal_show(ui.modal(
-                ui.input_select("retained_plot_choice", "Saved plot",
-                                choices={p["id"]: p.get("name", p["id"]) for p in presets}),
-                title="Load saved plot",
+                ui.input_select("retained_plot_choice", "Saved plots and tables",
+                                choices={p["id"]: f"{'Table' if p.get('type') == 'table' else 'Plot'}: {p.get('name', p['id'])}" for p in presets}),
+                title="Load saved configuration",
                 footer=ui.div(ui.modal_button("Cancel"),
                               ui.input_action_button("confirm_restore_plot", "Load", class_="btn-primary")),
             ))
@@ -2708,6 +2589,24 @@ if (!window.__apmColorPickerInstalled) {
             try:
                 with reactive.isolate():
                     preset_id = input.retained_plot_choice()
+                    preset = next(p for p in manager.saved() if p.get("id") == preset_id)
+                    if preset.get("type") == "table":
+                        frame, settings = manager.restore_table(preset_id)
+                        frame = source_frame(manager.summary, settings.get("source_steps", []))
+                        frame = frame.reset_index(drop=True)
+                        frame.columns = [str(c) for c in frame.columns]
+                        number = next_table.get() + 1
+                        tab_id = f"table_{number}"
+                        panel = ui.nav_panel(preset.get("name") or f"Table {number}",
+                                             table_tab_ui(tab_id, frame, settings), value=tab_id)
+                        table_frames[tab_id] = frame
+                        table_settings_by_tab[tab_id] = table_tab_server(tab_id, frame, settings)
+                        table_source_steps[tab_id] = settings.get("source_steps", [])
+                        next_table.set(number)
+                        active_tabs.set((*active_tabs.get(), tab_id))
+                        ui.insert_nav_panel("plot_tabs", panel, select=True)
+                        ui.modal_remove()
+                        return
                     number = next_tab.get() + 1
                     tab_id = f"plot_{number}"
                     inherited = manager.restore(preset_id, tab_id)
@@ -2765,13 +2664,24 @@ if (!window.__apmColorPickerInstalled) {
                         frame = pd.DataFrame()
                 else:
                     frame = pd.DataFrame(summary).copy(deep=True)
+            # Preserve the complete transformation history, including a plot's
+            # selected variables and aggregation, without storing its DataFrame.
+            if selected in table_frames:
+                steps = source_steps(table_source_steps.get(selected, []),
+                                     table_settings_by_tab[selected](), 'table')
+            elif selected in tab_filters:
+                steps = source_steps([], tab_filters[selected](), 'plot')
+            else:
+                steps = []
+            frame = source_frame(manager.summary, steps)
             # Datagrid requires plain column names; preserve the values and
             # index as displayed columns where useful.
             frame = frame.reset_index(drop=True)
             frame.columns = [str(c) for c in frame.columns]
             panel = ui.nav_panel(f"Table {number}", table_tab_ui(tab_id, frame), value=tab_id)
             table_frames[tab_id] = frame
-            table_tab_server(tab_id, frame)
+            table_settings_by_tab[tab_id] = table_tab_server(tab_id, frame)
+            table_source_steps[tab_id] = steps
             active_tabs.set((*active_tabs.get(), tab_id))
             ui.insert_nav_panel("plot_tabs", panel, select=True)
 
@@ -2784,6 +2694,8 @@ if (!window.__apmColorPickerInstalled) {
                 return
             ui.remove_nav_panel("plot_tabs", target=selected)
             table_frames.pop(selected, None)
+            table_settings_by_tab.pop(selected, None)
+            table_source_steps.pop(selected, None)
             tab_filters.pop(selected, None)
             manager.discard(selected)
             active_tabs.set(tuple(t for t in tabs if t != selected))
@@ -2812,7 +2724,7 @@ def run_summary_app(
     port: int = 0,
     launch_browser: bool = True,
     daemon: bool = True,
-    backend: str = "plotly",
+    backend: str = "matplotlib",
 ):
     """Create and start the Shiny app in a background thread."""
     from shiny import run_app

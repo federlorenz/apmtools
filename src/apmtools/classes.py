@@ -1011,7 +1011,7 @@ class Group(pd.DataFrame):
 
 class Summary(pd.DataFrame):
 
-    _metadata = ['metadata', 'plots', 'variable', 'description']
+    _metadata = ['metadata', 'views', 'variable', 'description']
 
     @property
     def _constructor(self):
@@ -1023,11 +1023,20 @@ class Summary(pd.DataFrame):
         self.metadata = metadata
         self.variable = variable
         self.description = description
-        self.plots = None
+        self.views = None
+
+    @property
+    def plots(self):
+        """Backward-compatible alias for saved plot and table views."""
+        return self.views
+
+    @plots.setter
+    def plots(self, value):
+        self.views = value
 
     def __setattr__(self, name, value):
-        if name == "plots" and value is not None and not isinstance(value, list):
-            raise TypeError("Summary.plot must be None or a list")
+        if name in ("plots", "views") and value is not None and not isinstance(value, list):
+            raise TypeError("Summary.views must be None or a list")
         super().__setattr__(name, value)
 
     def __setstate__(self, state):
@@ -1036,7 +1045,11 @@ class Summary(pd.DataFrame):
         # Some older pickles contain an instance-level _metadata list, which
         # masks the corrected class declaration and breaks future copies.
         self.__dict__.pop("_metadata", None)
-        for name, default in (("plots", None), ("variable", None),
+        # Migrate saved configurations from older pickles transparently.
+        legacy = self.__dict__.pop("plots", None)
+        if "views" not in self.__dict__:
+            object.__setattr__(self, "views", legacy)
+        for name, default in (("views", None), ("variable", None),
                               ("description", ""), ("metadata", set())):
             if name not in self.__dict__:
                 object.__setattr__(self, name, default)
@@ -1046,7 +1059,7 @@ class Summary(pd.DataFrame):
             self.variable = getattr(other, "variable", None)
             self.metadata = getattr(other, "metadata", set()).copy()
             self.description = getattr(other, "description", "")
-            self.plots = getattr(other, "plots", None)
+            self.views = getattr(other, "views", getattr(other, "plots", None))
 
         return self
 
@@ -1076,7 +1089,7 @@ class Summary(pd.DataFrame):
             return
 
         return_dict = copy.deepcopy(self)
-        return_dict.plots = None
+        return_dict.views = None
         a = {}
 
         if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
@@ -1171,7 +1184,7 @@ class Summary(pd.DataFrame):
         self.description = self.description + \
             f"\nFiltered by {time_start if time_start != None else ""} till {time_end if time_end != None else ""}, {date_start if date_start != None else ""} till {date_end if date_end != None else ""}, {day if day != None else ""}"
         result = self.reset_index()
-        result.plots = None
+        result.views = None
         return result
 
     def set_attrib(self, attribute):
@@ -1598,7 +1611,7 @@ class Summary(pd.DataFrame):
         
         out = self.subset({"monitor": [value]})
         out = out.dropna(axis=1,how="all")
-        out.plots = None
+        out.views = None
         return out
 
 

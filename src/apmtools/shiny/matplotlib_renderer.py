@@ -444,7 +444,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     group_col = ("__hist_series" if kind == "histogram" and spec.get("hist_variables")
                  else "__plot_group" if spec["groups"] and "__plot_group" in df.columns else None)
     defaults = _matplotlib_defaults(spec, palette=palette)
-    rename = _parse_label_map(legend_labels)
+    from .legend_identity import canonical_legend_map, legend_label
+    aliases = spec.get("legend_aliases", {})
+    rename = canonical_legend_map(_parse_label_map(legend_labels), aliases=aliases)
     overrides = _parse_label_map(trace_colors)
     alphas, styles, sizes, markers, marker_alphas = _series_style_maps(
         line_alpha, line_style, scatter_size, scatter_marker, scatter_alpha)
@@ -457,7 +459,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     if multi_y:
         from .multi_y import multi_y_styles
         multi_colors, multi_dashes, variable_names, group_names = multi_y_styles(
-            ys, labels if group_col else [], palette_values, multi_y_color_by, overrides, styles)
+            ys, labels if group_col else [], palette_values, multi_y_color_by,
+            overrides, styles, aliases=aliases)
     for name, color in list(colors.items()):
         if not mcolors.is_color_like(color):
             colors[name] = defaults["colors"].get(name, palette_values[0])
@@ -546,7 +549,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         def legend_entry(label, color, marker=None):
             handles.append(Line2D([], [], color=color, marker=marker or None,
                                   linestyle='None' if marker else '-', linewidth=2))
-            legend_names.append(rename.get(label, label))
+            legend_names.append(legend_label(rename, label, aliases))
         if multi_y_color_by == 'none':
             for g in group_names:
                 if any((y, g) in active for y in ys):
@@ -591,7 +594,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 histtype=("bar" if histtype == "barstacked" else histtype),
                 cumulative=cumulative if cumulative else False,
                 color=[colors[n] for n in labels],
-                label=[rename.get(n, n) for n in labels])
+                label=[legend_label(rename, n, aliases) for n in labels])
             # Matplotlib returns one patch container per group for bar and
             # one polygon per group for step/stepfilled.
             for name, group_patches in zip(labels, hist_patches):
@@ -612,7 +615,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                        s=_bounded_float(sizes, name, marker_size, 0.1, 100)**2,
                        marker=_scatter_marker(markers, name),
                        alpha=_bounded_float(marker_alphas, name, 1, 0, 1),
-                       color=color, label=rename.get(name, name))
+                       color=color, label=legend_label(rename, name, aliases))
     elif kind == "line":
         line_df = df
         id_col = "identifier" if "identifier" in df.columns else None
@@ -646,7 +649,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                                        _line_style(styles, name) if name in styles and len(ys) == 1 else
                                        multi_dashes[key]),
                             alpha=_bounded_float(alphas, name, 1, 0, 1),
-                            label=("_nolegend_" if multi_y else rename.get(name, name)))
+                            label=("_nolegend_" if multi_y else legend_label(rename, name, aliases)))
     elif kind in ("box", "bar"):
         # Build categorical groups in a single pass. The former implementation
         # repeatedly scanned the full DataFrame for every category × group,
@@ -757,7 +760,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             and group_names[0] == "All observations"
         )
         if len(group_names) <= 40 and show_category_legend and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
-            ax.legend(handles=[Patch(facecolor=colors[name], label=rename.get(name, name))
+            ax.legend(handles=[Patch(facecolor=colors[name], label=legend_label(rename, name, aliases))
                                for name in group_names], title="Legend")
     else:
         raise ValueError(f"Unknown plot type: {kind}")
@@ -781,7 +784,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     continue
                 key = (variable_names[0], group)
                 legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
-                legend_labels_out.append(rename.get(group, group))
+                legend_labels_out.append(legend_label(rename, group, aliases))
         if multi_y_color_by == "both":
             for group in (group_names or [None]):
                 for variable in variable_names:
@@ -793,7 +796,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                         continue
                     label = f"{group}, {variable}" if group is not None else variable
                     legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
-                    legend_labels_out.append(rename.get(label, label))
+                    legend_labels_out.append(legend_label(rename, label, aliases))
         added_section = False
         for heading, keys, by_var in (() if multi_y_color_by in ("both", "none") else (("Y variable", variable_names, True), ("Grouping", group_names, False))):
             if not keys or (not by_var and not group_col):
@@ -810,7 +813,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     continue
                 key = relevant[0]
                 legend_handles.append(Line2D([], [], color=multi_colors[key], linestyle=multi_dashes[key], linewidth=line_width))
-                legend_labels_out.append(rename.get(value, value))
+                legend_labels_out.append(legend_label(rename, value, aliases))
         if legend_handles:
             ax.legend(legend_handles, legend_labels_out, title=None)
     legend = ax.get_legend()

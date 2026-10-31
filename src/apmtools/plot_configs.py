@@ -10,6 +10,30 @@ def _json_ready(value):
     return json.loads(json.dumps(value, allow_nan=False))
 
 
+
+def validate_saved_plots(plots):
+    """Validate the structure of retained presets without altering their values.
+
+    Old snapshots remain supported: unknown settings are deliberately retained.
+    """
+    if plots is None:
+        return []
+    if not isinstance(plots, list):
+        raise TypeError("Summary.views must be a list or None")
+    seen = set()
+    for item in plots:
+        if not isinstance(item, dict):
+            raise ValueError("Saved plot entries must be dictionaries")
+        if item.get("schema_version") != 1 or item.get("type") not in ("plot", "table"):
+            raise ValueError("Unsupported saved plot configuration")
+        if not isinstance(item.get("settings"), dict):
+            raise ValueError("Saved plot settings must be a dictionary")
+        identifier = item.get("id")
+        if not isinstance(identifier, str) or not identifier or identifier in seen:
+            raise ValueError("Saved plot IDs must be unique nonempty strings")
+        seen.add(identifier)
+    return copy.deepcopy(plots)
+
 class PlotConfigManager:
     """Keep live tab drafts separate from explicitly retained Summary.plots.
 
@@ -26,7 +50,7 @@ class PlotConfigManager:
         if getattr(summary, 'plots', None) is None:
             summary.plots = []
         if not isinstance(summary.plots, list):
-            raise TypeError('Summary.plots must be a list or None')
+            raise TypeError('Summary.views must be a list or None')
 
     # Settings that affect filtering, grouping or aggregation. Everything else
     # is treated as presentation state. Panel layout (panel_by) is
@@ -119,28 +143,63 @@ class PlotConfigManager:
         preset_id = preset_id or uuid.uuid4().hex
         item = {'schema_version': 1, 'id': preset_id, 'name': name,
                 'type': 'plot', 'settings': self.get(tab_id)}
-        items = copy.deepcopy(self.summary.plots or [])
+        items = copy.deepcopy(self.summary.views or [])
         for i, old in enumerate(items):
             if old.get('id') == preset_id:
                 items[i] = item
                 break
         else:
             items.append(item)
-        self.summary.plots = items
+        self.summary.views = items
         self.revision += 1
         return preset_id
 
+    def retain_table(self, name, settings, frame=None, *, preset_id=None):
+        """Save table settings only; data are sourced from the owning Summary.
+
+        ``frame`` is accepted for compatibility with callers of the older API,
+        but is never serialized. Legacy table snapshots are migrated on save.
+        """
+        name = str(name).strip()
+        if not name:
+            raise ValueError('Configuration name must not be empty')
+        preset_id = preset_id or uuid.uuid4().hex
+        item = {'schema_version': 1, 'id': preset_id, 'name': name,
+                'type': 'table', 'settings': _json_ready(settings)}
+        items = self.saved()
+        for i, old in enumerate(items):
+            if old.get('id') == preset_id:
+                items[i] = item
+                break
+        else:
+            items.append(item)
+        self.summary.views = items
+        self.revision += 1
+        return preset_id
+
+    def restore_table(self, preset_id):
+        item = next((p for p in self.saved() if p.get('id') == preset_id), None)
+        if item is None or item.get('type') != 'table':
+            raise KeyError(preset_id)
+        # Legacy frame snapshots are intentionally ignored. All tables now
+        # resolve against the current owning dataset, not a frozen copy.
+        return self.summary.copy(deep=False), copy.deepcopy(item['settings'])
+
     def delete_saved(self, preset_id):
         """Delete one explicitly saved plot by stable ID, not its open draft."""
-        items = copy.deepcopy(self.summary.plots or [])
-        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') == 'plot')]
+        items = copy.deepcopy(self.summary.views or [])
+        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') in ('plot', 'table'))]
         if len(remaining) == len(items):
             raise KeyError(f'Unknown saved plot: {preset_id}')
-        self.summary.plots = remaining
+        self.summary.views = remaining
         self.revision += 1
 
     def saved(self):
-        return copy.deepcopy(self.summary.plots or [])
+        items = validate_saved_plots(self.summary.views)
+        for item in items:
+            if item.get('type') == 'table':
+                item.pop('frame', None)  # migrate legacy snapshot records
+        return items
 
     def restore(self, preset_id, tab_id):
         item = next((p for p in self.saved() if p.get('id') == preset_id), None)
