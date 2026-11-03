@@ -15,6 +15,7 @@ from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PA
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
 from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices
 from .view_aggregation import normalize_statistics
+from .quality_view import quality_report, quality_summary, quality_heatmap_data, missing_interval_runs, QUALITY_FREQUENCIES, selected_heatmap_variable
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
 from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
@@ -168,8 +169,8 @@ def _build_summary_ui_server(
                            "plots and panel titles (Matplotlib backend)."),
             ),
             ui.h4("Plot tabs, export and application theme"),
-            ui.p("Use + New plot to add a plot tab, or Close selected plot to "
-                 "remove the current plot. The Info tab remains available."),
+            ui.p("Use New plot, New table, or New quality to open independent views. "
+                 "Close tab removes the selected view; the Info tab remains available."),
             ui.p("Export plotted data as CSV saves the data displayed in the plot. "
                  "Export plot saves the chart. With the Matplotlib backend, "
                  "Export as a Python file and associated data creates a "
@@ -2030,6 +2031,166 @@ if (!window.__apmColorPickerInstalled) {
             return snapshot
 
 
+    # Quality dashboards have independent controls and do not modify plot data.
+    @module.ui
+    def quality_tab_ui(settings=None):
+        settings = settings or {}
+        id_choices = _alphabetical([c for c in columns if c not in numeric_columns])
+        times = datetime_columns
+        selected_values = [v for v in settings.get("value_cols", numeric_columns[:1]) if v in numeric_columns]
+        selected_heatmap = selected_heatmap_variable(selected_values, settings.get("heatmap_variable"))
+        return ui.div(
+            ui.layout_sidebar(
+                ui.sidebar(
+                    ui.h4("Coverage analysis"),
+                    ui.input_select("id_col", "Monitor / identifier column",
+                                    choices=id_choices,
+                                    selected=settings.get("id_col", "identifier") if settings.get("id_col", "identifier") in id_choices else (id_choices[0] if id_choices else None)),
+                    ui.input_select("time_col", "Timestamp column",
+                                    choices=times,
+                                    selected=settings.get("time_col", "datetime") if settings.get("time_col", "datetime") in times else (times[0] if times else None)),
+                    ui.input_selectize("value_cols", "Measurements",
+                                       choices=numeric_columns, multiple=True,
+                                       selected=selected_values),
+                    ui.input_select("frequency", "Aggregation frequency",
+                                    choices={v: v.capitalize() for v in QUALITY_FREQUENCIES},
+                                    selected=settings.get("frequency", "hour")),
+                    ui.input_numeric("min_completeness", "Minimum completeness (0–1)",
+                                     value=settings.get("min_completeness", 1.0), min=0, max=1, step=0.05),
+                    ui.input_checkbox("include_empty_intervals", "Include entirely missing intervals",
+                                      value=settings.get("include_empty_intervals", True)),
+                    ui.input_select("preview_rows", "Interval table preview",
+                                    choices={"500": "500 rows", "1000": "1,000 rows", "5000": "5,000 rows", "all": "All rows"},
+                                    selected="1000"),
+                    ui.input_select("heatmap_variable", "Heatmap measurement",
+                                    choices={v: v for v in selected_values},
+                                    selected=selected_heatmap),
+                    ui.p("Coverage is estimated from each monitor's observed sampling cadence. "
+                         "Intervals outside the recording span cannot be inferred.",
+                         class_="small text-muted"),
+                    ui.download_button("download_quality_csv", "Export interval coverage CSV"),
+                    title="Data quality", position="left", open="open", width="320px",
+                ),
+                ui.div(
+                    ui.output_ui("quality_status"),
+                    ui.h4("Coverage by monitor and measurement"),
+                    ui.output_data_frame("quality_summary_grid"),
+                    ui.h4("Completeness heatmap"),
+                    ui.output_plot("quality_heatmap", height="420px"),
+                    ui.h4("Entirely missing interval sequences"),
+                    ui.output_data_frame("quality_gaps_grid"),
+                    ui.h4("Individual intervals"),
+                    ui.output_data_frame("quality_intervals_grid"),
+                    class_="p-3", style="min-width: 0; width: 100%;",
+                ),
+            ), class_="summary-quality-tab",
+        )
+
+    @module.server
+    def quality_tab_server(input, output, session, settings=None):
+        settings = settings or {}
+
+        @reactive.calc
+        def report_settings():
+            # Keep heatmap-only edits out of the expensive coverage calculation.
+            return {
+                "id_col": input.id_col(),
+                "time_col": input.time_col(),
+                "value_cols": list(input.value_cols() or []),
+                "frequency": input.frequency(),
+                "min_completeness": float(input.min_completeness() if input.min_completeness() is not None else 1.0),
+                "include_empty_intervals": bool(input.include_empty_intervals()),
+            }
+
+        @reactive.effect
+        @reactive.event(input.value_cols)
+        def sync_heatmap_choices():
+            # Only selected measurement variables appear in the report. Keep
+            # the heatmap selector in sync, but never recreate its input.
+            choices = list(input.value_cols() or [])
+            with reactive.isolate():
+                selected = input.heatmap_variable()
+            ui.update_select("heatmap_variable", choices={v: v for v in choices},
+                             selected=selected_heatmap_variable(choices, selected) or "")
+
+        @reactive.calc
+        def quality_settings():
+            conf = report_settings()
+            return {**conf, "heatmap_variable": selected_heatmap_variable(
+                conf["value_cols"], input.heatmap_variable())}
+
+        @reactive.calc
+        def report():
+            conf = report_settings()
+            if not conf["value_cols"] or not conf["id_col"] or not conf["time_col"]:
+                return pd.DataFrame()
+            return quality_report(summary, conf)
+
+        @render.ui
+        def quality_status():
+            try:
+                result = report()
+                if result.empty:
+                    return ui.p("Select a measurement to analyse coverage.", class_="text-muted")
+                missing_bins = int((result["observed"] == 0).sum())
+                return ui.p(f"{len(result):,} measurement intervals; "
+                            f"{int(result['is_complete'].sum()):,} complete; "
+                            f"{missing_bins:,} entirely missing.", class_="text-muted")
+            except (ValueError, KeyError) as exc:
+                return ui.p(str(exc), class_="text-danger")
+
+        @render.data_frame
+        def quality_summary_grid():
+            return render.DataGrid(quality_summary(report()), filters=True, width="100%", height="230px")
+
+        @render.data_frame
+        def quality_gaps_grid():
+            return render.DataGrid(missing_interval_runs(report()), filters=True, width="100%", height="190px")
+
+        @render.data_frame
+        def quality_intervals_grid():
+            data = report()
+            preview = input.preview_rows()
+            if preview != 'all':
+                data = data.head(int(preview))
+            data = data.copy()
+            if 'sampling_interval' in data:
+                data['sampling_interval'] = data['sampling_interval'].astype(str)
+            return render.DataGrid(data, filters=True, width="100%", height="320px")
+
+        @render.plot
+        def quality_heatmap():
+            import matplotlib.pyplot as plt
+            from matplotlib.colors import Normalize
+            conf = quality_settings()
+            matrix = quality_heatmap_data(report(), conf["heatmap_variable"])
+            fig, ax = plt.subplots(figsize=(10, 4))
+            if matrix.empty:
+                ax.text(0.5, 0.5, "No data for selected measurement", ha="center", va="center")
+                ax.set_axis_off()
+                return fig
+            colors = plt.get_cmap("viridis").copy()
+            colors.set_bad("lightgray")
+            image = ax.imshow(matrix.to_numpy(dtype=float), aspect="auto", interpolation="nearest",
+                              cmap=colors, norm=Normalize(vmin=0, vmax=1))
+            ax.set_yticks(range(len(matrix.index)))
+            ax.set_yticklabels([str(v) for v in matrix.index], fontsize=8)
+            ticks = sorted(set([0, len(matrix.columns) - 1] + list(range(0, len(matrix.columns), max(1, len(matrix.columns) // 8)))))
+            ax.set_xticks(ticks)
+            ax.set_xticklabels([str(matrix.columns[i]) for i in ticks], rotation=35, ha="right", fontsize=8)
+            ax.set_xlabel("Aggregation interval")
+            ax.set_ylabel(conf["id_col"])
+            ax.set_title(f"{conf['heatmap_variable']} coverage")
+            fig.colorbar(image, ax=ax, label="Observed / expected")
+            fig.tight_layout()
+            return fig
+
+        @render.download(filename="completeness_intervals.csv")
+        def download_quality_csv():
+            yield report().to_csv(index=False)
+
+        return quality_settings
+
     @module.ui
     def table_tab_ui(frame, settings=None):
         settings = settings or {}
@@ -2517,6 +2678,7 @@ if (!window.__apmColorPickerInstalled) {
             ui.div(
                 ui.input_action_button("add_tab", "New plot", class_="btn-primary"),
                 ui.input_action_button("add_table", "New table", class_="btn-primary"),
+                ui.input_action_button("add_quality", "New quality", class_="btn-primary"),
                 ui.input_action_button("retain_plot", "Save", class_="btn-outline-primary"),
                 ui.input_action_button("restore_plot", "Load", class_="btn-outline-primary"),
                 ui.input_action_button("undo_view", "Undo", class_="btn-outline-secondary"),
@@ -2557,6 +2719,7 @@ if (!window.__apmColorPickerInstalled) {
         table_settings_by_tab = workspace.table_settings
         table_source_steps = workspace.table_lineage
         next_table = reactive.value(0)
+        next_quality = reactive.value(0)
         from ..plot_configs import PlotConfigManager
         manager = config_manager or PlotConfigManager(data)
         views = ViewController(workspace, manager)
@@ -2592,6 +2755,22 @@ if (!window.__apmColorPickerInstalled) {
                         first = False
                         return
                     if views.record_edit(tab_id, settings):
+                        refresh_history()
+                except (TypeError, ValueError, KeyError):
+                    pass
+
+        def register_quality_history(tab_id):
+            first = True
+            @reactive.effect
+            def sync_quality_history():
+                nonlocal first
+                if workspace.kind(tab_id) != 'quality':
+                    return
+                try:
+                    state = dict(workspace.quality_settings[tab_id]())
+                    if first:
+                        first = False
+                    elif views.record_edit(tab_id, state):
                         refresh_history()
                 except (TypeError, ValueError, KeyError):
                     pass
@@ -2632,7 +2811,7 @@ if (!window.__apmColorPickerInstalled) {
         @traced('retain_selected', kind='reactive_effect', trigger='@reactive.event(input.retain_plot)')
         def retain_selected():
             selected = input.plot_tabs()
-            if selected not in tab_filters and selected not in table_frames:
+            if selected not in tab_filters and selected not in table_frames and selected not in workspace.quality_settings:
                 ui.notification_show("Select a plot or table tab to save", type="warning")
                 return
             ui.modal_show(ui.modal(
@@ -2827,6 +3006,21 @@ if (!window.__apmColorPickerInstalled) {
                         ui.insert_nav_panel("plot_tabs", panel, select=True)
                         ui.modal_remove()
                         return
+                    if preset.get("type") == "quality":
+                        number = next_quality.get() + 1
+                        tab_id = f"quality_{number}"
+                        settings = views.restore_quality(preset_id)
+                        panel = ui.nav_panel(preset.get('name') or f"Quality {number}",
+                                             quality_tab_ui(tab_id, settings), value=tab_id)
+                        snapshot = quality_tab_server(tab_id, settings)
+                        workspace.add_quality(tab_id, snapshot)
+                        begin_history(tab_id, settings, restored=True)
+                        register_quality_history(tab_id)
+                        next_quality.set(number)
+                        active_tabs.set(workspace.active_tabs)
+                        ui.insert_nav_panel("plot_tabs", panel, select=True)
+                        ui.modal_remove()
+                        return
                     number = next_tab.get() + 1
                     tab_id = f"plot_{number}"
                     initialized = initializer.restored_plot(preset_id, tab_id, number)
@@ -2859,6 +3053,20 @@ if (!window.__apmColorPickerInstalled) {
             register_draft(tab_id, snapshot)
             active_tabs.set(workspace.active_tabs)
             ui.insert_nav_panel("plot_tabs", new_panel, select=True)
+
+        @reactive.effect
+        @reactive.event(input.add_quality)
+        def add_quality():
+            number = next_quality.get() + 1
+            tab_id = f"quality_{number}"
+            panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(tab_id), value=tab_id)
+            settings = quality_tab_server(tab_id)
+            workspace.add_quality(tab_id, settings)
+            begin_history(tab_id, {})
+            register_quality_history(tab_id)
+            next_quality.set(number)
+            active_tabs.set(workspace.active_tabs)
+            ui.insert_nav_panel("plot_tabs", panel, select=True)
 
         @reactive.effect
         @reactive.event(input.add_table)
@@ -2895,7 +3103,15 @@ if (!window.__apmColorPickerInstalled) {
                 # initialized consistently, rather than patching only inputs
                 # that happen to be visible. Preserve the same history stack.
                 kind = workspace.kind(selected)
-                if kind == "plot":
+                if kind == "quality":
+                    number = next_quality.get() + 1
+                    next_quality.set(number)
+                    replacement = f"quality_{number}"
+                    panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(replacement, settings), value=replacement)
+                    quality_snapshot = quality_tab_server(replacement, settings)
+                    workspace.add_quality(replacement, quality_snapshot)
+                    register_quality_history(replacement)
+                elif kind == "plot":
                     number = next_tab.get() + 1
                     next_tab.set(number)
                     replacement = f"plot_{number}"

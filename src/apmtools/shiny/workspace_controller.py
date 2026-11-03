@@ -11,6 +11,7 @@ class WorkspaceController:
 
     def __init__(self):
         self.plot_snapshots = {}
+        self.quality_settings = {}
         self.table_frames = {}
         self.table_settings = {}
         self.table_lineage = {}
@@ -19,6 +20,8 @@ class WorkspaceController:
     def kind(self, tab_id):
         if tab_id in self.plot_snapshots:
             return 'plot'
+        if tab_id in self.quality_settings:
+            return 'quality'
         if tab_id in self.table_frames:
             return 'table'
         return None
@@ -41,9 +44,18 @@ class WorkspaceController:
         self.active_tabs += (tab_id,)
         return self.active_tabs
 
+    def add_quality(self, tab_id, settings):
+        self._check_new(tab_id)
+        if not callable(settings):
+            raise TypeError('Quality settings must be callable')
+        self.quality_settings[tab_id] = settings
+        self.active_tabs += (tab_id,)
+        return self.active_tabs
+
     def remove(self, tab_id):
         if tab_id not in self.active_tabs:
             return False
+        self.quality_settings.pop(tab_id, None)
         self.plot_snapshots.pop(tab_id, None)
         self.table_frames.pop(tab_id, None)
         self.table_settings.pop(tab_id, None)

@@ -38,7 +38,7 @@ def validate_saved_views(views):
     for index, item in enumerate(views):
         if not isinstance(item, dict):
             raise ValueError(f'Saved view {index} must be a dictionary')
-        if item.get('schema_version') != CURRENT_SCHEMA_VERSION or item.get('type') not in ('plot', 'table'):
+        if item.get('schema_version') != CURRENT_SCHEMA_VERSION or item.get('type') not in ('plot', 'table', 'quality'):
             raise ValueError(f'Unsupported saved view configuration at index {index}')
         if not isinstance(item.get('settings'), dict):
             raise ValueError(f'Saved view settings must be a dictionary at index {index}')

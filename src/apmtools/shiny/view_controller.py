@@ -42,11 +42,11 @@ class ViewController:
 
     def saved(self):
         """Return independently mutable copies of both saved view types."""
-        return [p for p in self.manager.saved() if p.get('type', 'plot') in ('plot', 'table')]
+        return [p for p in self.manager.saved() if p.get('type', 'plot') in ('plot', 'table', 'quality')]
 
     def choices(self):
         """Stable ID -> human-readable label, independent of the active tab."""
-        return {p['id']: f"{'Table' if p.get('type') == 'table' else 'Plot'}: {p.get('name', p['id'])}"
+        return {p['id']: f"{ {'table': 'Table', 'plot': 'Plot', 'quality': 'Quality'}.get(p.get('type', 'plot'), 'Plot')}: {p.get('name', p['id'])}"
                 for p in self.saved()}
 
     def preset(self, preset_id):
@@ -72,7 +72,18 @@ class ViewController:
             if tab_id in self.history._tabs:
                 self.history.mark_saved(tab_id, settings)
             return preset_id
-        raise ValueError('No active plot or table tab')
+        if kind == 'quality':
+            settings = copy.deepcopy(self.workspace.quality_settings[tab_id]())
+            preset_id = self.manager.retain_quality(name, settings)
+            if tab_id in self.history._tabs:
+                self.history.mark_saved(tab_id, settings)
+            return preset_id
+        raise ValueError('No active plot, table or quality tab')
+
+    def restore_quality(self, preset_id):
+        if self.preset(preset_id).get('type') != 'quality':
+            raise ValueError('Saved configuration is not a quality dashboard')
+        return self.manager.restore_quality(preset_id)
 
     def delete(self, preset_id):
         """Delete a retained view without affecting any open tab."""

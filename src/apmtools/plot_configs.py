@@ -1,6 +1,5 @@
 """Plot configuration lifecycle: reactive drafts and explicitly retained presets."""
 from __future__ import annotations
-from .shiny.profiling import traced
 import copy
 import json
 import uuid
@@ -161,6 +160,31 @@ class PlotConfigManager:
         self.revision += 1
         return preset_id
 
+    def retain_quality(self, name, settings, *, preset_id=None):
+        """Retain a quality dashboard configuration, never computed report data."""
+        name = str(name).strip()
+        if not name:
+            raise ValueError('Configuration name must not be empty')
+        preset_id = preset_id or uuid.uuid4().hex
+        item = {'schema_version': 1, 'id': preset_id, 'name': name,
+                'type': 'quality', 'settings': _json_ready(settings)}
+        items = self.saved()
+        for index, previous in enumerate(items):
+            if previous.get('id') == preset_id:
+                items[index] = item
+                break
+        else:
+            items.append(item)
+        self.summary.views = items
+        self.revision += 1
+        return preset_id
+
+    def restore_quality(self, preset_id):
+        item = next((p for p in self.saved() if p.get('id') == preset_id), None)
+        if item is None or item.get('type') != 'quality':
+            raise KeyError(preset_id)
+        return copy.deepcopy(item['settings'])
+
     def restore_table(self, preset_id):
         item = next((p for p in self.saved() if p.get('id') == preset_id), None)
         if item is None or item.get('type') != 'table':
@@ -172,7 +196,7 @@ class PlotConfigManager:
     def delete_saved(self, preset_id):
         """Delete one explicitly saved plot by stable ID, not its open draft."""
         items = copy.deepcopy(self.summary.views or [])
-        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') in ('plot', 'table'))]
+        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') in ('plot', 'table', 'quality'))]
         if len(remaining) == len(items):
             raise KeyError(f'Unknown saved plot: {preset_id}')
         self.summary.views = remaining

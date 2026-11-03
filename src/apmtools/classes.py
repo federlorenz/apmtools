@@ -9,6 +9,7 @@ from csv import writer
 from dateutil.parser import parse
 
 from .units import upas_units, lascar_units, purple_units, lcm_units
+from .completeness import analyse_completeness, complete_interval_mask
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
@@ -1194,6 +1195,19 @@ class Summary(pd.DataFrame):
         if attribute in self.columns:
             return set(self[attribute])
 
+    def completeness_report(self, value_cols, frequency, *, time_col='datetime',
+                            id_col='identifier', min_completeness=1.0,
+                            include_empty_intervals=False):
+        """Report observed/expected samples by interval and measurement.
+
+        The result is an ordinary DataFrame with one row per identifier,
+        interval and variable. See :func:`apmtools.completeness.analyse_completeness`.
+        """
+        return analyse_completeness(
+            self, value_cols, frequency, time_col=time_col, id_col=id_col,
+            min_completeness=min_completeness,
+            include_empty_intervals=include_empty_intervals)
+
     def group_stat(self, value_cols, frequency=None, grouping_by=["identifier"], time_col='datetime', id_col='identifier',
                    min_completeness=1.0, only_complete=True, flooring_timestamp=True, aggregate=["mean"]):
         """
@@ -1234,174 +1248,11 @@ class Summary(pd.DataFrame):
         if frequency != None:
 
             if only_complete:
-                def median_interval(g):
-                    return g.sort_values().diff().dropna().median()
-
-                def sorting_frequency(x):
-                    if len(list(filter(lambda z: True if "week" in z else False, x))) > 0:
-                        return list(filter(lambda z: True if "week" in z else False, x))[0]
-                    if len(list(filter(lambda z: True if "weekday" in z else False, x))) > 0:
-                        return list(filter(lambda z: True if "weekday" in z else False, x))[0]
-                    if len(list(filter(lambda z: True if "day" in z else False, x))) > 0:
-                        return list(filter(lambda z: True if "day" in z else False, x))[0]
-                    if len(list(filter(lambda z: True if "hour" in z else False, x))) > 0:
-                        return list(filter(lambda z: True if "hour" in z else False, x))[0]
-                    if len(list(filter(lambda z: True if "minute" in z else False, x))) > 0:
-                        return list(filter(lambda z: True if "minute" in z else False, x))[0]
-                    if len(list(filter(lambda z: True if "second" in z else False, x))) > 0:
-                        return list(filter(lambda z: True if "second" in z else False, x))[0]
-
-                def freq_ranked():
-                    if isinstance(frequency, str):
-                        return frequency
-                    if isinstance(frequency, list):
-                        return sorting_frequency(frequency)
-
-                intervals = df.groupby(id_col)[time_col].apply(median_interval)
-                if isinstance(frequency, str):
-                    if len(frequency.split(" ")) == 1:
-                        match frequency:
-                            case "hour":
-                                expected = (pd.Timedelta(1, "hour") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("h")
-                            case "day":
-                                expected = (pd.Timedelta(1, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("d")
-                            case "minute":
-                                expected = (pd.Timedelta(1, "minute") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("min")
-                            case "second":
-                                expected = (pd.Timedelta(1, "second") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("s")
-                            case "week":
-                                expected = (pd.Timedelta(1, "W") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("w")
-                            case "weekday":
-                                expected = (pd.Timedelta(1, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].map(
-                                    lambda x: (x.weekday()))
-                    if len(frequency.split(" ")) == 2:
-                        mult = float(frequency.split(" ")[0])
-                        match frequency.split(" ")[1]:
-                            case "hour":
-                                expected = (pd.Timedelta(mult, "hour") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}h")
-                            case "day":
-                                expected = (pd.Timedelta(mult, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}d")
-                            case "minute":
-                                expected = (pd.Timedelta(mult, "minute") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}min")
-                            case "second":
-                                expected = (pd.Timedelta(mult, "second") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}s")
-                            case "week":
-                                expected = (pd.Timedelta(mult, "W") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}w")
-                            case "weekday":
-                                expected = (pd.Timedelta(mult, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].map(
-                                    lambda x: (x.weekday//mult))*mult
-
-                    counts = df.groupby([id_col, "xxxyyyxxx"])[
-                        value_cols].count()
-                    expe = counts.index.get_level_values(id_col).map(expected)
-                    completeness = counts.div(expe, axis=0)
-                    complete_hours = completeness[completeness >= min_completeness].dropna(
-                    ).index
-                    mask = pd.MultiIndex.from_arrays(
-                        [df[id_col], df["xxxyyyxxx"]]).isin(complete_hours)
-                    df = df.loc[mask]
-
-                if isinstance(frequency, list):
-                    freq = freq_ranked()
-                    if len(freq.split(" ")) == 1:
-                        match freq:
-                            case "hour":
-                                expected = (pd.Timedelta(1, "hour") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("h")
-                            case "day":
-                                expected = (pd.Timedelta(1, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("d")
-                            case "minute":
-                                expected = (pd.Timedelta(1, "minute") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("min")
-                            case "second":
-                                expected = (pd.Timedelta(1, "second") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("s")
-                            case "week":
-                                expected = (pd.Timedelta(1, "W") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor("w")
-                            case "weekday":
-                                expected = (pd.Timedelta(1, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].map(
-                                    lambda x: (x.weekday()))
-                    if len(freq.split(" ")) == 2:
-                        mult = float(freq.split(" ")[0])
-                        match freq.split(" ")[1]:
-                            case "hour":
-                                expected = (pd.Timedelta(mult, "hour") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}h")
-                            case "day":
-                                expected = (pd.Timedelta(mult, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}d")
-                            case "minute":
-                                expected = (pd.Timedelta(mult, "minute") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}m")
-                            case "second":
-                                expected = (pd.Timedelta(mult, "second") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}s")
-                            case "week":
-                                expected = (pd.Timedelta(mult, "W") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].dt.floor(
-                                    f"{mult}w")
-                            case "weekday":
-                                expected = (pd.Timedelta(mult, "day") /
-                                            intervals).round().astype(int)
-                                df["xxxyyyxxx"] = df["datetime"].map(
-                                    lambda x: (x.weekday//mult))*mult
-
-                    counts = df.groupby([id_col, "xxxyyyxxx"])[
-                        value_cols].count()
-                    expe = counts.index.get_level_values(id_col).map(expected)
-                    completeness = counts.div(expe, axis=0)
-                    complete_hours = completeness[completeness >= min_completeness].dropna(
-                    ).index
-                    mask = pd.MultiIndex.from_arrays(
-                        [df[id_col], df["xxxyyyxxx"]]).isin(complete_hours)
-                    df = df.loc[mask]
+                # Stage 4A: one shared completeness implementation for analysis
+                # and aggregation. Retain existing all-value filtering semantics.
+                df = df.loc[complete_interval_mask(
+                    df, value_cols, frequency, time_col=time_col,
+                    id_col=id_col, min_completeness=min_completeness)].copy()
 
             if isinstance(frequency, str):
                 if len(frequency.split(" ")) == 1:
