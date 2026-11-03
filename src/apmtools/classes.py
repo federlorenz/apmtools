@@ -1224,7 +1224,12 @@ class Summary(pd.DataFrame):
                     print(f"{v} not in  Summary columns")
                     return None
 
-        df = self.dropna(subset=[time_col]).copy()
+        # Non-temporal grouping also works on previously aggregated frames.
+        # Only operations involving a frequency need the source time column.
+        if frequency is not None and time_col not in self.columns:
+            raise KeyError(f"Temporal aggregation requires column {time_col!r}")
+        df = (self.dropna(subset=[time_col]).copy()
+              if frequency is not None else self.copy())
 
         if frequency != None:
 
@@ -1555,38 +1560,20 @@ class Summary(pd.DataFrame):
                                 df[freq] = df["datetime"].map(
                                     lambda x: (x.weekday//mult))*mult
 
-        if isinstance(frequency, str):
-            if grouping_by != None:
-                output = df.groupby(grouping_by+[frequency], dropna=False)
-            else:
-                output = df.groupby([frequency], dropna=False)
-        if isinstance(frequency, list):
-            if grouping_by != None:
-                output = df.groupby(grouping_by+frequency, dropna=False)
-            else:
-                output = df.groupby(frequency, dropna=False)
-        if frequency == None:
-            if grouping_by != None:
-                output = df.groupby(grouping_by, dropna=False)
-            else:
-                output = df
+        # A frequency may also be an explicitly selected grouping variable.
+        # pandas allows repeated group keys but reset_index() then attempts to
+        # insert the same column twice (e.g. "cannot insert hour, already exists").
+        # Preserve the requested order while grouping each key only once.
+        grouping_keys = list(dict.fromkeys(
+            list(grouping_by or []) +
+            ([frequency] if isinstance(frequency, str) else
+             list(frequency) if isinstance(frequency, list) else [])
+        ))
+        if frequency is not None or grouping_by is not None:
+            output = df.groupby(grouping_keys, dropna=False) if aggregate is not None else df[grouping_keys]
+        else:
+            output = df
 
-        if isinstance(frequency, str) and aggregate is None:
-            if grouping_by != None:
-                output = df[grouping_by+[frequency]]
-            else:
-                output = df[[frequency]]
-        if isinstance(frequency, list) and aggregate is None:
-            if grouping_by != None:
-                output = df[grouping_by+frequency]
-            else:
-                output = df[frequency]
-        if frequency == None and aggregate is None:
-            if grouping_by != None:
-                output = df[grouping_by]
-            else:
-                output = df
-                
         if aggregate is not None:
             output = output[value_cols].agg(aggregate)
 

@@ -14,12 +14,44 @@ from ..units import upas_units, lascar_units, purple_units
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
 from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices
+from .view_aggregation import normalize_statistics
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
 from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
-from .inherited_source import source_frame, source_steps
+from .tab_initialization import TabInitializer
+from .workspace_controller import WorkspaceController
+from .profiling import traced, marker
 from .state import SNAPSHOT_INPUT_KEYS, reconcile_visibility, snapshot_inputs
+from .text_editors import update_label_mapping
 
+
+
+def _table_display_frame(frame):
+    """Prepare visible table columns consistently for Shiny and CSV export.
+
+    Retain entirely missing columns, including selected plot variables without
+    observations in the current subset. Duplicate display names are omitted.
+    Source data and its inherited lineage are never modified.
+    """
+    result = pd.DataFrame(frame).reset_index(drop=True)
+    result.columns = [str(col) for col in result.columns]
+    return result.loc[:, ~result.columns.duplicated()].copy()
+
+
+def _table_preview_frame(frame, row_limit="1000"):
+    """Limit only grid presentation, never table transformations or CSV export.
+
+    A fixed row count prevents needlessly serializing very large DataFrames to
+    the browser. The source frame is not modified, and the full view remains
+    available when explicitly selected.
+    """
+    if row_limit == "all":
+        return frame
+    try:
+        count = int(row_limit)
+    except (TypeError, ValueError):
+        count = 1000
+    return frame.iloc[:max(0, count)]
 
 
 def _build_summary_ui_server(
@@ -156,17 +188,7 @@ def _build_summary_ui_server(
         def initial(name, default):
             return initial_filters.get(name, default)
         return ui.div(
-            ui.tags.style("""
-.summary-sidebar-tabs .nav-tabs {display:flex; flex-wrap:wrap; gap:3px; border-bottom:0; margin-bottom:0.5rem;}
-.summary-sidebar-tabs .nav-link {border:0; border-radius:0.4rem; padding:0.45rem 0.65rem; font-size:0.82rem; font-weight:600; color:#17212b; background:var(--tab-color,#dce8f7);}
-.summary-sidebar-tabs .nav-link.active {background:var(--tab-color,#dce8f7); color:#17212b; box-shadow:inset 0 -3px 0 rgba(0,0,0,.35);}
-.summary-sidebar-tabs .nav-item:nth-child(5n+1) {--tab-color:#a7d7f3;}
-.summary-sidebar-tabs .nav-item:nth-child(5n+2) {--tab-color:#b8e5c5;}
-.summary-sidebar-tabs .nav-item:nth-child(5n+3) {--tab-color:#ffe0a3;}
-.summary-sidebar-tabs .nav-item:nth-child(5n+4) {--tab-color:#d8c5f2;}
-.summary-sidebar-tabs .nav-item:nth-child(5n+5) {--tab-color:#f7c7d5;}
-.summary-sidebar-tabs .tab-content {padding:0.65rem 0.25rem;}
-"""),
+
             ui.tags.style("""
 .summary-color-row {display:flex;justify-content:space-between;align-items:center;gap:8px;margin:7px 0;}
 .summary-color-name {overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;font-size:.85rem;}
@@ -263,10 +285,21 @@ if (!window.__apmColorPickerInstalled) {
                     ui.nav_panel("Frequency / statistical aggregation",
                         ui.input_select("frequency", "Frequency / aggregation mode",
                             choices={key: key for key in FREQUENCIES}, selected=initial("frequency", "None")),
-                        ui.input_select("aggregate", "Apply statistical function",
-                            choices={key: key for key in AGGREGATES}, selected=initial("aggregate", "None")),
+                        ui.input_selectize("aggregate", "Apply statistical functions",
+                            choices={key: key for key in AGGREGATES}, multiple=True,
+                            selected=(initial("aggregate", []) if isinstance(initial("aggregate", []), list)
+                                      else ([] if initial("aggregate", "None") == "None" else [initial("aggregate", "None")]))),
                         ui.help_text("Choose a statistical function to aggregate by the selected groups, even when frequency is None."),
-                        ui.output_ui("frequency_options")),
+                        ui.panel_conditional("input.frequency !== 'None'",
+                            ui.input_checkbox("only_complete", "Only complete intervals",
+                                value=initial("only_complete", True)),
+                            ui.input_checkbox("flooring_timestamp", "Floor timestamps",
+                                value=initial("flooring_timestamp", True)))),
+                    ui.nav_panel("Export data",
+                        ui.input_action_button("export_csv", "Export plotted data as CSV", class_="btn-primary mt-2"),
+                        ui.input_action_button("export_plot", "Export plot", class_="btn-secondary mt-3"),
+                        ui.download_button("export_python", "Export as a Python file and associated data",
+                                           class_="btn-secondary mt-3")),
                     id="left_sidebar_tabs"), class_="summary-sidebar-tabs"),
                     title="Plot controls", position="left", open="open", width="320px",
                 ),
@@ -363,13 +396,10 @@ if (!window.__apmColorPickerInstalled) {
                     ),
                     ui.card(ui.card_header("Plot"),
                         ui.div((ui.output_plot("plot", height="100%", width="100%")),
-                            class_="summary-plot-container"),
-                        ui.input_action_button("export_csv", "Export plotted data as CSV", class_="btn-primary mt-3"),
-                        ui.input_action_button("export_plot", "Export plot", class_="btn-secondary mt-3"),
-                        (ui.download_button("export_python", "Export as a Python file and associated data",
-                                            class_="btn-secondary mt-3") if True else ui.div())),
+                            class_="summary-plot-container")),
                 ),
             ),
+            class_="summary-plot-tab",
         )
 
     @module.server
@@ -400,6 +430,7 @@ if (!window.__apmColorPickerInstalled) {
                 output(_make_subset_values_ui(_stage))
 
             @render.ui
+            @traced('numeric_subset_bounds', kind='render', trigger=None)
             def numeric_subset_bounds():
                 controls = []
                 for name in list(input.numeric_subset_columns() or []):
@@ -488,6 +519,7 @@ if (!window.__apmColorPickerInstalled) {
                 return initial_filters.get(name, default)
 
             @reactive.calc
+            @traced('filter_state', kind='reactive_calc', trigger=None)
             def filter_state():
                 def text_value(name):
                     try:
@@ -525,6 +557,7 @@ if (!window.__apmColorPickerInstalled) {
 
                 @reactive.effect
                 @reactive.event(_event_value, ignore_init=True)
+                @traced('_on_filter_change', kind='reactive_effect', trigger='@reactive.event(_event_value, ignore_init=True)')
                 def _on_filter_change():
                     _commit_filter_event()
 
@@ -548,6 +581,7 @@ if (!window.__apmColorPickerInstalled) {
                     )
 
             @reactive.calc
+            @traced('filtered_summary', kind='reactive_calc', trigger=None)
             def filtered_summary():
                 state = filter_state()
                 # Apply each stage sequentially through Summary.subset().
@@ -556,7 +590,7 @@ if (!window.__apmColorPickerInstalled) {
                 # Preserve original row adjacency before numerical filtering so a
                 # line cannot bridge observations removed by a numeric bound.
                 source = summary
-                if input.plot_type() == "line" and AGGREGATES.get(input.aggregate()) is None and state["numeric_bounds"]:
+                if input.plot_type() == "line" and not normalize_statistics(input.aggregate()) and state["numeric_bounds"]:
                     source = summary.copy()
                     order = source.sort_values((["identifier"] if "identifier" in source.columns else []) + ["datetime"], kind="stable")
                     if "identifier" in order.columns:
@@ -594,16 +628,20 @@ if (!window.__apmColorPickerInstalled) {
             _label_fields = ("legend_labels", "panel_titles", "x_tick_labels", "y_tick_labels")
             _label_keys = {name: reactive.value(()) for name in _label_fields}
             from .appearance import _parse_label_map
+            from .legend_identity import legend_label
+            def _legend_editor_aliases():
+                from .legend_identity import variable_aliases
+                with reactive.isolate():
+                    aggregate = normalize_statistics(_optional_input("aggregate", []))
+                    source_y = _optional_input("y", [])
+                sources = [source_y] if isinstance(source_y, str) else list(source_y or [])
+                return variable_aliases(sources, aggregate[0] if aggregate else None)
+
             def _canonical_editor_mapping(field, mapping):
                 if field != "legend_labels":
                     return mapping
                 from .legend_identity import canonical_legend_map
-                from .legend_identity import variable_aliases
-                with reactive.isolate():
-                    aggregate = AGGREGATES.get(_optional_input("aggregate", "None"))
-                    source_y = _optional_input("y", [])
-                sources = [source_y] if isinstance(source_y, str) else list(source_y or [])
-                return canonical_legend_map(mapping, aliases=variable_aliases(sources, aggregate))
+                return canonical_legend_map(mapping, aliases=_legend_editor_aliases())
 
             def _editor_map(field, *, watch=False):
                 # The tab draft owns edited mappings; no parallel reactive dictionary.
@@ -634,6 +672,7 @@ if (!window.__apmColorPickerInstalled) {
                 def _make_editor(field):
                     @output(id=f"{field}_editor")
                     @render.ui
+                    @traced('_editor', kind='render', trigger=None)
                     def _editor():
                         keys = _label_keys[field].get()
                         with reactive.isolate():
@@ -649,13 +688,16 @@ if (!window.__apmColorPickerInstalled) {
                             *[
                                 ui.input_text(
                                     f"edit_{field}_{hashlib.sha1(key.encode()).hexdigest()[:16]}",
-                                    None, value=values.get(key, key)) for key in keys
+                                    None, value=(legend_label(
+                                        values, key, _legend_editor_aliases())
+                                        if field == "legend_labels" else values.get(key, key))) for key in keys
                             ] if keys else [ui.help_text("No displayed labels")],
                         )
                 _make_editor(_field)
 
                 def _make_watcher(field):
                     @reactive.effect
+                    @traced('_watch', kind='reactive_effect', trigger=None)
                     def _watch():
                         keys = _label_keys[field].get()
                         # A plot-type transition unmounts the old inputs asynchronously.
@@ -668,16 +710,21 @@ if (!window.__apmColorPickerInstalled) {
                         # its own writes: otherwise each keystroke can retrigger it.
                         with reactive.isolate():
                             updated = dict(_editor_map(field))
-                        changed = False
+                        mounted_edits = {}
                         for key in keys:
                             ident = f"edit_{field}_{hashlib.sha1(key.encode()).hexdigest()[:16]}"
-                            value = _optional_input(ident, None)
-                            if value is not None and updated.get(key, key) != value:
-                                updated[key] = value
-                                changed = True
+                            mounted_edits[key] = _optional_input(ident, None)
+                        # Blank text is a transient editing state. Writing it
+                        # back causes the rendered legend/ticks to lose their
+                        # identities and remount these same inputs in a loop.
+                        original_mapping = dict(updated)
+                        updated, changed = update_label_mapping(updated, mounted_edits)
                         if field == "legend_labels":
-                            from .legend_identity import canonical_legend_map
                             updated = _canonical_editor_mapping(field, updated)
+                            # Compare canonical settings, not temporary source
+                            # aliases. Otherwise remounted inputs can trigger
+                            # redundant config writes and render feedback.
+                            changed = updated != original_mapping
                         if changed:
                             if config_manager is not None and config_tab_id is not None:
                                 _patch_live_config(config_tab_id, {
@@ -710,6 +757,7 @@ if (!window.__apmColorPickerInstalled) {
 
             @output(id="trace_colors_editor")
             @render.ui
+            @traced('trace_colors_editor', kind='render', trigger=None)
             def trace_colors_editor():
                 keys = _color_keys.get()
                 values = _color_map(watch=True)
@@ -736,6 +784,7 @@ if (!window.__apmColorPickerInstalled) {
 
             _picker_click_counts = {}
             @reactive.effect
+            @traced('_watch_picker_buttons', kind='reactive_effect', trigger=None)
             def _watch_picker_buttons():
                 keys = _color_keys.get()
                 clicked = None
@@ -775,6 +824,7 @@ if (!window.__apmColorPickerInstalled) {
 
             @reactive.effect
             @reactive.event(input.picker_apply)
+            @traced('_apply_picked_color', kind='reactive_effect', trigger='@reactive.event(input.picker_apply)')
             def _apply_picked_color():
                 key = _picker_key.get()
                 value = str(_optional_input("picker_hex", "")).strip()
@@ -792,6 +842,7 @@ if (!window.__apmColorPickerInstalled) {
                                          type="error", duration=4)
 
             @reactive.effect
+            @traced('_sync_color_keys', kind='reactive_effect', trigger=None)
             def _sync_color_keys():
                 spec = prepared_plot()
                 if "error" in spec:
@@ -810,6 +861,7 @@ if (!window.__apmColorPickerInstalled) {
 
             @reactive.effect
             @reactive.event(input.export_csv)
+            @traced('show_export_dialog', kind='reactive_effect', trigger='@reactive.event(input.export_csv)')
             def show_export_dialog():
                 ui.modal_show(ui.modal(
                     ui.input_text("export_filename", "CSV filename", value="export.csv"),
@@ -821,6 +873,7 @@ if (!window.__apmColorPickerInstalled) {
 
             @reactive.effect
             @reactive.event(input.export_plot)
+            @traced('show_plot_export_dialog', kind='reactive_effect', trigger='@reactive.event(input.export_plot)')
             def show_plot_export_dialog():
                 ui.modal_show(ui.modal(
                     ui.input_numeric("plot_export_width", "Width (inches)", value=10, min=1, max=100, step=0.5),
@@ -832,6 +885,7 @@ if (!window.__apmColorPickerInstalled) {
                 ))
 
             @render.download(filename="plot.png", media_type="image/png")
+            @traced('download_plot_png', kind='render', trigger=None)
             def download_plot_png():
                 import io
                 width = float(input.plot_export_width())
@@ -852,6 +906,7 @@ if (!window.__apmColorPickerInstalled) {
                     plt.close(fig)
 
             @render.download(filename=lambda: _safe_csv_filename(input.export_filename()))
+            @traced('download_csv', kind='render', trigger=None)
             def download_csv():
                 # Use the same post-filter/post-aggregation dataframe as the plot.
                 # The original dataframe is never mutated.
@@ -859,6 +914,7 @@ if (!window.__apmColorPickerInstalled) {
                 yield frame.to_csv(index=False).encode("utf-8-sig")
 
             @render.ui
+            @traced('x_control', kind='render', trigger=None)
             def x_control():
                 kind = input.plot_type()
                 if kind in ("box", "bar"):
@@ -894,6 +950,7 @@ if (!window.__apmColorPickerInstalled) {
                 )
 
             @render.ui
+            @traced('y_control', kind='render', trigger=None)
             def y_control():
                 kind = input.plot_type()
                 if kind == "histogram":
@@ -923,24 +980,34 @@ if (!window.__apmColorPickerInstalled) {
             # by a render.ui output inside an inactive tab, so Shiny did not
             # initialize them until the user opened Panel appearance.  This
             # prevented Matplotlib grouped plots from rendering immediately.
+            # Virtual grouping choices such as "statistics" arrive after the
+            # saved plot's initial controls mount.  Do not let the first group
+            # synchronization discard a saved facet while that choice is pending.
+            from .state import restore_panel_selection
+            _saved_panel_by = initial_filters.get("panel_by", []) or []
+            if isinstance(_saved_panel_by, str):
+                _saved_panel_by = [_saved_panel_by]
+            _panel_restore_pending = reactive.value(bool(_saved_panel_by))
+
             @reactive.effect
             @reactive.event(input.group_by, ignore_none=False)
+            @traced('sync_panel_group_choices', kind='reactive_effect', trigger='@reactive.event(input.group_by, ignore_none=False)')
             def sync_panel_group_choices():
                 selected = list(input.group_by() or [])
                 with reactive.isolate():
                     current_panels = list(_optional_input("panel_by", []) or [])
-                valid_panels = [name for name in current_panels if name in selected]
+                    pending = _panel_restore_pending.get()
+                valid_panels, still_pending = restore_panel_selection(
+                    selected, current_panels, _saved_panel_by, pending)
+                if still_pending:
+                    return  # Wait until virtual grouping inputs are available.
+                if pending:
+                    _panel_restore_pending.set(False)
                 ui.update_selectize("panel_by", choices={name: name for name in selected},
                                     selected=valid_panels)
 
-            @render.ui
-            def frequency_options():
-                if FREQUENCIES.get(input.frequency()) is None:
-                    return ui.div()
-                return ui.div(
-                    ui.input_checkbox("only_complete", "Only complete intervals", value=initial_filters.get("only_complete", True)),
-                    ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=initial_filters.get("flooring_timestamp", True)),
-                )
+            # Frequency-specific inputs are mounted statically in plot_tab_ui.
+            # They must exist even when the aggregation tab is not selected.
 
             # The virtual group choices depend on plot type and selected axes,
             # not on the Group by value. Updating a selectize control while
@@ -949,6 +1016,7 @@ if (!window.__apmColorPickerInstalled) {
             _last_axis_group_choices = reactive.value(None)
 
             @reactive.effect
+            @traced('sync_axis_group_choices', kind='reactive_effect', trigger=None)
             def sync_axis_group_choices():
                 kind = input.plot_type()
                 x_raw = _optional_input("x", [])
@@ -960,6 +1028,8 @@ if (!window.__apmColorPickerInstalled) {
                     choices.append("variables_x")
                 if kind != "histogram" and len(ys) > 1:
                     choices.append("variables_y")
+                if len(normalize_statistics(_optional_input("aggregate", []))) > 1:
+                    choices.append("statistics")
                 signature = tuple(choices)
                 with reactive.isolate():
                     previous = _last_axis_group_choices.get()
@@ -978,11 +1048,12 @@ if (!window.__apmColorPickerInstalled) {
                     if isinstance(restored, str):
                         restored = [restored]
                     for name in restored:
-                        if name in ("variables_x", "variables_y") and name in choices and name not in selected:
+                        if name in ("variables_x", "variables_y", "statistics") and name in choices and name not in selected:
                             selected.append(name)
                 ui.update_selectize("group_by", choices={c: c for c in choices}, selected=selected)
 
             @reactive.calc
+            @traced('selected_data', kind='reactive_calc', trigger=None)
             def selected_data():
                 current = filtered_summary()
                 # Chained subsets may legitimately produce zero rows. Do not
@@ -1013,7 +1084,7 @@ if (!window.__apmColorPickerInstalled) {
                     return pd.DataFrame()
 
                 selected_groups = [g for g in (input.group_by() or [])
-                                   if g not in ("variables_x", "variables_y")]
+                                   if g not in ("variables_x", "variables_y", "statistics")]
                 # Derive hour/day/etc. through group_stat without aggregation.
                 # The returned index column identifies source rows.
                 for component in selected_groups:
@@ -1040,8 +1111,8 @@ if (!window.__apmColorPickerInstalled) {
                             current.loc[valid, component] = generated[component].to_numpy()
                 grouping_by = [column_map[c] for c in selected_groups]
                 frequency = FREQUENCIES.get(input.frequency())
-                should_aggregate = AGGREGATES.get(input.aggregate()) is not None
-                aggregate = AGGREGATES.get(input.aggregate())
+                should_aggregate = bool(normalize_statistics(input.aggregate()))
+                aggregate = normalize_statistics(input.aggregate())
                 value_columns = [column_map[c] for c in value_names]
 
                 if should_aggregate and kind in ("box", "bar"):
@@ -1077,10 +1148,11 @@ if (!window.__apmColorPickerInstalled) {
                 return current
 
             @reactive.calc
+            @traced('unfiltered_plot', kind='reactive_calc', trigger=None)
             def unfiltered_plot():
                 # Validate before evaluating selected_data(), since invalid
                 # aggregation options must not poison reactive calculations.
-                if (AGGREGATES.get(input.aggregate()) is not None
+                if (bool(normalize_statistics(input.aggregate()))
                         and FREQUENCIES.get(input.frequency()) is None
                         and not list(input.group_by() or [])):
                     return {"error": "Select a frequency or at least one Group by variable to apply a statistical function"}
@@ -1091,9 +1163,9 @@ if (!window.__apmColorPickerInstalled) {
                 y_input = None if selected_plot == "histogram" else input.y()
                 selected_y = ([y_input] if isinstance(y_input, str) else list(y_input or []))
                 selected_groups = list(input.group_by() or [])
-                physical_groups = [g for g in selected_groups if g not in ("variables_x", "variables_y")]
+                physical_groups = [g for g in selected_groups if g not in ("variables_x", "variables_y", "statistics")]
                 frequency = FREQUENCIES.get(input.frequency())
-                should_aggregate = AGGREGATES.get(input.aggregate()) is not None
+                should_aggregate = bool(normalize_statistics(input.aggregate()))
 
                 if (selected_plot == "line" and selected_x
                         and selected_x[0] in timedelta_columns
@@ -1111,10 +1183,10 @@ if (!window.__apmColorPickerInstalled) {
                 ):
                     return {"error": "Waiting for categorical X-axis selection"}
 
-                aggregate = AGGREGATES.get(input.aggregate())
+                aggregate = normalize_statistics(input.aggregate())
                 def mapped(column):
                     original = column_map[column]
-                    return f"{original}_{aggregate}" if should_aggregate else original
+                    return f"{original}_{aggregate[0]}" if should_aggregate else original
 
                 if selected_plot == "histogram":
                     x_column = mapped(selected_x[0])
@@ -1179,6 +1251,17 @@ if (!window.__apmColorPickerInstalled) {
                     plot_df["__plot_category"] = _composite_labels(plot_df, x_columns)
                     x_column = "__plot_category"
 
+                if should_aggregate and len(aggregate) > 1:
+                    # Preserve wide CSV data in selected_data(); only pivot the
+                    # renderer's view here. Statistics is a display dimension.
+                    # The first function remains the X statistic for scatter.
+                    from .multi_stat_plot import prepare_multi_stat_plot
+                    plot_df, y_columns = prepare_multi_stat_plot(
+                        plot_df, [column_map[c] for c in selected_y], aggregate,
+                        split_statistics=("statistics" in selected_groups),
+                        split_variables=("variables_y" in selected_groups),
+                    )
+
                 if "variables_y" in selected_groups and len(y_columns) > 1:
                     # Make the selected Y variable an actual categorical dimension,
                     # so it works with ordinary grouping and panel partitioning.
@@ -1210,7 +1293,7 @@ if (!window.__apmColorPickerInstalled) {
                     # the temporary aggregated column name. Keep its colours
                     # and group keys unchanged across mean/median/etc.
                     from .legend_identity import variable_aliases
-                    source_aliases = variable_aliases(selected_y, aggregate)
+                    source_aliases = variable_aliases(selected_y, aggregate[0] if isinstance(aggregate, list) and aggregate else aggregate)
                     plot_df["variables_y"] = plot_df["variables_y"].map(
                         lambda value: source_aliases.get(str(value), str(value)))
                     y_columns = ["__axis_y_value"]
@@ -1239,6 +1322,15 @@ if (!window.__apmColorPickerInstalled) {
                     group_columns.append("variables_x")
                 if "variables_y" in selected_groups and "variables_y" in plot_df:
                     group_columns.append("variables_y")
+                if "statistics" in selected_groups and "statistics" in plot_df:
+                    group_columns.append("statistics")
+                # A melted multi-statistic plot must distinguish both axes
+                # of identity, even when only one is explicitly grouped.
+                if should_aggregate and len(aggregate) > 1 and (
+                        "statistics" in selected_groups or "variables_y" in selected_groups):
+                    for dimension in ("variables_y", "statistics"):
+                        if dimension in plot_df and dimension not in group_columns:
+                            group_columns.append(dimension)
                 if group_columns:
                     plot_df = plot_df.copy(deep=False)
                     plot_df["__plot_group"] = (
@@ -1254,7 +1346,7 @@ if (!window.__apmColorPickerInstalled) {
                 from .legend_identity import variable_aliases
                 return {"data": plot_df, "kind": selected_plot, "x": x_column,
                         "ys": y_columns, "groups": group_columns,
-                        "legend_aliases": variable_aliases(selected_y, aggregate),
+                        "legend_aliases": variable_aliases(selected_y, aggregate[0] if isinstance(aggregate, list) and aggregate else aggregate),
                         "categories": x_columns if selected_plot in ("box", "bar") else None,
                         "frequency": frequency, "x_label_override": x_label_override,
                         "x_variables": x_variables,
@@ -1263,6 +1355,7 @@ if (!window.__apmColorPickerInstalled) {
                             or (selected_plot == "scatter" and (len(x_variables) > 1 or len(y_columns) > 1))}
 
             @reactive.calc
+            @traced('available_elements', kind='reactive_calc', trigger=None)
             def available_elements():
                 return element_keys(unfiltered_plot())
 
@@ -1280,6 +1373,7 @@ if (!window.__apmColorPickerInstalled) {
                 return inherited_visible
 
             @reactive.effect
+            @traced('reconcile_visible_elements', kind='reactive_effect', trigger=None)
             def reconcile_visible_elements():
                 keys = tuple(available_elements())
                 with reactive.isolate():
@@ -1297,6 +1391,7 @@ if (!window.__apmColorPickerInstalled) {
                     _patch_live_config(config_tab_id, {"visible_elements": list(selected)})
 
             @render.ui
+            @traced('element_visibility_ui', kind='render', trigger=None)
             def element_visibility_ui():
                 keys = tuple(available_elements())
                 with reactive.isolate():
@@ -1320,6 +1415,7 @@ if (!window.__apmColorPickerInstalled) {
 
             @reactive.effect
             @reactive.event(input.visible_elements, ignore_init=True)
+            @traced('sync_visible_elements', kind='reactive_effect', trigger='@reactive.event(input.visible_elements, ignore_init=True)')
             def sync_visible_elements():
                 chosen = _optional_input("visible_elements", None)
                 if chosen is None:
@@ -1337,6 +1433,7 @@ if (!window.__apmColorPickerInstalled) {
                     _patch_live_config(config_tab_id, {"visible_elements": list(chosen)})
 
             @reactive.calc
+            @traced('prepared_plot', kind='reactive_calc', trigger=None)
             def prepared_plot():
                 raw = unfiltered_plot()
                 # Visibility changes alter the plot specification. Other appearance
@@ -1601,6 +1698,7 @@ if (!window.__apmColorPickerInstalled) {
 
             @reactive.effect
             @reactive.event(input.plot_type, ignore_init=True)
+            @traced('reset_on_plot_type_change', kind='reactive_effect', trigger='@reactive.event(input.plot_type, ignore_init=True)')
             def reset_on_plot_type_change():
                 # During a restored tab's initial mount, Shiny can report a
                 # transient plot type. Do not clear persisted axis bounds (or
@@ -1619,7 +1717,7 @@ if (!window.__apmColorPickerInstalled) {
                 ui.update_checkbox("multi_panel", value=False)
                 ui.update_checkbox("independent_panel_limits", value=True)
                 ui.update_select("frequency", selected="None")
-                ui.update_select("aggregate", selected="None")
+                ui.update_selectize("aggregate", selected=[])
                 ui.update_text("title", value="")
                 ui.update_text("x_axis_label", value="")
                 ui.update_text_area("y_axis_label", value="")
@@ -1683,11 +1781,13 @@ if (!window.__apmColorPickerInstalled) {
 
                 @reactive.effect
                 @reactive.event(input.increase_plot_fonts)
+                @traced('_increase_plot_fonts', kind='reactive_effect', trigger='@reactive.event(input.increase_plot_fonts)')
                 def _increase_plot_fonts():
                     _change_fonts(1)
 
                 @reactive.effect
                 @reactive.event(input.decrease_plot_fonts)
+                @traced('_decrease_plot_fonts', kind='reactive_effect', trigger='@reactive.event(input.decrease_plot_fonts)')
                 def _decrease_plot_fonts():
                     _change_fonts(-1)
 
@@ -1698,72 +1798,64 @@ if (!window.__apmColorPickerInstalled) {
 
                 @reactive.effect
                 @reactive.event(input.increase_plot_dpi)
+                @traced('_increase_plot_dpi', kind='reactive_effect', trigger='@reactive.event(input.increase_plot_dpi)')
                 def _increase_plot_dpi():
                     _change_dpi(25)
 
                 @reactive.effect
                 @reactive.event(input.decrease_plot_dpi)
+                @traced('_decrease_plot_dpi', kind='reactive_effect', trigger='@reactive.event(input.decrease_plot_dpi)')
                 def _decrease_plot_dpi():
                     _change_dpi(-25)
 
-            # The figure renderer is the source of truth for legend entries.
-            # Store original keys, not renamed display strings, to avoid
-            # feedback loops when the user edits the mapping.
+            # Discover original legend identities only from an unrenamed plot.
+            # Changes to legend text do not invalidate this structural calculation.
+            # The actual rendered figure can consequently change its labels without
+            # destroying or replacing its Shiny text inputs.
             rendered_legend_keys = reactive.value(())
 
-            def _capture_legend(fig):
-                from .appearance import _parse_label_map
-                # Use the full saved mapping during initial legend discovery.
-                # _label_string() deliberately filters by discovered keys, which
-                # are still empty when a restored tab first renders.
+            @reactive.calc
+            def _structural_legend_keys():
+                spec = prepared_plot()
+                # These controls affect which legend entries are available.
+                active_groups = list(input.group_by() or [])
+                multi_panel = bool(_optional_input("multi_panel", False)) if active_groups else False
+                panel_groups = (list(_optional_input("panel_by", []) or []) or active_groups) if len(active_groups) > 1 else active_groups
                 with reactive.isolate():
-                    mapping = dict(_editor_map("legend_labels"))
-                # Resolve displayed labels against stable, original keys.  A
-                # reverse dictionary is unsafe: two different keys may have
-                # the same edited label, and mapping order then makes keys
-                # alternate as the figure is rendered repeatedly.
-                with reactive.isolate():
-                    known_keys = _label_keys["legend_labels"].get()
-                legends = list(getattr(fig, "legends", []))
-                legends += [ax.get_legend() for ax in fig.axes if ax.get_legend() is not None]
-                labels = [txt.get_text() for leg in legends for txt in leg.get_texts()]
-                excluded = ("Y variable", "Grouping", "Legend", "All observations")
-                labels = [label for label in labels if label.strip() and label not in excluded]
-                # A faceted plot can temporarily expose no legend while Shiny
-                # swaps axes (or when the panel variable consumes the only
-                # grouping dimension). Do not clear the editor identities in
-                # that transient state: remounting the text inputs on every
-                # panel transition can disconnect their reactive watchers.
-                with reactive.isolate():
-                    panel_mode = (True and
-                                  bool(_optional_input("multi_panel", False)))
-                if panel_mode and not labels and known_keys:
-                    return
-                # If this is merely a relabelled rendering of the existing
-                # traces, do not rediscover/rename their identities.
-                expected = [mapping.get(key, key) for key in known_keys]
-                if known_keys and set(labels) == set(expected):
-                    keys = tuple(known_keys)
-                else:
-                    from .legend_identity import original_legend_keys
-                    # An aggregated bar plot may carry both legacy raw and
-                    # suffixed saved mappings (e.g. pm25 and pm25_mean -> PM).
-                    # Resolve the ambiguous display name against the columns
-                    # actually rendered, not against the display text itself.
-                    with reactive.isolate():
-                        active_aggregate = AGGREGATES.get(_optional_input("aggregate", "None"))
-                    suffix = f"_{active_aggregate}" if active_aggregate is not None else ""
-                    source_y = _optional_input("y", [])
-                    sources = [source_y] if isinstance(source_y, str) else list(source_y or [])
-                    from .legend_identity import variable_aliases
-                    keys = original_legend_keys(labels, mapping, known_keys,
-                                                aliases=variable_aliases(sources, active_aggregate))
+                    # Never observe appearance config or label editor values:
+                    # renaming must not force a second structural render.
+                    options = dict(matplotlib_options())
+                options["legend_labels"] = ""
+                options["panel_by"] = panel_groups if multi_panel else None
+                import matplotlib.pyplot as plt
+                structure = _matplotlib_direct_figure(spec, **options)
+                try:
+                    legends = list(getattr(structure, "legends", []))
+                    legends += [ax.get_legend() for ax in structure.axes if ax.get_legend() is not None and ax.get_legend().get_visible()]
+                    excluded = {"Y variable", "Grouping", "Legend", "All observations"}
+                    return tuple(dict.fromkeys(
+                        txt.get_text() for leg in legends for txt in leg.get_texts()
+                        if txt.get_text().strip() and txt.get_text() not in excluded
+                    ))
+                finally:
+                    plt.close(structure)
+
+            @reactive.effect
+            @traced('_capture_structural_legend_keys', kind='reactive_effect', trigger=None)
+            def _refresh_structural_legend_keys():
+                keys = _structural_legend_keys()
                 with reactive.isolate():
                     old = rendered_legend_keys.get()
                 if keys != old:
                     rendered_legend_keys.set(keys)
 
+            def _capture_legend(fig):
+                # Kept as an extension point for renderers.  Legend labels
+                # on this (renamed) figure must never determine editor identity.
+                return None
+
             @reactive.effect
+            @traced('_refresh_labels_from_rendered_legend', kind='reactive_effect', trigger=None)
             def _refresh_labels_from_rendered_legend():
                 keys = rendered_legend_keys.get()
                 _set_label_keys("legend_labels", keys)
@@ -1786,6 +1878,7 @@ if (!window.__apmColorPickerInstalled) {
                     rendered_tick_keys.set(keys)
 
             @reactive.effect
+            @traced('_refresh_tick_editors', kind='reactive_effect', trigger=None)
             def _refresh_tick_editors():
                 xkeys, ykeys = rendered_tick_keys.get()
                 _set_label_keys("x_tick_labels", xkeys)
@@ -1812,6 +1905,7 @@ if (!window.__apmColorPickerInstalled) {
                                 [mapping.get(label, label) for label in labels]))
 
             @reactive.calc
+            @traced('matplotlib_options', kind='reactive_calc', trigger=None)
             def matplotlib_options():
                 # Shared with the export so that all appearance options,
                 # including per-panel overrides, are reproduced exactly.
@@ -1856,6 +1950,7 @@ if (!window.__apmColorPickerInstalled) {
                 )
 
             @render.download(filename="plot_export.zip", media_type="application/zip")
+            @traced('export_python', kind='render', trigger=None)
             def export_python():
                 import io
                 import zipfile
@@ -1871,6 +1966,7 @@ if (!window.__apmColorPickerInstalled) {
                 yield buffer.getvalue()
 
             @render.plot
+            @traced('plot', kind='render', trigger=None)
             def plot():
                 fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
                 _capture_legend(fig)
@@ -1984,12 +2080,30 @@ if (!window.__apmColorPickerInstalled) {
                                 multiple=True, selected=settings.get("group_by", [])),
                             ui.input_select("frequency", "Frequency / aggregation mode",
                                 choices={k: k for k in FREQUENCIES}, selected=settings.get("frequency", "None")),
-                            ui.input_select("aggregate", "Apply statistical function",
-                                choices={k: k for k in AGGREGATES}, selected=settings.get("aggregate", "None")),
-                            ui.output_ui("frequency_options"),
+                            ui.input_selectize("aggregate", "Apply statistical functions",
+                                choices={k: k for k in AGGREGATES if k != "None"}, multiple=True,
+                                selected=(settings.get("aggregate", "None") if isinstance(settings.get("aggregate", "None"), list)
+                                          else ([] if settings.get("aggregate", "None") == "None" else [settings.get("aggregate")])),),
+                            ui.input_selectize("aggregate_columns", "Variables to aggregate",
+                                choices={c: c for c in numeric}, multiple=True,
+                                selected=settings.get("aggregate_columns", numeric)),
+                            ui.panel_conditional("input.frequency !== 'None'",
+                                ui.input_checkbox("only_complete", "Only complete intervals",
+                                    value=settings.get("only_complete", True)),
+                                ui.input_checkbox("flooring_timestamp", "Floor timestamps",
+                                    value=settings.get("flooring_timestamp", True))),
                         ),
+                        ui.nav_panel("Display",
+                            ui.input_select("table_preview_rows", "Rows in grid preview",
+                                choices={"500": "500 rows", "1000": "1,000 rows", "5000": "5,000 rows", "all": "All rows"},
+                                selected="1000"),
+                            ui.p("Preview size affects the browser grid only. CSV export includes all transformed rows.",
+                                 class_="text-muted small")),
+                        ui.nav_panel("Export data",
+                            ui.input_action_button("export_table_csv", "Export table as CSV",
+                                                   class_="btn-primary mt-2")),
                         id="table_sidebar_tabs"), class_="summary-sidebar-tabs"),
-                    title="Table controls", open="closed", width="320px",
+                    title="Table controls", position="left", open="open", width="320px",
                 ),
                 ui.card(
                     ui.card_header("Data table"),
@@ -2037,6 +2151,7 @@ if (!window.__apmColorPickerInstalled) {
             output(make_values_ui(stage))
 
         @render.ui
+        @traced('numeric_subset_bounds', kind='render', trigger=None)
         def numeric_subset_bounds():
             controls = []
             for name in list(input.numeric_subset_columns() or []):
@@ -2052,16 +2167,11 @@ if (!window.__apmColorPickerInstalled) {
                 ))
             return ui.div(*controls)
 
-        @render.ui
-        def frequency_options():
-            if FREQUENCIES.get(input.frequency()) is None:
-                return ui.div()
-            return ui.div(
-                ui.input_checkbox("only_complete", "Only complete intervals", value=settings.get("only_complete", True)),
-                ui.input_checkbox("flooring_timestamp", "Floor timestamps", value=settings.get("flooring_timestamp", True)),
-            )
+        # Frequency-specific checkboxes are mounted statically in table_tab_ui,
+        # so restored tables can aggregate before their sidebar tab is opened.
 
         @reactive.calc
+        @traced('table_data', kind='reactive_calc', trigger=None)
         def table_data():
             current = frame.copy(deep=True)
             for stage in range(stages):
@@ -2101,8 +2211,8 @@ if (!window.__apmColorPickerInstalled) {
                     values = values.loc[current.index]
             if current.empty:
                 return current
-            aggregate = AGGREGATES.get(input.aggregate())
-            if aggregate is not None:
+            aggregate = normalize_statistics(input.aggregate())
+            if aggregate:
                 frequency = FREQUENCIES.get(input.frequency())
                 grouping = list(input.group_by() or [])
                 if frequency is None and not grouping:
@@ -2111,13 +2221,17 @@ if (!window.__apmColorPickerInstalled) {
                 # Summary.group_stat() semantics and let the grouping selection
                 # determine whether a numeric column is an aggregation value.
                 # Entirely missing numeric columns remain excluded.
-                value_cols = [name for name in numeric if name not in grouping
+                # Explicit value selection; legacy saved tables default to all
+                # eligible numeric columns.
+                value_cols = [name for name in list(input.aggregate_columns() or [])
+                              if name in numeric and name not in grouping
                               and current[name].notna().any()]
                 if not value_cols:
                     return pd.DataFrame()
                 if not hasattr(current, "group_stat"):
                     return pd.DataFrame()
-                complete = bool(input.only_complete()) if frequency is not None else False
+                complete = (bool(input.only_complete()) if frequency is not None
+                            and "datetime" in current.columns else False)
                 floor = bool(input.flooring_timestamp()) if frequency is not None else True
                 if complete and frequency is not None:
                     # group_stat requires *every* value column to be complete in
@@ -2135,7 +2249,7 @@ if (!window.__apmColorPickerInstalled) {
                         for part in parts[1:]:
                             # Merge on actual grouping/time columns produced by
                             # group_stat(), not on the frequency option string.
-                            measurement_cols = {f"{name}_{aggregate}" for name in value_cols}
+                            measurement_cols = {f"{name}_{stat}" for name in value_cols for stat in aggregate}
                             keys = [col for col in current.columns
                                     if col in part.columns and col not in measurement_cols]
                             if keys:
@@ -2151,18 +2265,32 @@ if (!window.__apmColorPickerInstalled) {
                         only_complete=False, flooring_timestamp=floor)
             return pd.DataFrame() if current is None else current
 
+        @reactive.effect
+        @reactive.event(input.export_table_csv)
+        @traced('show_table_export_dialog', kind='reactive_effect', trigger='@reactive.event(input.export_table_csv)')
+        def show_table_export_dialog():
+            ui.modal_show(ui.modal(
+                ui.input_text("table_export_filename", "CSV filename", value="table.csv"),
+                ui.download_button("download_table_csv", "Download CSV", class_="btn-primary"),
+                title="Export table as CSV", easy_close=True,
+                footer=ui.modal_button("Cancel"),
+            ))
+
+        @render.download(filename=lambda: _safe_csv_filename(input.table_export_filename()))
+        @traced('download_table_csv', kind='render', trigger=None)
+        def download_table_csv():
+            # Export the currently filtered/aggregated table, not its raw source.
+            # Match the grid's displayed column selection and order.
+            result = _table_display_frame(table_data())
+            yield result.to_csv(index=False).encode("utf-8-sig")
+
         @render.data_frame
+        @traced('table_grid', kind='render', trigger=None)
         def table_grid():
-            result = table_data()
-            # Convert Summary/Group output to plain, grid-compatible pandas
-            # columns. Completeness filtering may legitimately produce zero rows.
-            result = pd.DataFrame(result).reset_index(drop=True)
-            # Hide columns without any observed values in the current table.
-            # This is presentation-only: the underlying table data is retained
-            # for subsequent filtering, grouping and new-table snapshots.
-            result = result.dropna(axis=1, how="all")
-            result.columns = [str(c) for c in result.columns]
-            result = result.loc[:, ~result.columns.duplicated()].copy()
+            # Match CSV export's column selection and ordering.
+            result = _table_preview_frame(
+                _table_display_frame(table_data()), input.table_preview_rows()
+            ).copy()
             for col in result.columns:
                 series = result[col]
                 if pd.api.types.is_timedelta64_dtype(series.dtype):
@@ -2179,6 +2307,7 @@ if (!window.__apmColorPickerInstalled) {
 
 
         @reactive.calc
+        @traced('table_settings', kind='reactive_calc', trigger=None)
         def table_settings():
             chain = []
             for stage in range(stages):
@@ -2214,6 +2343,7 @@ if (!window.__apmColorPickerInstalled) {
                     "numeric_subset_bounds": bounds, "datetime_start": input.datetime_start() or "",
                     "datetime_end": input.datetime_end() or "", "group_by": list(input.group_by() or []),
                     "frequency": freq, "aggregate": input.aggregate(),
+                    "aggregate_columns": list(input.aggregate_columns() or []),
                     "only_complete": bool(input.only_complete()) if FREQUENCIES.get(freq) is not None else True,
                     "flooring_timestamp": bool(input.flooring_timestamp()) if FREQUENCIES.get(freq) is not None else True}
 
@@ -2222,6 +2352,17 @@ if (!window.__apmColorPickerInstalled) {
 
     app_ui = ui.page_fluid(
         ui.tags.style("""
+            /* Global sidebar tabs styling: available before any plot is mounted. */
+            .summary-sidebar-tabs .nav-tabs {display:flex; flex-wrap:wrap; gap:3px; border-bottom:0; margin-bottom:0.5rem;}
+            .summary-sidebar-tabs .nav-link {border:0; border-radius:0.4rem; padding:0.45rem 0.65rem; font-size:0.82rem; font-weight:600; color:#17212b; background:var(--tab-color,#dce8f7);}
+            .summary-sidebar-tabs .nav-link.active {background:var(--tab-color,#dce8f7); color:#17212b; box-shadow:inset 0 -3px 0 rgba(0,0,0,.35);}
+            .summary-sidebar-tabs .nav-item:nth-child(5n+1) {--tab-color:#a7d7f3;}
+            .summary-sidebar-tabs .nav-item:nth-child(5n+2) {--tab-color:#b8e5c5;}
+            .summary-sidebar-tabs .nav-item:nth-child(5n+3) {--tab-color:#ffe0a3;}
+            .summary-sidebar-tabs .nav-item:nth-child(5n+4) {--tab-color:#d8c5f2;}
+            .summary-sidebar-tabs .nav-item:nth-child(5n+5) {--tab-color:#f7c7d5;}
+            .summary-sidebar-tabs .tab-content {padding:0.65rem 0.25rem;}
+
             .container, .container-fluid {max-width: none !important;}
             /* Give table grid headers and their filter inputs 50% more space. */
             .summary-table-tab .shiny-data-grid table th,
@@ -2231,40 +2372,61 @@ if (!window.__apmColorPickerInstalled) {
                 min-width: 150px !important;
             }
             .summary-table-tab .shiny-data-grid input {min-width: 120px;}
-            /* Explicit viewport sizing avoids zero-height nested flex children. */
+            /* Both view types fill the remaining viewport, but may grow with content.
+               Do not give the whole view a fixed height or clip long sidebars. */
+            .summary-plot-tab,
             .summary-table-tab {
-                height: calc(100dvh - 185px);
-                min-height: 360px;
-                overflow: hidden;
+                min-height: max(360px, calc(100dvh - 185px));
+                height: auto;
             }
+            /* The plot has nested sidebar layouts (left controls and right
+               appearance). Stretch both layouts and their main content to the
+               same minimum viewport height, even if a sidebar is collapsed. */
+            .summary-plot-tab > .bslib-sidebar-layout,
+            .summary-plot-tab > .bslib-sidebar-layout > .main > .bslib-sidebar-layout,
+            .summary-plot-tab > .bslib-sidebar-layout > main > .bslib-sidebar-layout,
             .summary-table-tab > .bslib-sidebar-layout {
-                height: 100%;
-                min-height: 0;
+                min-height: max(360px, calc(100dvh - 185px));
+                height: auto;
             }
-            .summary-table-tab .bslib-sidebar-layout > aside,
-            .summary-table-tab .bslib-sidebar-layout > .sidebar {
-                height: 100%;
-                overflow-y: auto;
+            /* Allow the card to stretch to the bottom without forcing a chart
+               to lose its existing responsive 2:1 aspect ratio. */
+            .summary-plot-tab .bslib-sidebar-layout > .main,
+            .summary-plot-tab .bslib-sidebar-layout > main,
+            .summary-table-tab .bslib-sidebar-layout > .main,
+            .summary-table-tab .bslib-sidebar-layout > main {
+                min-height: inherit;
+                display: flex;
+                flex-direction: column;
             }
+            .summary-plot-tab .bslib-sidebar-layout .card,
             .summary-table-tab .summary-table-grid-card {
-                height: 100%;
+                flex: 1 1 auto;
                 min-height: 0;
             }
             .summary-table-tab .summary-table-grid-card .card-body {
-                height: 100%;
                 min-height: 0;
                 display: flex;
                 flex-direction: column;
             }
+            /* Keep both scrollbars within the visible grid instead of
+               expanding the document to the full height of the table. */
+            .summary-table-tab .summary-table-grid-card {
+                height: max(360px, calc(100dvh - 210px));
+                max-height: max(360px, calc(100dvh - 210px));
+                overflow: hidden;
+            }
             .summary-table-tab .summary-table-grid-area {
                 flex: 1 1 auto;
-                min-height: 0;
                 height: 100%;
-                overflow: hidden;
+                min-height: 0;
+                min-width: 0;
+                overflow: auto;
             }
             .summary-table-tab .summary-table-grid-area > * {
                 height: 100% !important;
                 min-height: 0;
+                min-width: 0;
             }
 
             .summary-plot-container {width:100%; height:auto; aspect-ratio: 2 / 1; min-width:0; position:relative;}
@@ -2357,6 +2519,9 @@ if (!window.__apmColorPickerInstalled) {
                 ui.input_action_button("add_table", "New table", class_="btn-primary"),
                 ui.input_action_button("retain_plot", "Save", class_="btn-outline-primary"),
                 ui.input_action_button("restore_plot", "Load", class_="btn-outline-primary"),
+                ui.input_action_button("undo_view", "Undo", class_="btn-outline-secondary"),
+                ui.input_action_button("redo_view", "Redo", class_="btn-outline-secondary"),
+                ui.output_ui("view_edit_status"),
                 ui.input_action_button("delete_saved_plot", "Delete", class_="btn-outline-danger"),
                 ui.input_action_button("close_tab", "Close tab", class_="btn-outline-danger"),
                 class_="summary-toolbar-actions summary-top-toolbar",
@@ -2385,29 +2550,86 @@ if (!window.__apmColorPickerInstalled) {
             shinyswatch.theme_picker_server()
         next_tab = reactive.value(0)
         active_tabs = reactive.value(())
-        tab_filters = {}
-        table_frames = {}
-        table_settings_by_tab = {}
-        table_source_steps = {}
+        workspace = WorkspaceController()
+        from .view_controller import ViewController
+        tab_filters = workspace.plot_snapshots
+        table_frames = workspace.table_frames
+        table_settings_by_tab = workspace.table_settings
+        table_source_steps = workspace.table_lineage
         next_table = reactive.value(0)
         from ..plot_configs import PlotConfigManager
         manager = config_manager or PlotConfigManager(data)
+        views = ViewController(workspace, manager)
+        initializer = TabInitializer(workspace, views, manager.summary)
         # Use the same manager in each plot module and in the toolbar actions.
         config_manager = manager
         saved_revision = reactive.value(0)
+        history_revision = reactive.value(0)
+
+        def refresh_history():
+            history_revision.set(history_revision.get() + 1)
+
+        def begin_history(tab_id, settings, restored=False):
+            views.begin_editing(tab_id, settings or {}, restored=restored)
+            refresh_history()
+
+        def register_table_history(tab_id):
+            # Observe the table's effective settings; no DataFrame is retained.
+            # Skip the first pass to avoid treating mounted-input initialization
+            # as an edit of a restored configuration.
+            first = True
+
+            @reactive.effect
+            def sync_table_history():
+                nonlocal first
+                if workspace.kind(tab_id) != "table":
+                    return
+                try:
+                    settings = table_settings_by_tab[tab_id]()
+                    settings = dict(settings)
+                    settings["source_steps"] = table_source_steps.get(tab_id, [])
+                    if first:
+                        first = False
+                        return
+                    if views.record_edit(tab_id, settings):
+                        refresh_history()
+                except (TypeError, ValueError, KeyError):
+                    pass
+
+        @render.ui
+        def view_edit_status():
+            history_revision.get()
+            selected = input.plot_tabs()
+            try:
+                status = views.edit_status(selected)
+            except KeyError:
+                return ui.span("", class_="summary-edit-status")
+            mark = "Unsaved changes" if status["dirty"] else "Saved"
+            return ui.span(mark, class_="summary-edit-status ms-2 text-muted")
+
         # Drafts track live input state; only Save selected plot changes Summary.views.
         def register_draft(tab_id, snapshot):
+            first = True
             @reactive.effect
+            @traced('sync_draft', kind='reactive_effect', trigger=None)
             def sync_draft():
+                nonlocal first
+                if workspace.kind(tab_id) != "plot":
+                    return
                 try:
                     state = snapshot()
                     manager.update(tab_id, state)
-                except (TypeError, ValueError):
+                    if first:
+                        first = False
+                    elif views.record_edit(tab_id, state):
+                        refresh_history()
+                except (TypeError, ValueError, KeyError):
                     # A transient invalid input must not overwrite the last good draft.
                     pass
 
         @reactive.effect
         @reactive.event(input.retain_plot)
+        @traced('retain_selected', kind='reactive_effect', trigger='@reactive.event(input.retain_plot)')
         def retain_selected():
             selected = input.plot_tabs()
             if selected not in tab_filters and selected not in table_frames:
@@ -2422,21 +2644,14 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.confirm_retain_plot)
+        @traced('confirm_retain', kind='reactive_effect', trigger='@reactive.event(input.confirm_retain_plot)')
         def confirm_retain():
             selected = input.plot_tabs()
             try:
                 with reactive.isolate():
-                    if selected in tab_filters:
-                        manager.update(selected, tab_filters[selected]())
-                        manager.retain(selected, input.retained_plot_name())
-                    elif selected in table_frames:
-                        manager.retain_table(input.retained_plot_name(),
-                                             {**table_settings_by_tab[selected](),
-                                              "source_steps": table_source_steps.get(selected, [])},
-                                             table_frames[selected])
-                    else:
-                        raise ValueError("No active plot or table tab")
+                    views.save_active(selected, input.retained_plot_name())
                 saved_revision.set(saved_revision.get() + 1)
+                refresh_history()
                 # Update the existing tab label without remounting its Shiny module.
                 # Replacing the nav panel would destroy the live plot controls.
                 saved_label = str(input.retained_plot_name()).strip()
@@ -2457,8 +2672,9 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.delete_saved_plot)
+        @traced('choose_plot_to_delete', kind='reactive_effect', trigger='@reactive.event(input.delete_saved_plot)')
         def choose_plot_to_delete():
-            presets = [p for p in manager.saved() if p.get("type") in ("plot", "table")]
+            presets = views.saved()
             if not presets:
                 ui.notification_show("No saved configurations to delete", type="warning")
                 return
@@ -2473,10 +2689,11 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.confirm_delete_saved_plot)
+        @traced('confirm_delete_saved_plot', kind='reactive_effect', trigger='@reactive.event(input.confirm_delete_saved_plot)')
         def confirm_delete_saved_plot():
             try:
                 with reactive.isolate():
-                    manager.delete_saved(input.delete_saved_plot_choice())
+                    views.delete(input.delete_saved_plot_choice())
                 saved_revision.set(saved_revision.get() + 1)
                 ui.modal_remove()
                 ui.notification_show("Saved configuration deleted. Save the dataset to persist this change to disk.", type="message")
@@ -2485,6 +2702,7 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.save_dataset_pickle)
+        @traced('show_save_dataset_dialog', kind='reactive_effect', trigger='@reactive.event(input.save_dataset_pickle)')
         def show_save_dataset_dialog():
             ui.modal_show(ui.modal(
                 ui.p("Save the current Summary, including saved plot configurations, as a pickle file."),
@@ -2499,6 +2717,7 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.confirm_save_dataset_pickle)
+        @traced('confirm_save_dataset_pickle', kind='reactive_effect', trigger='@reactive.event(input.confirm_save_dataset_pickle)')
         def confirm_save_dataset_pickle():
             import os
             import pickle
@@ -2567,17 +2786,18 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.restore_plot)
+        @traced('choose_saved', kind='reactive_effect', trigger='@reactive.event(input.restore_plot)')
         def choose_saved():
             saved_revision.get()
             # Loading is independent of the currently selected tab. The
             # selected preset's type determines which new tab to create.
-            presets = [p for p in manager.saved() if p.get("type", "plot") in ("plot", "table")]
+            presets = views.saved()
             if not presets:
                 ui.notification_show("No saved plot or table configurations", type="warning")
                 return
             ui.modal_show(ui.modal(
                 ui.input_select("retained_plot_choice", "Saved plots and tables",
-                                choices={p["id"]: f"{'Table' if p.get('type') == 'table' else 'Plot'}: {p.get('name', p['id'])}" for p in presets}),
+                                choices=views.choices()),
                 title="Load saved configuration",
                 footer=ui.div(ui.modal_button("Cancel"),
                               ui.input_action_button("confirm_restore_plot", "Load", class_="btn-primary")),
@@ -2585,37 +2805,38 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.confirm_restore_plot)
+        @traced('restore_selected', kind='reactive_effect', trigger='@reactive.event(input.confirm_restore_plot)')
         def restore_selected():
             try:
                 with reactive.isolate():
                     preset_id = input.retained_plot_choice()
-                    preset = next(p for p in manager.saved() if p.get("id") == preset_id)
+                    preset = views.preset(preset_id)
                     if preset.get("type") == "table":
-                        frame, settings = manager.restore_table(preset_id)
-                        frame = source_frame(manager.summary, settings.get("source_steps", []))
-                        frame = frame.reset_index(drop=True)
-                        frame.columns = [str(c) for c in frame.columns]
                         number = next_table.get() + 1
                         tab_id = f"table_{number}"
-                        panel = ui.nav_panel(preset.get("name") or f"Table {number}",
-                                             table_tab_ui(tab_id, frame, settings), value=tab_id)
-                        table_frames[tab_id] = frame
-                        table_settings_by_tab[tab_id] = table_tab_server(tab_id, frame, settings)
-                        table_source_steps[tab_id] = settings.get("source_steps", [])
+                        initialized = initializer.restored_table(preset_id, number)
+                        panel = ui.nav_panel(initialized.label,
+                                             table_tab_ui(tab_id, initialized.frame, initialized.settings), value=tab_id)
+                        workspace.add_table(tab_id, initialized.frame,
+                                            table_tab_server(tab_id, initialized.frame, initialized.settings),
+                                            initialized.lineage)
+                        begin_history(tab_id, {**(initialized.settings or {}), "source_steps": initialized.lineage}, restored=True)
+                        register_table_history(tab_id)
                         next_table.set(number)
-                        active_tabs.set((*active_tabs.get(), tab_id))
+                        active_tabs.set(workspace.active_tabs)
                         ui.insert_nav_panel("plot_tabs", panel, select=True)
                         ui.modal_remove()
                         return
                     number = next_tab.get() + 1
                     tab_id = f"plot_{number}"
-                    inherited = manager.restore(preset_id, tab_id)
-                    saved_name = next((p.get("name") for p in manager.saved() if p.get("id") == preset_id), None)
-                    panel = ui.nav_panel(saved_name or f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id)
-                    tab_filters[tab_id] = plot_tab_server(tab_id, inherited, config_tab_id=tab_id)
-                    register_draft(tab_id, tab_filters[tab_id])
+                    initialized = initializer.restored_plot(preset_id, tab_id, number)
+                    panel = ui.nav_panel(initialized.label, plot_tab_ui(tab_id, initialized.settings), value=tab_id)
+                    snapshot = plot_tab_server(tab_id, initialized.settings, config_tab_id=tab_id)
+                    workspace.add_plot(tab_id, snapshot)
+                    begin_history(tab_id, initialized.settings, restored=True)
+                    register_draft(tab_id, snapshot)
                     next_tab.set(number)
-                    active_tabs.set((*active_tabs.get(), tab_id))
+                    active_tabs.set(workspace.active_tabs)
                     ui.insert_nav_panel("plot_tabs", panel, select=True)
                 ui.modal_remove()
             except Exception as exc:
@@ -2623,82 +2844,116 @@ if (!window.__apmColorPickerInstalled) {
 
         @reactive.effect
         @reactive.event(input.add_tab)
+        @traced('add_plot', kind='reactive_effect', trigger='@reactive.event(input.add_tab)')
         def add_plot():
             number = next_tab.get() + 1
             next_tab.set(number)
             tab_id = f"plot_{number}"
-            # Register module before inserting its UI.
             selected = input.plot_tabs()
-            # Clone the currently selected plot's complete live configuration.
             with reactive.isolate():
-                try:
-                    inherited = tab_filters[selected]() if selected in tab_filters else {}
-                except Exception:
-                    # A missing dynamic input must never disable New plot.
-                    inherited = {}
-            # Build the new UI before registering the server module. This also
-            # avoids leaving a half-registered module when UI creation fails.
-            new_panel = ui.nav_panel(f"Plot {number}", plot_tab_ui(tab_id, inherited), value=tab_id)
-            tab_filters[tab_id] = plot_tab_server(tab_id, inherited, config_tab_id=tab_id)
-            register_draft(tab_id, tab_filters[tab_id])
-            active_tabs.set((*active_tabs.get(), tab_id))
+                initialized = initializer.new_plot(selected, number)
+            new_panel = ui.nav_panel(initialized.label, plot_tab_ui(tab_id, initialized.settings), value=tab_id)
+            snapshot = plot_tab_server(tab_id, initialized.settings, config_tab_id=tab_id)
+            workspace.add_plot(tab_id, snapshot)
+            begin_history(tab_id, initialized.settings)
+            register_draft(tab_id, snapshot)
+            active_tabs.set(workspace.active_tabs)
             ui.insert_nav_panel("plot_tabs", new_panel, select=True)
 
         @reactive.effect
         @reactive.event(input.add_table)
+        @traced('add_table', kind='reactive_effect', trigger='@reactive.event(input.add_table)')
         def add_table():
             number = next_table.get() + 1
             next_table.set(number)
             tab_id = f"table_{number}"
             selected = input.plot_tabs()
             with reactive.isolate():
-                if selected in table_frames:
-                    frame = table_frames[selected].copy(deep=True)
-                elif selected in tab_filters:
-                    try:
-                        frame = tab_filters[selected].plot_dataframe()
-                        frame = pd.DataFrame(frame).copy(deep=True)
-                    except Exception:
-                        # A plot may have incomplete settings; show an empty
-                        # grid rather than disabling the New table action.
-                        frame = pd.DataFrame()
-                else:
-                    frame = pd.DataFrame(summary).copy(deep=True)
-            # Preserve the complete transformation history, including a plot's
-            # selected variables and aggregation, without storing its DataFrame.
-            if selected in table_frames:
-                steps = source_steps(table_source_steps.get(selected, []),
-                                     table_settings_by_tab[selected](), 'table')
-            elif selected in tab_filters:
-                steps = source_steps([], tab_filters[selected](), 'plot')
-            else:
-                steps = []
-            frame = source_frame(manager.summary, steps)
-            # Datagrid requires plain column names; preserve the values and
-            # index as displayed columns where useful.
-            frame = frame.reset_index(drop=True)
-            frame.columns = [str(c) for c in frame.columns]
-            panel = ui.nav_panel(f"Table {number}", table_tab_ui(tab_id, frame), value=tab_id)
-            table_frames[tab_id] = frame
-            table_settings_by_tab[tab_id] = table_tab_server(tab_id, frame)
-            table_source_steps[tab_id] = steps
-            active_tabs.set((*active_tabs.get(), tab_id))
+                initialized = initializer.new_table(selected, number)
+            panel = ui.nav_panel(initialized.label,
+                                 table_tab_ui(tab_id, initialized.frame), value=tab_id)
+            workspace.add_table(tab_id, initialized.frame,
+                                table_tab_server(tab_id, initialized.frame), initialized.lineage)
+            begin_history(tab_id, {"source_steps": initialized.lineage})
+            register_table_history(tab_id)
+            active_tabs.set(workspace.active_tabs)
             ui.insert_nav_panel("plot_tabs", panel, select=True)
+
+        def restore_history_state(direction):
+            selected = input.plot_tabs()
+            if workspace.kind(selected) is None:
+                ui.notification_show("Select a plot or table tab", type="warning")
+                return
+            with reactive.isolate():
+                settings = (views.undo_edit(selected) if direction == "undo"
+                            else views.redo_edit(selected))
+                if settings is None:
+                    ui.notification_show(f"Nothing to {direction}", type="message")
+                    return
+                # A Shiny module cannot be unregistered. Mount a new module ID
+                # from the snapshot so EVERY dynamic control and editor is
+                # initialized consistently, rather than patching only inputs
+                # that happen to be visible. Preserve the same history stack.
+                kind = workspace.kind(selected)
+                if kind == "plot":
+                    number = next_tab.get() + 1
+                    next_tab.set(number)
+                    replacement = f"plot_{number}"
+                    label = f"Plot {number}"
+                    panel = ui.nav_panel(label, plot_tab_ui(replacement, settings), value=replacement)
+                    snapshot = plot_tab_server(replacement, settings, config_tab_id=replacement)
+                    workspace.add_plot(replacement, snapshot)
+                    manager.update(replacement, settings)
+                    register_draft(replacement, snapshot)
+                else:
+                    number = next_table.get() + 1
+                    next_table.set(number)
+                    replacement = f"table_{number}"
+                    frame = table_frames[selected]
+                    lineage = table_source_steps[selected]
+                    label = f"Table {number}"
+                    panel = ui.nav_panel(label, table_tab_ui(replacement, frame, settings), value=replacement)
+                    workspace.add_table(replacement, frame,
+                                        table_tab_server(replacement, frame, settings), lineage)
+                    register_table_history(replacement)
+                views.history.rekey(selected, replacement)
+                ui.remove_nav_panel("plot_tabs", target=selected)
+                workspace.remove(selected)
+                manager.discard(selected)
+                active_tabs.set(workspace.active_tabs)
+                ui.insert_nav_panel("plot_tabs", panel, select=True)
+                refresh_history()
+
+        @reactive.effect
+        @reactive.event(input.undo_view)
+        def undo_selected():
+            try:
+                restore_history_state("undo")
+            except Exception as exc:
+                ui.notification_show(f"Could not undo: {exc}", type="error")
+
+        @reactive.effect
+        @reactive.event(input.redo_view)
+        def redo_selected():
+            try:
+                restore_history_state("redo")
+            except Exception as exc:
+                ui.notification_show(f"Could not redo: {exc}", type="error")
 
         @reactive.effect
         @reactive.event(input.close_tab)
+        @traced('close_plot', kind='reactive_effect', trigger='@reactive.event(input.close_tab)')
         def close_plot():
             selected = input.plot_tabs()
             tabs = active_tabs.get()
             if selected not in tabs:
                 return
             ui.remove_nav_panel("plot_tabs", target=selected)
-            table_frames.pop(selected, None)
-            table_settings_by_tab.pop(selected, None)
-            table_source_steps.pop(selected, None)
-            tab_filters.pop(selected, None)
+            workspace.remove(selected)
+            views.close_editing(selected)
             manager.discard(selected)
-            active_tabs.set(tuple(t for t in tabs if t != selected))
+            refresh_history()
+            active_tabs.set(workspace.active_tabs)
             # Shiny does not provide a public API to unregister an output module.
             # The removed tab cannot be selected again and tab IDs are never reused.
 

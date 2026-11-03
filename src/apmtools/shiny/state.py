@@ -51,3 +51,17 @@ def snapshot_inputs(current, input_values):
         if key in SNAPSHOT_INPUT_KEYS and value is not None:
             result[key] = list(value) if isinstance(value, (tuple, list)) else value
     return result
+
+
+def restore_panel_selection(groups, current, saved, pending=False):
+    """Reconcile facet choices without erasing a not-yet-mounted saved facet.
+
+    Returns (selection, pending).  Once restored, user edits take precedence.
+    """
+    groups = list(groups or [])
+    saved = list(saved or [])
+    if pending:
+        if not all(name in groups for name in saved):
+            return [], True
+        return [name for name in saved if name in groups], False
+    return [name for name in (current or []) if name in groups], False

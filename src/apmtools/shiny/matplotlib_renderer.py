@@ -1,5 +1,6 @@
 """Native and converted Matplotlib figures and panel layout."""
 from __future__ import annotations
+from .profiling import traced
 import threading
 from datetime import date, datetime, time, timedelta
 from collections.abc import Sequence
@@ -293,21 +294,25 @@ def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1,
     A single legend is shared across panels. Only one full canvas draw is used
     for measuring; no automatic column search or placement fallback.
     """
+    # Entry identity is positional within a panel, not its editable label.
+    # This retains two distinct handles renamed to the same displayed text,
+    # while collapsing corresponding entries repeated across panels.
     seen = {}
     for ax in axes:
         old = ax.get_legend()
         if old is None:
             continue
-        for handle, label in zip(old.legend_handles,
-                                 [t.get_text() for t in old.get_texts()]):
-            if label and label not in seen:
-                seen[label] = handle
+        for index, (handle, label) in enumerate(zip(old.legend_handles,
+                                 [t.get_text() for t in old.get_texts()])):
+            if label and index not in seen:
+                seen[index] = (handle, label)
         old.set_visible(False)
         old.set_in_layout(False)
     if not seen:
         fig.tight_layout()
         return
-    labels, handles = list(seen), list(seen.values())
+    handles = [entry[0] for entry in seen.values()]
+    labels = [entry[1] for entry in seen.values()]
     pos = position if position in ("right", "left", "top", "bottom") else "right"
     ncol = max(1, min(int(ncol or 1), len(labels)))
     legend = fig.legend(handles, labels, ncol=ncol, loc="center",
@@ -343,6 +348,7 @@ def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1,
         # between facet axes.  This changes only the internal subplot gaps.
         fig.subplots_adjust(wspace=panel_wspace, hspace=panel_hspace)
 
+@traced('_matplotlib_direct_figure', kind="data" if 'shiny/matplotlib_renderer.py' not in ("plot_configs.py", "shiny/matplotlib_renderer.py") else "service")
 def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               legend_labels="", trace_colors="", palette="Default",
                               x_min="", x_max="", y_min="", y_max="",
@@ -767,9 +773,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
 
     if kind not in ("box", "bar") and not spec.get("multi_axis"):
         handles, texts = ax.get_legend_handles_labels()
-        unique = dict(zip(texts, handles))
-        if unique and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
-            ax.legend(unique.values(), unique.keys(), title="Legend")
+        if handles and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
+            ax.legend(handles, texts, title="Legend")
     if multi_y:
         from matplotlib.lines import Line2D
         # Independent legend keys for the two dimensions, with explicit headings.

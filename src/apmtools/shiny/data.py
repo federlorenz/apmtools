@@ -1,5 +1,6 @@
 """Filtering, aggregation and temporal segmentation."""
 from __future__ import annotations
+from .profiling import traced
 import threading
 from datetime import date, datetime, time, timedelta
 from collections.abc import Sequence
@@ -82,6 +83,7 @@ def _parse_datetime_filter(value):
 
 
 
+@traced('_apply_filters', kind="data" if 'shiny/data.py' not in ("plot_configs.py", "shiny/matplotlib_renderer.py") else "service")
 def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None):
     """Apply Summary filters, accepting dates, times and full datetimes.
 
@@ -123,6 +125,7 @@ def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None)
 
 
 
+@traced('_aggregate', kind="data" if 'shiny/data.py' not in ("plot_configs.py", "shiny/matplotlib_renderer.py") else "service")
 def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
                only_complete=True, flooring_timestamp=True):
     """Aggregate through ``Summary.group_stat``.
@@ -138,13 +141,10 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
         # Return empty rather than breaking Shiny's reactive graph.
         return pd.DataFrame()
 
-    result = data.group_stat(
-        value_cols=value_columns,
-        frequency=frequency,
-        grouping_by=grouping_by,
-        aggregate=[aggregate],
-        **({"only_complete": only_complete, "flooring_timestamp": flooring_timestamp}
-           if frequency is not None else {}),
+    from .view_aggregation import aggregate_view
+    result = aggregate_view(
+        data, value_columns, frequency, grouping_by, aggregate,
+        only_complete=only_complete, flooring_timestamp=flooring_timestamp,
     )
     if result is None:
         # group_stat() may return None when no rows survive completeness

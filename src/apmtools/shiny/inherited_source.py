@@ -1,11 +1,14 @@
 """Replay configuration-only source transformations for derived tables."""
 from __future__ import annotations
+from .profiling import traced
 import copy
+import os
 import pandas as pd
 import numpy as np
 from .data import _subset_choices, _apply_filters, _aggregate
 from .config import AGGREGATES, FREQUENCIES
 from .columns import _numeric_columns
+from .view_aggregation import normalize_statistics
 
 
 def _plot_columns(current, step):
@@ -19,15 +22,16 @@ def _plot_columns(current, step):
     values = [str(v) for v in values if str(v) in current.columns]
     groups = step.get('group_by') or []
     groups = [groups] if isinstance(groups, str) else list(groups)
-    groups = [str(g) for g in groups if g not in ('variables_x', 'variables_y') and str(g) in current.columns]
+    groups = [str(g) for g in groups if g not in ('variables_x', 'variables_y', 'statistics') and str(g) in current.columns]
     x_columns = [str(v) for v in x if str(v) in current.columns]
-    if kind in ('bar', 'box') and AGGREGATES.get(step.get('aggregate')) is not None:
+    if kind in ('bar', 'box') and bool(normalize_statistics(step.get('aggregate'))):
         groups = list(dict.fromkeys(groups + x_columns))
-    if kind == 'scatter' and AGGREGATES.get(step.get('aggregate')) is not None:
+    if kind == 'scatter' and bool(normalize_statistics(step.get('aggregate'))):
         values = list(dict.fromkeys(x_columns + values))
     return kind, values, groups, x_columns
 
 
+@traced('_plot_source', kind="data" if 'shiny/inherited_source.py' not in ("plot_configs.py", "shiny/matplotlib_renderer.py") else "service")
 def _plot_source(current, step):
     """Reconstruct the data contributing to a plot, with its exact aggregation."""
     kind, values, groups, x_columns = _plot_columns(current, step)
@@ -38,9 +42,9 @@ def _plot_source(current, step):
     current = current.loc[current[values].notna().any(axis=1)].copy()
     if current.empty:
         return current
-    aggregate = AGGREGATES.get(step.get('aggregate'))
+    aggregate = normalize_statistics(step.get('aggregate'))
     frequency = FREQUENCIES.get(step.get('frequency'))
-    if aggregate is not None:
+    if aggregate:
         if kind == 'line' and x_columns and pd.api.types.is_timedelta64_dtype(current[x_columns[0]]):
             return pd.DataFrame()
         if frequency is None and not groups:
@@ -58,7 +62,7 @@ def _plot_source(current, step):
     return current.loc[:, keep].copy()
 
 
-def source_frame(summary, steps):
+def _legacy_source_frame(summary, steps):
     """Rebuild a table source from its owning Summary and ordered settings.
 
     Each step is a configuration snapshot, never a DataFrame snapshot.
@@ -93,11 +97,13 @@ def source_frame(summary, steps):
         if step.get('_source_kind') == 'plot':
             current = _plot_source(current, step)
         elif step.get('_source_kind') == 'table':
-            aggregate = AGGREGATES.get(step.get('aggregate'))
-            if aggregate is not None and not current.empty:
+            aggregate = normalize_statistics(step.get('aggregate'))
+            if aggregate and not current.empty:
                 frequency = FREQUENCIES.get(step.get('frequency'))
                 groups = list(step.get('group_by') or [])
-                numeric = [c for c in _numeric_columns(current) if c not in groups and current[c].notna().any()]
+                numeric = [c for c in (step.get('aggregate_columns') if step.get('aggregate_columns') is not None
+                                       else _numeric_columns(current))
+                           if c in current.columns and c not in groups and current[c].notna().any()]
                 if numeric:
                     current = _aggregate(current, numeric, frequency, groups, aggregate,
                         only_complete=bool(step.get('only_complete', True)) if frequency is not None else False,
@@ -110,3 +116,17 @@ def source_steps(parent_steps, parent_settings, kind):
     step = copy.deepcopy(parent_settings)
     step['_source_kind'] = kind
     return copy.deepcopy(parent_steps or []) + [step]
+
+
+@traced('source_frame', kind='data')
+def source_frame(summary, steps):
+    """Reconstruct derived table data with the unified executor by default.
+
+    Set ``APMTOOLS_TRANSFORM_ENGINE=0`` (also ``false``, ``no``, or
+    ``legacy``) to temporarily retain the historical processing behavior.
+    Errors from the selected executor propagate without silent fallback.
+    """
+    if os.getenv('APMTOOLS_TRANSFORM_ENGINE', '').strip().lower() not in ('0', 'false', 'no', 'legacy'):
+        from .transformations import execute_view, from_legacy_source_steps
+        return execute_view(summary, from_legacy_source_steps(steps))
+    return _legacy_source_frame(summary, steps)

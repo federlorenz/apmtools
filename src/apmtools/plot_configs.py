@@ -1,5 +1,6 @@
 """Plot configuration lifecycle: reactive drafts and explicitly retained presets."""
 from __future__ import annotations
+from .shiny.profiling import traced
 import copy
 import json
 import uuid
@@ -12,27 +13,10 @@ def _json_ready(value):
 
 
 def validate_saved_plots(plots):
-    """Validate the structure of retained presets without altering their values.
+    """Backward-compatible name for strict saved-view structural validation."""
+    from .view_schema import validate_saved_views
+    return validate_saved_views(plots)
 
-    Old snapshots remain supported: unknown settings are deliberately retained.
-    """
-    if plots is None:
-        return []
-    if not isinstance(plots, list):
-        raise TypeError("Summary.views must be a list or None")
-    seen = set()
-    for item in plots:
-        if not isinstance(item, dict):
-            raise ValueError("Saved plot entries must be dictionaries")
-        if item.get("schema_version") != 1 or item.get("type") not in ("plot", "table"):
-            raise ValueError("Unsupported saved plot configuration")
-        if not isinstance(item.get("settings"), dict):
-            raise ValueError("Saved plot settings must be a dictionary")
-        identifier = item.get("id")
-        if not isinstance(identifier, str) or not identifier or identifier in seen:
-            raise ValueError("Saved plot IDs must be unique nonempty strings")
-        seen.add(identifier)
-    return copy.deepcopy(plots)
 
 class PlotConfigManager:
     """Keep live tab drafts separate from explicitly retained Summary.plots.
@@ -195,11 +179,8 @@ class PlotConfigManager:
         self.revision += 1
 
     def saved(self):
-        items = validate_saved_plots(self.summary.views)
-        for item in items:
-            if item.get('type') == 'table':
-                item.pop('frame', None)  # migrate legacy snapshot records
-        return items
+        from .view_schema import migrate_saved_views
+        return migrate_saved_views(self.summary.views)
 
     def restore(self, preset_id, tab_id):
         item = next((p for p in self.saved() if p.get('id') == preset_id), None)
