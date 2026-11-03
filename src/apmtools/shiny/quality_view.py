@@ -56,15 +56,37 @@ def selected_heatmap_variable(value_cols, selected):
     return selected if selected in choices else (choices[0] if choices else None)
 
 
-def quality_heatmap_data(report, variable):
-    """Interval coverage matrix (identifiers x bins); missing data remain NaN."""
+def quality_heatmap_data(report, variable, *, mode='coverage'):
+    """Return interval-by-identifier heatmap values on a 0–1 scale.
+
+    ``mode='coverage'`` shows the measured observed/expected fraction, without
+    reference to the completeness threshold. ``mode='threshold'`` is the
+    historical binary classification (1=complete, 0=incomplete).
+    ``mode='threshold_coverage'`` shows 1 for bins meeting the threshold, and
+    the *actual* fraction for bins failing it. This retains the continuous
+    shades for incomplete bins without losing the threshold classification.
+    Undefined expected counts remain NaN in every mode.
+    """
+    if mode not in ('coverage', 'threshold', 'threshold_coverage'):
+        raise ValueError("heatmap mode must be 'coverage', 'threshold', or 'threshold_coverage'")
     if report.empty:
         return pd.DataFrame()
     key = report.columns[0]
-    portion = report.loc[report['variable'].eq(variable), [key, 'interval', 'completeness']].copy()
+    portion = report.loc[report['variable'].eq(variable)].copy()
     if portion.empty:
         return pd.DataFrame()
-    return portion.pivot_table(index=key, columns='interval', values='completeness', aggfunc='mean', dropna=False)
+    if mode == 'threshold':
+        portion['_heatmap_value'] = portion['is_complete'].astype(float).where(
+            portion['expected'].notna())
+    elif mode == 'threshold_coverage':
+        portion['_heatmap_value'] = portion['completeness'].where(
+            ~portion['is_complete'].astype(bool), 1.0)
+        portion['_heatmap_value'] = portion['_heatmap_value'].where(
+            portion['expected'].notna())
+    else:
+        portion['_heatmap_value'] = portion['completeness']
+    return portion.pivot_table(index=key, columns='interval',
+                               values='_heatmap_value', aggfunc='mean', dropna=False)
 
 
 def missing_interval_runs(report):

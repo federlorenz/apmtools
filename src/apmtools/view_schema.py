@@ -98,7 +98,7 @@ def inspect_saved_views(views, columns=None):
                             continue
                         if value not in available:
                             issues.append(ViewIssue(identifier, f'settings.{field}', 'warning', f'Column not found: {value}'))
-        chain = settings.get('source_steps', []) if view['type'] == 'table' else []
+        chain = settings.get('source_steps', []) if view['type'] in ('table', 'quality') else []
         if not isinstance(chain, list):
             issues.append(ViewIssue(identifier, 'settings.source_steps', 'error', 'Expected a list of transformation steps'))
         elif any(not isinstance(step, dict) for step in chain):

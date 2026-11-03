@@ -66,6 +66,26 @@ class TabInitializer:
             frame, steps = prepare_table_source(self.summary)
         return TableInitialization(f'Table {number}', frame, None, steps)
 
+    def new_quality(self, selected, number):
+        """Create a quality view from the current plot/table's transformed data.
+
+        The stored lineage replays the source transformation on restoration;
+        no potentially stale dataframe snapshots are retained in saved views.
+        """
+        kind = self.workspace.kind(selected)
+        if kind == 'table':
+            frame, steps = prepare_table_source(
+                self.summary, parent_kind='table',
+                parent_steps=self.workspace.table_lineage.get(selected, []),
+                parent_settings=self.workspace.table_settings[selected]())
+        elif kind == 'plot':
+            frame, steps = prepare_table_source(
+                self.summary, parent_kind='plot',
+                parent_settings=self.workspace.plot_snapshots[selected]())
+        else:
+            frame, steps = prepare_table_source(self.summary)
+        return TableInitialization(f'Quality {number}', frame, {'source_steps': steps}, steps)
+
     def restored_table(self, preset_id, number):
         preset = self.views.preset(preset_id)
         _source, settings = self.views.restore_table(preset_id)

@@ -15,6 +15,8 @@ from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PA
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
 from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices
 from .view_aggregation import normalize_statistics
+from .quality_filters import filter_quality_data
+from .derived_views import prepare_table_source
 from .quality_view import quality_report, quality_summary, quality_heatmap_data, missing_interval_runs, QUALITY_FREQUENCIES, selected_heatmap_variable
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
 from .elements import element_keys, filter_elements, default_visible_keys
@@ -2033,16 +2035,54 @@ if (!window.__apmColorPickerInstalled) {
 
     # Quality dashboards have independent controls and do not modify plot data.
     @module.ui
-    def quality_tab_ui(settings=None):
+    def quality_tab_ui(frame, settings=None):
         settings = settings or {}
-        id_choices = _alphabetical([c for c in columns if c not in numeric_columns])
-        times = datetime_columns
-        selected_values = [v for v in settings.get("value_cols", numeric_columns[:1]) if v in numeric_columns]
+        available = _alphabetical(frame.columns)
+        numeric = _alphabetical(_numeric_columns(frame))
+        id_choices = _alphabetical([c for c in available if c not in numeric])
+        times = _datetime_columns(frame)
+        selected_values = [v for v in settings.get("value_cols", numeric[:1]) if v in numeric]
         selected_heatmap = selected_heatmap_variable(selected_values, settings.get("heatmap_variable"))
+        stages = max(2, len(available) + 1)
         return ui.div(
             ui.layout_sidebar(
                 ui.sidebar(
-                    ui.h4("Coverage analysis"),
+                    ui.div(ui.navset_tab(
+                        ui.nav_panel("Filters",
+                            *[
+                                ui.div(
+                                    ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
+                                        choices={"": "Select a column", **{c: c for c in available}},
+                                        selected=(settings.get("subset_chain", [])[i].get("column", "") if i < len(settings.get("subset_chain", [])) else "")),
+                                    ui.output_ui(f"subset_values_ui_{i}"),
+                                    ui.input_select(f"subset_style_{i}", "Filter style",
+                                        choices={k: k for k in ("all", "any", "negative all", "negative any")},
+                                        selected=(settings.get("subset_chain", [])[i].get("style", "all") if i < len(settings.get("subset_chain", [])) else "all")),
+                                    class_="mb-3",
+                                ) if i == 0 else ui.panel_conditional(
+                                    " && ".join(f"input.subset_column_{j} !== ''" for j in range(i)),
+                                    ui.div(
+                                        ui.input_select(f"subset_column_{i}", f"Subset column {i + 1}",
+                                            choices={"": "Select a column", **{c: c for c in available}},
+                                            selected=(settings.get("subset_chain", [])[i].get("column", "") if i < len(settings.get("subset_chain", [])) else "")),
+                                        ui.output_ui(f"subset_values_ui_{i}"),
+                                        ui.input_select(f"subset_style_{i}", "Filter style",
+                                            choices={k: k for k in ("all", "any", "negative all", "negative any")},
+                                            selected=(settings.get("subset_chain", [])[i].get("style", "all") if i < len(settings.get("subset_chain", [])) else "all")),
+                                        class_="mb-3",
+                                    ),
+                                ) for i in range(stages)
+                            ],
+                            ui.input_selectize("numeric_subset_columns", "Numerical subset",
+                                choices={c: c for c in numeric}, multiple=True,
+                                selected=settings.get("numeric_subset_columns", [])),
+                            ui.output_ui("numeric_subset_bounds"),
+                            ui.input_text("datetime_start", "Start datetime", value=settings.get("datetime_start", ""),
+                                placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                            ui.input_text("datetime_end", "End datetime", value=settings.get("datetime_end", ""),
+                                placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                        ),
+                        ui.nav_panel("Coverage analysis",
                     ui.input_select("id_col", "Monitor / identifier column",
                                     choices=id_choices,
                                     selected=settings.get("id_col", "identifier") if settings.get("id_col", "identifier") in id_choices else (id_choices[0] if id_choices else None)),
@@ -2050,7 +2090,7 @@ if (!window.__apmColorPickerInstalled) {
                                     choices=times,
                                     selected=settings.get("time_col", "datetime") if settings.get("time_col", "datetime") in times else (times[0] if times else None)),
                     ui.input_selectize("value_cols", "Measurements",
-                                       choices=numeric_columns, multiple=True,
+                                       choices=numeric, multiple=True,
                                        selected=selected_values),
                     ui.input_select("frequency", "Aggregation frequency",
                                     choices={v: v.capitalize() for v in QUALITY_FREQUENCIES},
@@ -2069,6 +2109,7 @@ if (!window.__apmColorPickerInstalled) {
                          "Intervals outside the recording span cannot be inferred.",
                          class_="small text-muted"),
                     ui.download_button("download_quality_csv", "Export interval coverage CSV"),
+                        ), id="quality_sidebar_tabs"), class_="summary-sidebar-tabs"),
                     title="Data quality", position="left", open="open", width="320px",
                 ),
                 ui.div(
@@ -2087,8 +2128,93 @@ if (!window.__apmColorPickerInstalled) {
         )
 
     @module.server
-    def quality_tab_server(input, output, session, settings=None):
+    def quality_tab_server(input, output, session, frame, settings=None):
         settings = settings or {}
+        available = _alphabetical(frame.columns)
+        numeric = _alphabetical(_numeric_columns(frame))
+        stages = max(2, len(available) + 1)
+        choice_cache = {}
+
+        def choices_for(name):
+            if name not in choice_cache:
+                choice_cache[name] = _subset_choices(frame, name)
+            return choice_cache[name]
+
+        def make_values_ui(stage):
+            def values_ui():
+                try:
+                    name = input[f"subset_column_{stage}"]()
+                except Exception:
+                    return ui.div()
+                if name not in frame.columns:
+                    return ui.div()
+                choices, _ = choices_for(name)
+                selected = (settings.get("subset_chain", [])[stage].get("values", [])
+                            if stage < len(settings.get("subset_chain", [])) else [])
+                return ui.input_selectize(f"subset_values_{stage}", f"{name} values",
+                                          choices=choices, multiple=True, selected=selected)
+            values_ui.__name__ = f"subset_values_ui_{stage}"
+            return render.ui(values_ui)
+
+        for stage in range(stages):
+            output(make_values_ui(stage))
+
+        @render.ui
+        def numeric_subset_bounds():
+            controls = []
+            for name in list(input.numeric_subset_columns() or []):
+                if name not in numeric:
+                    continue
+                index = numeric.index(name)
+                controls.append(ui.div(
+                    ui.tags.strong(name),
+                    ui.input_text(f"numeric_gt_{index}", "Greater than", placeholder="No lower bound",
+                        value=settings.get("numeric_subset_bounds", {}).get(name, {}).get("gt", "")),
+                    ui.input_text(f"numeric_lt_{index}", "Less than", placeholder="No upper bound",
+                        value=settings.get("numeric_subset_bounds", {}).get(name, {}).get("lt", "")),
+                ))
+            return ui.div(*controls)
+
+        @reactive.calc
+        def filter_settings():
+            chain = []
+            for stage in range(stages):
+                try:
+                    column = input[f"subset_column_{stage}"]()
+                except Exception:
+                    break
+                if column not in frame.columns:
+                    break
+                try:
+                    values = list(input[f"subset_values_{stage}"]() or [])
+                except Exception:
+                    values = (settings.get("subset_chain", [])[stage].get("values", [])
+                              if stage < len(settings.get("subset_chain", [])) else [])
+                try:
+                    style = input[f"subset_style_{stage}"]() or "all"
+                except Exception:
+                    style = "all"
+                chain.append({"column": column, "values": values, "style": style})
+            bounds = {}
+            for name in list(input.numeric_subset_columns() or []):
+                if name not in numeric:
+                    continue
+                index = numeric.index(name)
+                bounds[name] = {}
+                for suffix in ("gt", "lt"):
+                    try:
+                        bounds[name][suffix] = input[f"numeric_{suffix}_{index}"]() or ""
+                    except Exception:
+                        bounds[name][suffix] = ""
+            return {"subset_chain": chain,
+                    "numeric_subset_columns": list(input.numeric_subset_columns() or []),
+                    "numeric_subset_bounds": bounds,
+                    "datetime_start": input.datetime_start() or "",
+                    "datetime_end": input.datetime_end() or ""}
+
+        @reactive.calc
+        def filtered_data():
+            return filter_quality_data(frame, {**filter_settings(), "time_col": input.time_col()})
 
         @reactive.calc
         def report_settings():
@@ -2116,7 +2242,7 @@ if (!window.__apmColorPickerInstalled) {
         @reactive.calc
         def quality_settings():
             conf = report_settings()
-            return {**conf, "heatmap_variable": selected_heatmap_variable(
+            return {**conf, **filter_settings(), "source_steps": settings.get("source_steps", []), "heatmap_variable": selected_heatmap_variable(
                 conf["value_cols"], input.heatmap_variable())}
 
         @reactive.calc
@@ -2124,7 +2250,10 @@ if (!window.__apmColorPickerInstalled) {
             conf = report_settings()
             if not conf["value_cols"] or not conf["id_col"] or not conf["time_col"]:
                 return pd.DataFrame()
-            return quality_report(summary, conf)
+            data = filtered_data()
+            if data.empty:
+                return pd.DataFrame()
+            return quality_report(data, conf)
 
         @render.ui
         def quality_status():
@@ -2134,7 +2263,7 @@ if (!window.__apmColorPickerInstalled) {
                     return ui.p("Select a measurement to analyse coverage.", class_="text-muted")
                 missing_bins = int((result["observed"] == 0).sum())
                 return ui.p(f"{len(result):,} measurement intervals; "
-                            f"{int(result['is_complete'].sum()):,} complete; "
+                            f"{int(result['is_complete'].sum()):,} complete at ≥ {report_settings()['min_completeness']:.0%}; "
                             f"{missing_bins:,} entirely missing.", class_="text-muted")
             except (ValueError, KeyError) as exc:
                 return ui.p(str(exc), class_="text-danger")
@@ -2163,7 +2292,7 @@ if (!window.__apmColorPickerInstalled) {
             import matplotlib.pyplot as plt
             from matplotlib.colors import Normalize
             conf = quality_settings()
-            matrix = quality_heatmap_data(report(), conf["heatmap_variable"])
+            matrix = quality_heatmap_data(report(), conf["heatmap_variable"], mode="threshold_coverage")
             fig, ax = plt.subplots(figsize=(10, 4))
             if matrix.empty:
                 ax.text(0.5, 0.5, "No data for selected measurement", ha="center", va="center")
@@ -2180,8 +2309,9 @@ if (!window.__apmColorPickerInstalled) {
             ax.set_xticklabels([str(matrix.columns[i]) for i in ticks], rotation=35, ha="right", fontsize=8)
             ax.set_xlabel("Aggregation interval")
             ax.set_ylabel(conf["id_col"])
-            ax.set_title(f"{conf['heatmap_variable']} coverage")
-            fig.colorbar(image, ax=ax, label="Observed / expected")
+            ax.set_title(f"{conf['heatmap_variable']} — complete at ≥ {conf['min_completeness']:.0%} coverage")
+            fig.colorbar(image, ax=ax, ticks=[0, .25, .5, .75, 1],
+                         label="Coverage (fraction; passing bins displayed as 100%)")
             fig.tight_layout()
             return fig
 
@@ -3010,9 +3140,10 @@ if (!window.__apmColorPickerInstalled) {
                         number = next_quality.get() + 1
                         tab_id = f"quality_{number}"
                         settings = views.restore_quality(preset_id)
+                        frame, _ = prepare_table_source(summary, restored_settings=settings)
                         panel = ui.nav_panel(preset.get('name') or f"Quality {number}",
-                                             quality_tab_ui(tab_id, settings), value=tab_id)
-                        snapshot = quality_tab_server(tab_id, settings)
+                                             quality_tab_ui(tab_id, frame, settings), value=tab_id)
+                        snapshot = quality_tab_server(tab_id, frame, settings)
                         workspace.add_quality(tab_id, snapshot)
                         begin_history(tab_id, settings, restored=True)
                         register_quality_history(tab_id)
@@ -3059,10 +3190,15 @@ if (!window.__apmColorPickerInstalled) {
         def add_quality():
             number = next_quality.get() + 1
             tab_id = f"quality_{number}"
-            panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(tab_id), value=tab_id)
-            settings = quality_tab_server(tab_id)
+            selected = input.plot_tabs()
+            with reactive.isolate():
+                initialized = initializer.new_quality(selected, number)
+            frame, steps = initialized.frame, initialized.lineage
+            initial_settings = {"source_steps": steps}
+            panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(tab_id, frame, initial_settings), value=tab_id)
+            settings = quality_tab_server(tab_id, frame, initial_settings)
             workspace.add_quality(tab_id, settings)
-            begin_history(tab_id, {})
+            begin_history(tab_id, initial_settings)
             register_quality_history(tab_id)
             next_quality.set(number)
             active_tabs.set(workspace.active_tabs)
@@ -3107,8 +3243,9 @@ if (!window.__apmColorPickerInstalled) {
                     number = next_quality.get() + 1
                     next_quality.set(number)
                     replacement = f"quality_{number}"
-                    panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(replacement, settings), value=replacement)
-                    quality_snapshot = quality_tab_server(replacement, settings)
+                    frame, _ = prepare_table_source(summary, restored_settings=settings)
+                    panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(replacement, frame, settings), value=replacement)
+                    quality_snapshot = quality_tab_server(replacement, frame, settings)
                     workspace.add_quality(replacement, quality_snapshot)
                     register_quality_history(replacement)
                 elif kind == "plot":
