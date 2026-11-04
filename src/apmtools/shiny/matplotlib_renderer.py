@@ -39,7 +39,7 @@ def _matplotlib_defaults(spec, *, palette="Default"):
 
 
 
-def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumulative=0):
+def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumulative=0, bar_stacking=()):
     """Compute editable axis bounds from the prepared data, without rendering.
 
     Datetime X bounds are ISO timestamps; categorical X bounds are intentionally
@@ -97,6 +97,16 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
             ymax = (histograms.sum(axis=0).max() if stacked and histograms.size
                     else histograms.max() if histograms.size else 0)
             bounds["y_min"], bounds["y_max"] = "0", format(float(ymax), ".12g")
+    elif kind == "bar" and bar_stacking:
+        from .bar_stacking import stacked_bar_segments
+        segments = stacked_bar_segments(spec, bar_stacking)
+        if segments:
+            from collections import defaultdict
+            totals = defaultdict(float)
+            for category, series, stack, value in segments:
+                totals[(category, series, value >= 0)] += value
+            bounds["y_min"] = format(float(min(0, *totals.values())), ".12g")
+            bounds["y_max"] = format(float(max(0, *totals.values())), ".12g")
     elif kind == "bar":
         values = pd.to_numeric(df[ys[0]], errors="coerce")
         cols = [x, "__plot_group"] if spec["groups"] else [x]
@@ -302,10 +312,14 @@ def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1,
         old = ax.get_legend()
         if old is None:
             continue
+        identities = getattr(old, "_apmtools_stack_keys", None)
         for index, (handle, label) in enumerate(zip(old.legend_handles,
                                  [t.get_text() for t in old.get_texts()])):
-            if label and index not in seen:
-                seen[index] = (handle, label)
+            # Stacked bar series may differ in number and order across facets.
+            # Use their unedited group-combination identity rather than position.
+            key = ("stack", identities[index]) if identities is not None else ("position", index)
+            if label and key not in seen:
+                seen[key] = (handle, label)
         old.set_visible(False)
         old.set_in_layout(False)
     if not seen:
@@ -356,9 +370,10 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               legend_inside=False, legend_columns=1, multi_y_color_by="group", show_grid=True, font_size=12,
                               line_width=2, marker_size=7, line_alpha="", line_style="",
                               scatter_size="", scatter_marker="", scatter_alpha="", hist_alpha="",
-                              box_showfliers=True, box_orientation="vertical", bar_box_width=1.0,
+                              box_showfliers=True, box_orientation="vertical", bar_box_width=1.0, bar_stacking=None,
                               title_font_size=14, axis_font_size=12, tick_font_size=10,
-                              legend_font_size=12, panel_font_size=14, plot_dpi=100, bins=30, density=False,
+                              legend_font_size=12, panel_font_size=14, plot_dpi=100,
+                              plot_height_pct=100, bins=30, density=False,
                               stacked=False, histtype="bar", cumulative=0,
                               panel_by=None, independent_panel_limits=True, panel_titles="",
                               panel_hspace=0.90, panel_wspace=0.38, _axes=None,
@@ -371,7 +386,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     from matplotlib.patches import Patch
 
     if _axes is None:
-        fig, ax = plt.subplots(figsize=(10, 5), dpi=plot_dpi)
+        fig, ax = plt.subplots(figsize=(10, 5 * float(plot_height_pct) / 100), dpi=plot_dpi)
     else:
         ax = _axes
         fig = ax.figure
@@ -390,7 +405,21 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     # Facet only the native Matplotlib renderer.  Each panel receives the
     # same filtered/aggregated data subset and the same appearance settings.
     if panel_by and _axes is None:
+        # A dimension cannot simultaneously define facets and stack segments.
+        from .bar_stacking import selected_stack_columns
+        blocked = selected_stack_columns(spec.get("groups", ()), bar_stacking) if kind == "bar" else []
+        panel_by = [name for name in ([panel_by] if isinstance(panel_by, str) else panel_by)
+                    if name not in blocked]
+    if panel_by and _axes is None:
         import math
+        from .bar_stacking import stacked_bar_segments
+        panel_groups = [panel_by] if isinstance(panel_by, str) else list(panel_by)
+        palette_spec = {**spec, "groups": [g for g in spec["groups"] if g not in panel_groups]}
+        from .bar_stacking import stacked_bar_legend_key
+        full_stack_palette = (list(dict.fromkeys(
+            stacked_bar_legend_key(item[1], item[2])
+            for item in stacked_bar_segments(palette_spec, bar_stacking)))
+                              if kind == "bar" and bar_stacking else [])
         partitions = list(_panel_partitions(spec, panel_by))
         panel_title_map = _parse_label_map(panel_titles)
         if partitions:
@@ -402,11 +431,12 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             plt.close(fig)
             ncols = (2 if len(partitions) == 4 else min(3, len(partitions)))
             nrows = math.ceil(len(partitions) / ncols)
-            fig, axes = plt.subplots(nrows, ncols, figsize=(5.4*ncols, 4.7*nrows), dpi=plot_dpi,
+            fig, axes = plt.subplots(nrows, ncols, figsize=(5.4*ncols, 4.7*nrows * float(plot_height_pct) / 100), dpi=plot_dpi,
                                      squeeze=False, sharex=False, sharey=False)
             for idx, (panel_title, panel_df, other_groups) in enumerate(partitions):
                 panel_spec = {**spec, "data": panel_df, "groups": other_groups,
                               "_original_groups": spec["groups"],
+                              "_stack_palette": full_stack_palette,
                               "_hide_ungrouped_legend": not bool(other_groups) and not bool(spec.get("hist_variables"))}
                 panel_ax = axes.flat[idx]
                 _matplotlib_direct_figure(panel_spec, title=panel_title_map.get(panel_title, panel_title), x_label=x_label,
@@ -419,10 +449,11 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
                     scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
                     hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
-                    bar_box_width=bar_box_width,
+                    bar_box_width=bar_box_width, bar_stacking=bar_stacking,
                     title_font_size=panel_font_size, axis_font_size=axis_font_size,
                     tick_font_size=tick_font_size, legend_font_size=legend_font_size,
                     panel_font_size=panel_font_size, plot_dpi=plot_dpi,
+                    plot_height_pct=plot_height_pct,
                     bins=bins, density=density,
                     stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
                     x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
@@ -433,6 +464,21 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             active_axes = [flat_axes[i] for i in range(len(partitions))]
             for i in range(len(partitions), axes.size):
                 flat_axes[i].set_visible(False)
+            if kind == "bar" and bar_stacking and not independent_panel_limits:
+                # Matplotlib independently autoscales each facet because their
+                # axes are intentionally created with sharey=False.  Apply the
+                # common stacked range *after* drawing all facets, so the
+                # checkbox actually determines whether scales are shared.
+                # Individual manual panel bounds still take precedence.
+                lows, highs = zip(*(panel_ax.get_ylim() for panel_ax in active_axes))
+                common_low, common_high = min(lows), max(highs)
+                for (panel_title, _, _), panel_ax in zip(partitions, active_axes):
+                    lower = _parse_axis_limit(_panel_limit_value(y_min, panel_title))
+                    upper = _parse_axis_limit(_panel_limit_value(y_max, panel_title))
+                    panel_ax.set_ylim(
+                        common_low if lower is None else lower,
+                        common_high if upper is None else upper,
+                    )
             if legend_inside:
                 for panel_ax in active_axes:
                     if panel_ax.get_legend() is not None:
@@ -478,7 +524,45 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         else:
             yield "All observations", df
 
-    if spec.get("multi_axis"):
+    if kind == "bar" and bar_stacking and any(
+            col in df.columns and col in spec["groups"] for col in bar_stacking):
+        from .bar_stacking import stacked_bar_segments, stacked_bar_legend_key
+        segments = stacked_bar_segments(spec, bar_stacking)
+        cats = list(dict.fromkeys(str(v) for v in df[x]))
+        series_keys = list(dict.fromkeys(item[1] for item in segments))
+        # Colour and legend identities must include non-stacking grouping
+        # dimensions too; they determine adjacent bars within each category.
+        legend_keys = list(dict.fromkeys(
+            stacked_bar_legend_key(item[1], item[2]) for item in segments))
+        cat_idx = {cat: i for i, cat in enumerate(cats)}
+        series_idx = {item: i for i, item in enumerate(series_keys)}
+        bar_width = .82 / max(len(series_keys), 1)
+        stacks_positive, stacks_negative = {}, {}
+        palette_keys = spec.get("_stack_palette") or legend_keys
+        stack_colors = {name: overrides.get(name,
+                           palette_values[palette_keys.index(name) % len(palette_values)]
+                           if name in palette_keys else palette_values[0])
+                        for name in legend_keys}
+        for (category, series_key, stack_key, amount) in segments:
+            legend_key = stacked_bar_legend_key(series_key, stack_key)
+            slot = (category, series_key)
+            base_map = stacks_positive if amount >= 0 else stacks_negative
+            base = base_map.get(slot, 0.0)
+            pos = cat_idx[category] + (series_idx[series_key] - (len(series_keys) - 1) / 2) * bar_width
+            ax.bar(pos, amount, bottom=base, width=bar_width * .92 * bar_box_width,
+                   color=stack_colors[legend_key],
+                   label=legend_label(rename, legend_key, aliases))
+            base_map[slot] = base + amount
+        ax.set_xticks(range(len(cats)), cats)
+        ax.set_xlim(-.5, max(.5, len(cats) - .5))
+        # Preserve a separate handle for every actual group combination,
+        # even if its user-edited display label equals another entry's.
+        if legend_keys and not spec.get("_hide_ungrouped_legend", False):
+            stack_legend = ax.legend(handles=[Patch(facecolor=stack_colors[name],
+                                     label=legend_label(rename, name, aliases))
+                               for name in legend_keys], title="Legend")
+            stack_legend._apmtools_stack_keys = tuple(legend_keys)
+    elif spec.get("multi_axis"):
         from .multi_axis import records, style_maps
         from matplotlib.lines import Line2D
         from matplotlib.patches import Patch
@@ -637,6 +721,11 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         # avoiding repeated full-column masks for multi-Y plots.
         grouped_line_rows = ([(n, line_df.loc[line_df[group_col] == n]) for n in labels]
                              if group_col else None)
+        # A group can contain many independent traces (e.g. one per identifier
+        # or per missing-data section).  Their visual identity is the GROUP,
+        # not the individual trace.  Collect only groups actually drawn so the
+        # legend and the editable label keys have one entry per group value.
+        plotted_line_groups = set()
         for y in ys:
             sets = (grouped_line_rows if grouped_line_rows is not None else
                     [(str(y) if len(ys) > 1 else "All observations", line_df)])
@@ -644,6 +733,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 rows = rows.loc[rows[y].notna()]
                 if rows.empty:
                     continue
+                plotted_line_groups.add(str(name))
                 segment_col = section_col or id_col
                 parts = (rows.groupby(segment_col, dropna=False, sort=False) if segment_col else [(None, rows)])
                 for _, part in parts:
@@ -655,7 +745,21 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                                        _line_style(styles, name) if name in styles and len(ys) == 1 else
                                        multi_dashes[key]),
                             alpha=_bounded_float(alphas, name, 1, 0, 1),
-                            label=("_nolegend_" if multi_y else legend_label(rename, name, aliases)))
+                            # Repeated identifier/section traces must not
+                            # create repeated legend entries for one group.
+                            label="_nolegend_")
+        if group_col and not multi_y and not spec.get("_hide_ungrouped_legend", False):
+            from matplotlib.lines import Line2D
+            visible_groups = [name for name in labels if name in plotted_line_groups]
+            if visible_groups:
+                handles = [Line2D([], [], color=colors[name],
+                                  linewidth=float(line_width),
+                                  linestyle=_line_style(styles, name),
+                                  alpha=_bounded_float(alphas, name, 1, 0, 1))
+                           for name in visible_groups]
+                ax.legend(handles,
+                          [legend_label(rename, name, aliases) for name in visible_groups],
+                          title="Legend")
     elif kind in ("box", "bar"):
         # Build categorical groups in a single pass. The former implementation
         # repeatedly scanned the full DataFrame for every category × group,

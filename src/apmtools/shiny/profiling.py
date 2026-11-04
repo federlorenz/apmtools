@@ -7,6 +7,7 @@ row values or input contents. Each record is one JSON object.
 from __future__ import annotations
 
 import contextvars
+from collections import deque
 import functools
 import json
 import os
@@ -18,6 +19,28 @@ import uuid
 _current_span = contextvars.ContextVar('apmtools_trace_span', default=None)
 _lock = threading.RLock()
 _session = uuid.uuid4().hex[:12]
+# Diagnostics are populated only when tracing is explicitly enabled.
+_reactive_recent = {}
+_reactive_alert_at = {}
+
+
+def _reactive_loop_warning(name, now=None, *, threshold=50, window=3.0):
+    """Flag unusually repeated effect executions; never diagnose with certainty.
+
+    Called only on the opt-in tracing path. Keep bounded per-name history, and
+    emit at most one warning per window to avoid a runaway diagnostic log.
+    """
+    now = time.monotonic() if now is None else now
+    with _lock:
+        recent = _reactive_recent.setdefault(name, deque(maxlen=threshold))
+        while recent and now - recent[0] > window:
+            recent.popleft()
+        recent.append(now)
+        if len(recent) < threshold or now - _reactive_alert_at.get(name, -float('inf')) < window:
+            return False
+        _reactive_alert_at[name] = now
+        return True
+
 
 
 def enabled():
@@ -71,6 +94,9 @@ def traced(label=None, *, kind='function', trigger=None):
                     _emit({'event': 'execution', 'kind': kind, 'name': name,
                            'trigger': trigger, 'span': span, 'parent': parent,
                            'duration_ms': round(duration / 1e6, 3), 'error': error})
+                    if kind == 'reactive_effect' and _reactive_loop_warning(name):
+                        _emit({'event': 'suspected_reactive_loop', 'kind': kind,
+                               'name': name, 'executions': 50, 'window_seconds': 3})
         wrapped.__wrapped_by_apmtools_trace__ = True
         return wrapped
     return decorate
@@ -95,6 +121,9 @@ async def _run_async(func, name, kind, trigger, args, kwargs):
         _emit({'event': 'execution', 'kind': kind, 'name': name,
                'trigger': trigger, 'span': span, 'parent': parent,
                'duration_ms': round(duration / 1e6, 3), 'error': error})
+        if kind == 'reactive_effect' and _reactive_loop_warning(name):
+            _emit({'event': 'suspected_reactive_loop', 'kind': kind,
+                   'name': name, 'executions': 50, 'window_seconds': 3})
 
 
 def marker(name, **metadata):

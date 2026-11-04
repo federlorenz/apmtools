@@ -11,6 +11,7 @@ from typing import Any
 import pandas as pd
 
 from .derived_views import prepare_table_source
+from .quality_source import prepare_quality_source, quality_filter_settings
 
 
 @dataclass(frozen=True)
@@ -67,24 +68,26 @@ class TabInitializer:
         return TableInitialization(f'Table {number}', frame, None, steps)
 
     def new_quality(self, selected, number):
-        """Create a quality view from the current plot/table's transformed data.
+        """Inherit editable filters, never the parent plot/table aggregation.
 
-        The stored lineage replays the source transformation on restoration;
-        no potentially stale dataframe snapshots are retained in saved views.
+        Earlier table-lineage filters are replayed against the original
+        Summary. The active tab's filters are copied into the new quality
+        sidebar, so users can edit them independently of the parent.
         """
         kind = self.workspace.kind(selected)
         if kind == 'table':
-            frame, steps = prepare_table_source(
-                self.summary, parent_kind='table',
-                parent_steps=self.workspace.table_lineage.get(selected, []),
-                parent_settings=self.workspace.table_settings[selected]())
+            earlier = self.workspace.table_lineage.get(selected, [])
+            active = self.workspace.table_settings[selected]()
         elif kind == 'plot':
-            frame, steps = prepare_table_source(
-                self.summary, parent_kind='plot',
-                parent_settings=self.workspace.plot_snapshots[selected]())
+            earlier = []
+            active = self.workspace.plot_snapshots[selected]()
         else:
-            frame, steps = prepare_table_source(self.summary)
-        return TableInitialization(f'Quality {number}', frame, {'source_steps': steps}, steps)
+            earlier = []
+            active = {}
+        frame, steps = prepare_quality_source(self.summary, parent_steps=earlier)
+        settings = quality_filter_settings(active, self.summary.columns)
+        settings['source_steps'] = steps
+        return TableInitialization(f'Quality {number}', frame, settings, steps)
 
     def restored_table(self, preset_id, number):
         preset = self.views.preset(preset_id)

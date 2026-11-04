@@ -11,6 +11,21 @@ from ..units import upas_units, lascar_units, purple_units
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 
 
+def bar_box_category_choices(categorical_columns, selected_frequency, selected_statistics=None):
+    """Add the selected frequency category only with active statistical aggregation.
+
+    Original categorical columns are always available. A generated temporal
+    category is available only when both frequency and statistic are selected.
+    """
+    frequency = FREQUENCIES.get(selected_frequency, selected_frequency)
+    choices = list(categorical_columns)
+    from .view_aggregation import normalize_statistics
+    if (normalize_statistics(selected_statistics) and frequency is not None
+            and frequency in FREQUENCIES.values() and frequency not in choices):
+        choices.append(frequency)
+    return choices
+
+
 def _composite_labels(data: pd.DataFrame, columns: list[str]) -> pd.Series:
     """Build readable composite labels without dropping or coercing missing groups.
 

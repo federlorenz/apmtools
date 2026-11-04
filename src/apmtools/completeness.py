@@ -82,10 +82,25 @@ def analyse_completeness(data, value_cols, frequency, *, time_col='datetime',
     values = list(value_cols)
     if not values:
         raise ValueError('value_cols must not be empty')
+    # Each column must have one unambiguous role.  In particular, selecting
+    # the timestamp as the monitor ID makes pandas return a two-column frame
+    # for frame[time_col], which pd.to_datetime cannot convert.
     required = [id_col, time_col, *values]
+    if len(set(required)) != len(required):
+        raise ValueError(
+            'Identifier, timestamp and measurement columns must be distinct; '
+            'choose different columns in Coverage analysis.'
+        )
     absent = [name for name in required if name not in data.columns]
     if absent:
         raise KeyError(f'Missing completeness columns: {absent}')
+    # Avoid silently choosing one of several identically named source columns.
+    duplicates = [name for name in required if list(data.columns).count(name) > 1]
+    if duplicates:
+        raise ValueError(
+            f'Duplicate source column names {list(dict.fromkeys(duplicates))!r}; '
+            'rename them before calculating completeness.'
+        )
     frame = pd.DataFrame(data)[required].copy()
     frame[time_col] = pd.to_datetime(frame[time_col], errors='coerce')
     frame = frame.dropna(subset=[id_col, time_col])

@@ -9,7 +9,7 @@ def valid_hex_color(value):
     return isinstance(value, str) and _HEX.fullmatch(value.strip()) is not None
 
 
-def active_color_keys(spec, *, mode="group", panel_by=()):
+def active_color_keys(spec, *, mode="group", panel_by=(), bar_stacking=()):
     """Return colour dimensions with nonempty plotted observations.
 
     Faceting removes its grouping columns. For multi-Y plots, 'both' uses
@@ -21,6 +21,12 @@ def active_color_keys(spec, *, mode="group", panel_by=()):
     if spec.get("hist_variables"):
         return tuple(dict.fromkeys(spec["data"].loc[
             spec["data"][spec["x"]].notna(), "__hist_series"].astype(str)))
+    if spec.get("kind") == "bar" and bar_stacking:
+        from .bar_stacking import stacked_bar_segments, stacked_bar_legend_key
+        panel_vars = [panel_by] if isinstance(panel_by, str) else list(panel_by or ())
+        active_spec = {**spec, "groups": [g for g in spec["groups"] if g not in panel_vars]}
+        return tuple(dict.fromkeys(stacked_bar_legend_key(segment[1], segment[2])
+                                   for segment in stacked_bar_segments(active_spec, bar_stacking)))
     from .matplotlib_renderer import _panel_partitions
     from .multi_axis import records
     parts = (_panel_partitions(spec, panel_by) if panel_by

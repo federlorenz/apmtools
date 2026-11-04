@@ -13,11 +13,12 @@ from ..units import upas_units, lascar_units, purple_units
 
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
-from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices
+from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices, bar_box_category_choices
 from .view_aggregation import normalize_statistics
 from .quality_filters import filter_quality_data
 from .derived_views import prepare_table_source
-from .quality_view import quality_report, quality_summary, quality_heatmap_data, missing_interval_runs, QUALITY_FREQUENCIES, selected_heatmap_variable
+from .quality_source import prepare_quality_source
+from .quality_view import quality_report, quality_summary, quality_heatmap_data, quality_grouped_heatmaps, quality_heatmap_figure, quality_heatmap_height, QUALITY_FREQUENCIES, selected_heatmap_variable
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
 from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
@@ -160,7 +161,7 @@ def _build_summary_ui_server(
             ui.h4("Right sidebar — appearance and layout"),
             ui.tags.ul(
                 ui.tags.li(ui.strong("Plot appearance: "), "Set the palette, plot theme, "
-                           "title and title font size."),
+                           "title, title font size, and relative plot width/height."),
                 ui.tags.li(ui.strong("Legend: "), "Control legend position, inside/outside "
                            "placement, labels, columns and font size."),
                 ui.tags.li(ui.strong("Axes: "), "Set axis labels, minimum and maximum "
@@ -319,6 +320,14 @@ if (!window.__apmColorPickerInstalled) {
                                 ui.div(ui.input_action_button("decrease_plot_fonts", "− Decrease fonts"),
                                        ui.input_action_button("increase_plot_fonts", "+ Increase fonts"),
                                        class_="d-flex flex-wrap gap-2 mb-3"),
+                                ui.input_numeric("plot_height_pct", "Plot height (%)", value=initial("plot_height_pct", 100), min=50, max=200, step=10),
+                                ui.panel_conditional("input.plot_type === 'bar'",
+                                    ui.input_selectize("bar_stacking", "Bar stacking",
+                                        choices={name: name for name in initial("group_by", [])
+                                                 if not (initial("multi_panel", False) and name in initial("panel_by", []))},
+                                        selected=initial("bar_stacking", []), multiple=True),
+                                    ui.help_text("Stack selected grouping variables; remaining groups are shown side by side.")),
+                                ui.help_text("100% uses the automatic plot height; width always adapts to the available space."),
                                 ui.input_numeric("plot_dpi", "Plot DPI", value=initial("plot_dpi", 100), min=30, max=600, step=25),
                                 ui.div(ui.input_action_button("decrease_plot_dpi", "− DPI"),
                                        ui.input_action_button("increase_plot_dpi", "+ DPI"),
@@ -385,7 +394,7 @@ if (!window.__apmColorPickerInstalled) {
                                     ui.panel_conditional("input.multi_panel === true",
                                         ui.input_checkbox("independent_panel_limits",
                                             "Independent axis limits for each panel", value=initial("independent_panel_limits", True))),
-                                    ui.panel_conditional("input.multi_panel === true && input.group_by.length > 1",
+                                    ui.panel_conditional("input.multi_panel === true && input.group_by.length > 0",
                                         ui.input_selectize("panel_by", "Panel grouping variables",
                                             choices={name: name for name in group_columns}, selected=initial("panel_by", []), multiple=True))),
                                 ui.panel_conditional("input.multi_panel === true",
@@ -852,11 +861,11 @@ if (!window.__apmColorPickerInstalled) {
                     keys = ()
                 else:
                     groups = list(input.group_by() or [])
-                    faceted = True and bool(groups) and bool(_optional_input("multi_panel", False))
-                    panel_by = ((list(_optional_input("panel_by", []) or []) or groups)
-                                if faceted and len(groups) > 1 else groups if faceted else [])
+                    panel_by = (_effective_panel_groups(groups)
+                                if groups and bool(_optional_input("multi_panel", False)) else [])
                     keys = active_color_keys(spec, mode=_optional_input("multi_y_color_by", "group"),
-                                             panel_by=panel_by)
+                                             panel_by=panel_by,
+                                             bar_stacking=_optional_input("bar_stacking", []) if input.plot_type() == "bar" else ())
                 with reactive.isolate():
                     previous = _color_keys.get()
                 if keys != previous:
@@ -921,7 +930,7 @@ if (!window.__apmColorPickerInstalled) {
             def x_control():
                 kind = input.plot_type()
                 if kind in ("box", "bar"):
-                    choices = categorical_columns
+                    choices = bar_box_category_choices(categorical_columns, input.frequency(), input.aggregate())
                     multiple = True
                 elif kind == "line":
                     choices = _alphabetical(datetime_columns + timedelta_columns)
@@ -991,9 +1000,10 @@ if (!window.__apmColorPickerInstalled) {
             if isinstance(_saved_panel_by, str):
                 _saved_panel_by = [_saved_panel_by]
             _panel_restore_pending = reactive.value(bool(_saved_panel_by))
+            _last_panel_choice_sync = reactive.value(None)
 
             @reactive.effect
-            @reactive.event(input.group_by, ignore_none=False)
+            @reactive.event(input.group_by, input.bar_stacking, input.plot_type, ignore_none=False)
             @traced('sync_panel_group_choices', kind='reactive_effect', trigger='@reactive.event(input.group_by, ignore_none=False)')
             def sync_panel_group_choices():
                 selected = list(input.group_by() or [])
@@ -1006,8 +1016,62 @@ if (!window.__apmColorPickerInstalled) {
                     return  # Wait until virtual grouping inputs are available.
                 if pending:
                     _panel_restore_pending.set(False)
-                ui.update_selectize("panel_by", choices={name: name for name in selected},
-                                    selected=valid_panels)
+                stacks = (list(_optional_input("bar_stacking", []) or [])
+                          if input.plot_type() == "bar" else [])
+                allowed = [name for name in selected if name not in stacks]
+                chosen = [name for name in valid_panels if name in allowed]
+                signature = (tuple(allowed), tuple(chosen))
+                with reactive.isolate():
+                    previous = _last_panel_choice_sync.get()
+                if signature != previous:
+                    _last_panel_choice_sync.set(signature)
+                    ui.update_selectize("panel_by", choices={name: name for name in allowed},
+                                        selected=chosen)
+
+            _saved_bar_stacking = initial_filters.get("bar_stacking", []) or []
+            if isinstance(_saved_bar_stacking, str):
+                _saved_bar_stacking = [_saved_bar_stacking]
+            _stack_restore_pending = reactive.value(bool(_saved_bar_stacking))
+            _last_stack_choice_sync = reactive.value(None)
+
+            @reactive.effect
+            @reactive.event(input.group_by, input.panel_by, input.multi_panel, input.plot_type,
+                            ignore_none=False)
+            def sync_bar_stacking_choices():
+                """Only grouped non-facet dimensions can be stacked."""
+                groups = list(input.group_by() or [])
+                with reactive.isolate():
+                    current = list(_optional_input("bar_stacking", []) or [])
+                    panels = (list(_optional_input("panel_by", []) or [])
+                              if _optional_input("multi_panel", False) else [])
+                eligible = [name for name in groups if name not in panels]
+                # A saved virtual group (e.g. statistics) can mount later.
+                with reactive.isolate():
+                    pending = _stack_restore_pending.get()
+                if pending:
+                    if not all(name in groups for name in _saved_bar_stacking):
+                        return
+                    current = list(_saved_bar_stacking)
+                    _stack_restore_pending.set(False)
+                chosen = [name for name in current if name in eligible]
+                signature = (tuple(eligible), tuple(chosen))
+                with reactive.isolate():
+                    previous = _last_stack_choice_sync.get()
+                if signature != previous:
+                    _last_stack_choice_sync.set(signature)
+                    ui.update_selectize("bar_stacking", choices={name: name for name in eligible},
+                                        selected=chosen)
+
+            def _effective_panel_groups(groups):
+                """Use only non-stacking group dimensions as facets."""
+                from .bar_stacking import selected_stack_columns
+                stacks = (selected_stack_columns(groups, _optional_input("bar_stacking", []))
+                          if input.plot_type() == "bar" else [])
+                eligible = [g for g in groups if g not in stacks]
+                requested = list(_optional_input("panel_by", []) or [])
+                # Enabling the control must not implicitly facet by every group.
+                from .panel_activation import selected_panel_groups
+                return selected_panel_groups(eligible, requested)
 
             # Frequency-specific inputs are mounted statically in plot_tab_ui.
             # They must exist even when the aggregation tab is not selected.
@@ -1088,9 +1152,15 @@ if (!window.__apmColorPickerInstalled) {
 
                 selected_groups = [g for g in (input.group_by() or [])
                                    if g not in ("variables_x", "variables_y", "statistics")]
-                # Derive hour/day/etc. through group_stat without aggregation.
-                # The returned index column identifies source rows.
-                for component in selected_groups:
+                # Generate only explicitly requested temporal categories. A
+                # selected X frequency can be used without adding it to Group by.
+                # The returned index column identifies original source rows.
+                frequency_categories = [c for c in selected_x
+                                        if (kind in ("box", "bar") and
+                                            c in time_group_columns and
+                                            bool(normalize_statistics(input.aggregate())) and
+                                            c == FREQUENCIES.get(input.frequency()))]
+                for component in dict.fromkeys([*selected_groups, *frequency_categories]):
                     if component not in time_group_columns:
                         continue
                     generated = current.group_stat(
@@ -1182,7 +1252,8 @@ if (!window.__apmColorPickerInstalled) {
                 # the browser mounts it, the old line X can remain in input.x.
                 # Treat that intermediate state as unready, not as box data.
                 if selected_plot in ("box", "bar") and any(
-                    x not in categorical_columns for x in selected_x
+                    x not in bar_box_category_choices(categorical_columns, input.frequency(), input.aggregate())
+                    for x in selected_x
                 ):
                     return {"error": "Waiting for categorical X-axis selection"}
 
@@ -1452,6 +1523,8 @@ if (!window.__apmColorPickerInstalled) {
             # Populate appearance controls only after a valid plot has been
             # prepared.  The effect depends on the plot specification, not on
             # appearance inputs, so editing a label or colour cannot reset it.
+            from .bar_axis_autoscale import remember_auto_limits, release_automatic_bar_limits
+            _automatic_bar_y_limits = {}
             _last_line_style_keys = [None]
             _last_scatter_style_keys = [None]
             # Arm automatic axis-label regeneration only after the restored
@@ -1461,7 +1534,8 @@ if (!window.__apmColorPickerInstalled) {
             _axis_selection_armed = [not bool(initial_filters)]
 
             @reactive.effect
-            @reactive.event(prepared_plot, lambda: _optional_input("multi_panel", False) if input.group_by() else False,
+            @reactive.event(prepared_plot, lambda: tuple(_optional_input("bar_stacking", []) or ()),
+                            lambda: _optional_input("multi_panel", False) if input.group_by() else False,
                             lambda: tuple(_optional_input("panel_by", []) or []) if input.group_by() and len(input.group_by()) > 1 else (),
                             lambda: _optional_input("independent_panel_limits", True) if input.group_by() and _optional_input("multi_panel", False) else True, ignore_none=False)
             def populate_appearance_from_plot():
@@ -1472,12 +1546,10 @@ if (!window.__apmColorPickerInstalled) {
                 defaults = _matplotlib_defaults(spec, palette="Default")
                 names = defaults["names"]
                 selected_groups_for_legend = list(input.group_by() or [])
-                if (True and selected_groups_for_legend
-                        and bool(_optional_input("multi_panel", False))):
+                if (selected_groups_for_legend and bool(_optional_input("multi_panel", False))
+                        and _effective_panel_groups(selected_groups_for_legend)):
                     panel_variables_for_legend = (
-                        (list(_optional_input("panel_by", []) or []) or selected_groups_for_legend)
-                        if len(selected_groups_for_legend) > 1
-                        else selected_groups_for_legend
+                        _effective_panel_groups(selected_groups_for_legend)
                     )
                     if panel_variables_for_legend:
                         trace_defaults = _panel_trace_defaults(
@@ -1529,6 +1601,7 @@ if (!window.__apmColorPickerInstalled) {
                     density=input.hist_density() == "True" if spec["kind"] == "histogram" else False,
                     stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
                     cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
+                    bar_stacking=_optional_input("bar_stacking", []) if spec["kind"] == "bar" else (),
                 )
                 if spec["kind"] == "box" and not spec.get("multi_axis") and not input.box_showfliers():
                     from .data import _box_whisker_limits
@@ -1539,16 +1612,17 @@ if (!window.__apmColorPickerInstalled) {
                         limits[f"{axis}_min"], limits[f"{axis}_max"] = map(str, whiskers)
                 limits = _pad_axis_bounds(limits)
                 selected_groups = list(input.group_by() or [])
-                if (True and selected_groups and bool(_optional_input("multi_panel", False))
+                if (selected_groups and bool(_optional_input("multi_panel", False))
+                        and _effective_panel_groups(selected_groups)
                         and bool(_optional_input("independent_panel_limits", True))):
-                    panel_variable = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
-                                      else selected_groups)
+                    panel_variable = _effective_panel_groups(selected_groups)
                     panel_bounds = _panel_axis_bounds(
                         spec, panel_variable,
                         bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
                         density=input.hist_density() == "True" if spec["kind"] == "histogram" else False,
                         stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
                         cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
+                        bar_stacking=_optional_input("bar_stacking", []) if spec["kind"] == "bar" else (),
                     )
                     if panel_bounds:
                         if spec["kind"] == "box" and not spec.get("multi_axis") and not input.box_showfliers():
@@ -1561,6 +1635,11 @@ if (!window.__apmColorPickerInstalled) {
                                     panel_bounds[panel_title][f"{axis}_min"], panel_bounds[panel_title][f"{axis}_max"] = map(str, whiskers)
                         panel_bounds = {name: _pad_axis_bounds(bounds) for name, bounds in panel_bounds.items()}
                         limits = {key: _format_panel_bounds(panel_bounds, key) for key in limits}
+                # Remember these generated values before sending asynchronous
+                # updates to the browser. A stacked redraw may occur while the
+                # previous (unstacked) values are still mounted in the inputs.
+                if spec["kind"] == "bar":
+                    remember_auto_limits(_automatic_bar_y_limits, limits)
                 for field, value in limits.items():
                     # A restored plot's explicit axis bounds are authoritative.
                     # The preparation observer fires after the saved inputs mount;
@@ -1625,11 +1704,11 @@ if (!window.__apmColorPickerInstalled) {
                             ui.update_text_area(field, value="\n".join(
                                 f"{name}={existing.get(name, default)}" for name in names))
                 if True:
-                    panel_variables = ((list(_optional_input("panel_by", []) or []) or selected_groups) if len(selected_groups) > 1
-                                       else selected_groups)
+                    panel_variables = (_effective_panel_groups(selected_groups))
                     panel_names = (list(dict.fromkeys(name for name, part, _ in _panel_partitions(spec, panel_variables)
                                                         if not part.empty))
-                                   if selected_groups and bool(_optional_input("multi_panel", False)) else [])
+                                   if (selected_groups and bool(_optional_input("multi_panel", False))
+                                       and panel_variables) else [])
                     _set_label_keys("panel_titles", panel_names)
 
             @reactive.effect
@@ -1669,12 +1748,11 @@ if (!window.__apmColorPickerInstalled) {
                     return (low - margin, high + margin)
 
                 groups = list(input.group_by() or [])
-                panels = (True and groups
-                          and bool(_optional_input("multi_panel", False))
+                panels = (bool(groups) and bool(_optional_input("multi_panel", False))
+                          and bool(_effective_panel_groups(groups))
                           and bool(_optional_input("independent_panel_limits", True)))
                 if panels:
-                    panel_by = ((list(_optional_input("panel_by", []) or []) or groups)
-                                if len(groups) > 1 else groups)
+                    panel_by = (_effective_panel_groups(groups))
                     parts = _panel_partitions(spec, panel_by)
                     values = {name: box_bounds(part, remaining)
                               for name, part, remaining in parts}
@@ -1718,6 +1796,7 @@ if (!window.__apmColorPickerInstalled) {
                 ui.update_text("datetime_end", value="")
                 ui.update_selectize("group_by", selected=[])
                 ui.update_checkbox("multi_panel", value=False)
+                ui.update_selectize("bar_stacking", selected=[])
                 ui.update_checkbox("independent_panel_limits", value=True)
                 ui.update_select("frequency", selected="None")
                 ui.update_selectize("aggregate", selected=[])
@@ -1750,6 +1829,7 @@ if (!window.__apmColorPickerInstalled) {
                     ui.update_numeric(field, value=value)
                 if True:
                     ui.update_numeric("plot_dpi", value=100)
+                    ui.update_numeric("plot_height_pct", value=100)
                 ui.update_numeric("line_width", value=2)
                 ui.update_checkbox("box_showfliers", value=True)
                 ui.update_select("box_orientation", selected="vertical")
@@ -1820,10 +1900,12 @@ if (!window.__apmColorPickerInstalled) {
             @reactive.calc
             def _structural_legend_keys():
                 spec = prepared_plot()
+                # Stacking changes which series are represented in the legend.
+                _optional_input("bar_stacking", [])
                 # These controls affect which legend entries are available.
                 active_groups = list(input.group_by() or [])
-                multi_panel = bool(_optional_input("multi_panel", False)) if active_groups else False
-                panel_groups = (list(_optional_input("panel_by", []) or []) or active_groups) if len(active_groups) > 1 else active_groups
+                panel_groups = _effective_panel_groups(active_groups)
+                multi_panel = bool(_optional_input("multi_panel", False)) and bool(panel_groups)
                 with reactive.isolate():
                     # Never observe appearance config or label editor values:
                     # renaming must not force a second structural render.
@@ -1915,9 +1997,9 @@ if (!window.__apmColorPickerInstalled) {
                 # Read grouping/panel controls once per reactive evaluation.
                 # These options affect rendering, not selected_data().
                 active_groups = list(input.group_by() or [])
-                multi_panel = bool(_optional_input("multi_panel", False)) if active_groups else False
-                panel_groups = (list(_optional_input("panel_by", []) or []) or active_groups) if len(active_groups) > 1 else active_groups
-                return dict(title=_optional_input("title", ""),
+                panel_groups = _effective_panel_groups(active_groups)
+                multi_panel = bool(_optional_input("multi_panel", False)) and bool(panel_groups)
+                options = dict(title=_optional_input("title", ""),
                     x_label=_optional_input("x_axis_label", ""), y_label=_optional_input("y_axis_label", ""),
                     legend_labels=_label_string("legend_labels"), trace_colors=_color_string(),
                     palette=_optional_input("palette", "Default"), x_min=_optional_input("x_min", ""), x_max=_optional_input("x_max", ""),
@@ -1930,9 +2012,11 @@ if (!window.__apmColorPickerInstalled) {
                     x_minor_ticks=_optional_input("x_minor_ticks", False), y_minor_ticks=_optional_input("y_minor_ticks", False),
                     title_font_size=_optional_input("title_font_size", 14), axis_font_size=_optional_input("axis_font_size", 12),
                     tick_font_size=_optional_input("tick_font_size", 10), legend_font_size=_optional_input("legend_font_size", 12),
-                    panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
+                    panel_font_size=_optional_input("panel_font_size", 14), plot_dpi=int(_optional_input("plot_dpi", 100) or 100),
+                    plot_height_pct=float(_optional_input("plot_height_pct", 100) or 100), hist_alpha=_optional_input("hist_alpha", ""),
                     box_showfliers=_optional_input("box_showfliers", True), box_orientation=_optional_input("box_orientation", "vertical"),
                     bar_box_width=float(_optional_input("bar_box_width", 1.0)),
+                    bar_stacking=(list(_optional_input("bar_stacking", []) or []) if input.plot_type() == "bar" else []),
                     line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2),
                     line_alpha=(_optional_input("line_alpha", "") if input.plot_type() == "line" else ""),
                     line_style=(_optional_input("line_style", "") if input.plot_type() == "line" else ""),
@@ -1951,6 +2035,16 @@ if (!window.__apmColorPickerInstalled) {
                     panel_hspace=(float(_optional_input("panel_hspace", 0.90) or 0) if multi_panel else 0.90),
                     panel_wspace=(float(_optional_input("panel_wspace", 0.38) or 0) if multi_panel else 0.38),
                 )
+                if input.plot_type() == "bar":
+                    # The Y bounds controls contain auto-generated text, which
+                    # must not clip bars when stack totals change. Only values
+                    # not generated by the application are explicit overrides.
+                    protected = (field for field in ("y_min", "y_max")
+                                 if (field in initial_filters and
+                                     str(initial_filters[field]).strip()))
+                    options = release_automatic_bar_limits(
+                        options, _automatic_bar_y_limits, protected=protected)
+                return options
 
             @render.download(filename="plot_export.zip", media_type="application/zip")
             @traced('export_python', kind='render', trigger=None)
@@ -1971,6 +2065,14 @@ if (!window.__apmColorPickerInstalled) {
             @render.plot
             @traced('plot', kind='render', trigger=None)
             def plot():
+                if recovery_paused.get():
+                    # Replaces an expensive future draw with a cheap placeholder.
+                    # This is a cooperative pause, not interruption of running code.
+                    from matplotlib.figure import Figure
+                    fig = Figure(figsize=(8, 3))
+                    fig.text(0.5, 0.5, "Plot paused — click Resume to redraw",
+                             ha="center", va="center")
+                    return fig
                 fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
                 _capture_legend(fig)
                 _capture_ticks(fig)
@@ -2039,10 +2141,22 @@ if (!window.__apmColorPickerInstalled) {
         settings = settings or {}
         available = _alphabetical(frame.columns)
         numeric = _alphabetical(_numeric_columns(frame))
-        id_choices = _alphabetical([c for c in available if c not in numeric])
         times = _datetime_columns(frame)
+        # Identifiers can be numerical, but must never be timestamps.
+        # Without this, a datetime-only categorical candidate can be chosen
+        # as both identifier and timestamp, producing duplicate columns.
+        id_choices = _alphabetical([c for c in available if c not in times])
         selected_values = [v for v in settings.get("value_cols", numeric[:1]) if v in numeric]
         selected_heatmap = selected_heatmap_variable(selected_values, settings.get("heatmap_variable"))
+        # Mirror plot/table categorical grouping; include low-cardinality numeric
+        # codes (e.g. 0/1 trial arm) and numeric monitor identifiers, but avoid
+        # offering every continuous measurement as a grouping dimension.
+        group_choices = _alphabetical([
+            c for c in available if c not in times and c not in selected_values
+            and (c not in numeric or c == settings.get("id_col", "identifier")
+                 or frame[c].nunique(dropna=False) <= 30)
+        ])
+        selected_groups = [c for c in settings.get("group_by", []) if c in group_choices]
         stages = max(2, len(available) + 1)
         return ui.div(
             ui.layout_sidebar(
@@ -2099,9 +2213,6 @@ if (!window.__apmColorPickerInstalled) {
                                      value=settings.get("min_completeness", 1.0), min=0, max=1, step=0.05),
                     ui.input_checkbox("include_empty_intervals", "Include entirely missing intervals",
                                       value=settings.get("include_empty_intervals", True)),
-                    ui.input_select("preview_rows", "Interval table preview",
-                                    choices={"500": "500 rows", "1000": "1,000 rows", "5000": "5,000 rows", "all": "All rows"},
-                                    selected="1000"),
                     ui.input_select("heatmap_variable", "Heatmap measurement",
                                     choices={v: v for v in selected_values},
                                     selected=selected_heatmap),
@@ -2109,6 +2220,12 @@ if (!window.__apmColorPickerInstalled) {
                          "Intervals outside the recording span cannot be inferred.",
                          class_="small text-muted"),
                     ui.download_button("download_quality_csv", "Export interval coverage CSV"),
+                        ),
+                        ui.nav_panel("Grouping",
+                            ui.input_selectize("group_by", "Grouping", choices={c: c for c in group_choices},
+                                multiple=True, selected=selected_groups),
+                            ui.p("A separate completeness heatmap is shown for each combination of selected groups.",
+                                 class_="small text-muted"),
                         ), id="quality_sidebar_tabs"), class_="summary-sidebar-tabs"),
                     title="Data quality", position="left", open="open", width="320px",
                 ),
@@ -2117,11 +2234,7 @@ if (!window.__apmColorPickerInstalled) {
                     ui.h4("Coverage by monitor and measurement"),
                     ui.output_data_frame("quality_summary_grid"),
                     ui.h4("Completeness heatmap"),
-                    ui.output_plot("quality_heatmap", height="420px"),
-                    ui.h4("Entirely missing interval sequences"),
-                    ui.output_data_frame("quality_gaps_grid"),
-                    ui.h4("Individual intervals"),
-                    ui.output_data_frame("quality_intervals_grid"),
+                    ui.output_ui("quality_heatmap_panels"),
                     class_="p-3", style="min-width: 0; width: 100%;",
                 ),
             ), class_="summary-quality-tab",
@@ -2242,7 +2355,9 @@ if (!window.__apmColorPickerInstalled) {
         @reactive.calc
         def quality_settings():
             conf = report_settings()
-            return {**conf, **filter_settings(), "source_steps": settings.get("source_steps", []), "heatmap_variable": selected_heatmap_variable(
+            return {**conf, **filter_settings(), "source_steps": settings.get("source_steps", []),
+                    "group_by": [c for c in list(input.group_by() or []) if c in frame.columns and c != conf["time_col"]],
+                    "heatmap_variable": selected_heatmap_variable(
                 conf["value_cols"], input.heatmap_variable())}
 
         @reactive.calc
@@ -2272,48 +2387,51 @@ if (!window.__apmColorPickerInstalled) {
         def quality_summary_grid():
             return render.DataGrid(quality_summary(report()), filters=True, width="100%", height="230px")
 
-        @render.data_frame
-        def quality_gaps_grid():
-            return render.DataGrid(missing_interval_runs(report()), filters=True, width="100%", height="190px")
-
-        @render.data_frame
-        def quality_intervals_grid():
-            data = report()
-            preview = input.preview_rows()
-            if preview != 'all':
-                data = data.head(int(preview))
-            data = data.copy()
-            if 'sampling_interval' in data:
-                data['sampling_interval'] = data['sampling_interval'].astype(str)
-            return render.DataGrid(data, filters=True, width="100%", height="320px")
-
-        @render.plot
-        def quality_heatmap():
-            import matplotlib.pyplot as plt
-            from matplotlib.colors import Normalize
+        @reactive.calc
+        def grouped_heatmaps():
+            # Reuse the same computed group matrices for the UI and each plot.
             conf = quality_settings()
-            matrix = quality_heatmap_data(report(), conf["heatmap_variable"], mode="threshold_coverage")
-            fig, ax = plt.subplots(figsize=(10, 4))
-            if matrix.empty:
-                ax.text(0.5, 0.5, "No data for selected measurement", ha="center", va="center")
-                ax.set_axis_off()
-                return fig
-            colors = plt.get_cmap("viridis").copy()
-            colors.set_bad("lightgray")
-            image = ax.imshow(matrix.to_numpy(dtype=float), aspect="auto", interpolation="nearest",
-                              cmap=colors, norm=Normalize(vmin=0, vmax=1))
-            ax.set_yticks(range(len(matrix.index)))
-            ax.set_yticklabels([str(v) for v in matrix.index], fontsize=8)
-            ticks = sorted(set([0, len(matrix.columns) - 1] + list(range(0, len(matrix.columns), max(1, len(matrix.columns) // 8)))))
-            ax.set_xticks(ticks)
-            ax.set_xticklabels([str(matrix.columns[i]) for i in ticks], rotation=35, ha="right", fontsize=8)
-            ax.set_xlabel("Aggregation interval")
-            ax.set_ylabel(conf["id_col"])
-            ax.set_title(f"{conf['heatmap_variable']} — complete at ≥ {conf['min_completeness']:.0%} coverage")
-            fig.colorbar(image, ax=ax, ticks=[0, .25, .5, .75, 1],
-                         label="Coverage (fraction; passing bins displayed as 100%)")
-            fig.tight_layout()
-            return fig
+            return quality_grouped_heatmaps(filtered_data(), conf)
+
+        # Output slots are registered once per index. Renaming groups or
+        # changing their number does not create repeated Shiny plot handlers.
+        registered_quality_plots = set()
+
+        @reactive.effect
+        def register_quality_plot_outputs():
+            groups = grouped_heatmaps()
+            for index in range(len(groups)):
+                if index in registered_quality_plots:
+                    continue
+
+                def draw_group(index=index):
+                    pairs = grouped_heatmaps()
+                    if index >= len(pairs):
+                        return None
+                    title, matrix = pairs[index]
+                    return quality_heatmap_figure(title, matrix, quality_settings())
+
+                # Shiny Outputs registers decorated renderers by calling the
+                # output object; it does not support item assignment.  Assign a
+                # distinct, stable name before decorating so dynamic outputs
+                # match the namespaced ui.output_plot slots above.
+                draw_group.__name__ = f"quality_heatmap_{index}"
+                output(render.plot(draw_group))
+                registered_quality_plots.add(index)
+
+        @render.ui
+        def quality_heatmap_panels():
+            pairs = grouped_heatmaps()
+            if not pairs:
+                return ui.p("No data for selected measurement", class_="text-muted")
+            return ui.div(*[
+                ui.div(
+                    ui.output_plot(session.ns(f"quality_heatmap_{index}"),
+                                   width="100%", height=f"{quality_heatmap_height(matrix)}px"),
+                    class_="mb-3", style="width: 100%; min-width: 0;",
+                )
+                for index, (_, matrix) in enumerate(pairs)
+            ], style="width: 100%; min-width: 0;")
 
         @render.download(filename="completeness_intervals.csv")
         def download_quality_csv():
@@ -2722,7 +2840,7 @@ if (!window.__apmColorPickerInstalled) {
 
             .summary-plot-container {width:100%; height:auto; aspect-ratio: 2 / 1; min-width:0; position:relative;}
             .summary-plot-container > * {width:100% !important;}
-            .summary-plot-container .shiny-plot-output {min-height:400px;}
+            .summary-plot-container .shiny-plot-output {min-height:0;}
             .summary-top-toolbar {display:flex; align-items:center; gap:0.5rem;
                                   flex-wrap:nowrap; margin-bottom:0; min-width:0;}
             .summary-toolbar-actions {display:flex; gap:0.4rem; flex-wrap:nowrap;
@@ -2767,7 +2885,13 @@ if (!window.__apmColorPickerInstalled) {
                 pending = false;
                 const width = Math.round(el.getBoundingClientRect().width);
                 if (!width) return;
-                const height = Math.round(width / 2);
+                const tab = el.closest('.summary-plot-tab');
+                const pct = (suffix) => {
+                  const control = tab?.querySelector('[id$="-' + suffix + '"]');
+                  const value = Number(control?.value);
+                  return Number.isFinite(value) && value >= 50 && value <= 200 ? value : 100;
+                };
+                const height = Math.round(width / 2 * (pct('plot_height_pct') / 100));
                 if (width === lastWidth && el.style.height === height + 'px') return;
                 lastWidth = width;
                 el.style.height = height + 'px';
@@ -2784,7 +2908,54 @@ if (!window.__apmColorPickerInstalled) {
             requestAnimationFrame(() => {installPending = false; install();});
           }).observe(document.body, {childList:true, subtree:true});
           document.addEventListener('shown.bs.tab', () => requestAnimationFrame(install));
+          // A dimension input does not change the container width, so the
+          // ResizeObserver must also be notified when the height percentage changes.
+          const resizeForDimensionInput = event => {
+            if (!event.target.matches('[id$="-plot_height_pct"]')) return;
+            const tab = event.target.closest('.summary-plot-tab');
+            const container = tab?.querySelector('.summary-plot-container');
+            if (!container) return;
+            const width = Math.round(container.getBoundingClientRect().width);
+            const h = Number(tab.querySelector('[id$="-plot_height_pct"]')?.value) || 100;
+            if (h >= 50 && h <= 200 && width > 0)
+              container.style.height = Math.round(width / 2 * (h / 100)) + 'px';
+          };
+          document.addEventListener('input', resizeForDimensionInput);
+          document.addEventListener('change', resizeForDimensionInput);
           install();
+          // The first click is cooperative. The independent browser reset remains
+          // available even if the Python event loop has stopped answering.
+          // No polling, timers, or recurring reactive invalidations are used.
+          let recoveryPaused = false;
+          const signalRecovery = (name) => {
+            if (window.Shiny && typeof window.Shiny.setInputValue === 'function') {
+              window.Shiny.setInputValue(name, Date.now(), {priority:'event'});
+            }
+          };
+          document.addEventListener('click', (event) => {
+            const stop = event.target.closest('#summary-stop-work');
+            const resume = event.target.closest('#summary-resume-work');
+            const reset = event.target.closest('#summary-reset-session');
+            if (!stop && !resume && !reset) return;
+            event.preventDefault();
+            const status = document.getElementById('summary-recovery-status');
+            const resumeButton = document.getElementById('summary-resume-work');
+            const resetButton = document.getElementById('summary-reset-session');
+            if (reset) {
+              if (window.confirm('Reset this Shiny session? Unsaved interface changes may be lost. ' +
+                  'A Python operation that is blocking the server may continue running.')) {
+                window.location.reload();
+              }
+              return;
+            }
+            recoveryPaused = Boolean(stop);
+            signalRecovery(recoveryPaused ? 'summary_stop_requested' : 'summary_resume_requested');
+            if (resumeButton) resumeButton.style.display = recoveryPaused ? '' : 'none';
+            if (resetButton) resetButton.style.display = recoveryPaused ? '' : 'none';
+            if (status) status.textContent = recoveryPaused
+              ? 'Stop requested. Resume when ready, or Reset session if still unresponsive.'
+              : 'Resume requested.';
+          });
           // Delegated listener also works when a dataset workspace is replaced.
           document.addEventListener('click', (event) => {
             const toggle = event.target.closest('#summary-toolbar-collapse-toggle, #standalone-toolbar-collapse-toggle');
@@ -2816,9 +2987,26 @@ if (!window.__apmColorPickerInstalled) {
                 ui.output_ui("view_edit_status"),
                 ui.input_action_button("delete_saved_plot", "Delete", class_="btn-outline-danger"),
                 ui.input_action_button("close_tab", "Close tab", class_="btn-outline-danger"),
+                # Browser-native recovery controls remain clickable when Shiny's
+                # server event loop cannot process an ordinary action button.
+                ui.tags.button("Stop", id="summary-stop-work", type="button",
+                               class_="btn btn-sm summary-stop-work",
+                               title="Pause new plot rendering; does not interrupt blocking Python code"),
+                ui.tags.button("Resume", id="summary-resume-work", type="button",
+                               class_="btn btn-sm btn-outline-secondary", style="display:none"),
+                ui.tags.button("Reset session", id="summary-reset-session", type="button",
+                               class_="btn btn-sm btn-outline-danger", style="display:none",
+                               title="Reload this browser session if it remains unresponsive"),
+                ui.tags.span("", id="summary-recovery-status", role="status",
+                             class_="summary-recovery-status"),
                 class_="summary-toolbar-actions summary-top-toolbar",
             ),
             ui.tags.style("""
+                .summary-stop-work {background:#f6c5c7 !important; border:1px solid #d78b91 !important;
+                    color:#70262d !important; font-weight:600;}
+                .summary-stop-work:hover {background:#edafb5 !important;}
+                .summary-recovery-status {font-size:.77rem; color:var(--bs-secondary-color);
+                    max-width:24rem; white-space:normal;}
                 .summary-info-content {max-width: 980px; margin: 1.2rem auto 3rem;
                                        padding: 0 1.25rem; line-height: 1.6;}
                 .summary-info-content h3 {margin-top: 2rem;}
@@ -2840,6 +3028,22 @@ if (!window.__apmColorPickerInstalled) {
         # touching plot-specific options or the plot cloning logic.
         if include_theme_picker:
             shinyswatch.theme_picker_server()
+        # An inexpensive, session-local cooperative pause. A synchronous
+        # operation already running cannot be forcibly cancelled by Shiny.
+        recovery_paused = reactive.value(False)
+
+        @reactive.effect
+        @reactive.event(input.summary_stop_requested)
+        def request_stop():
+            recovery_paused.set(True)
+            marker('recovery_stop_requested')
+
+        @reactive.effect
+        @reactive.event(input.summary_resume_requested)
+        def request_resume():
+            recovery_paused.set(False)
+            marker('recovery_resume_requested')
+
         next_tab = reactive.value(0)
         active_tabs = reactive.value(())
         workspace = WorkspaceController()
@@ -3140,7 +3344,7 @@ if (!window.__apmColorPickerInstalled) {
                         number = next_quality.get() + 1
                         tab_id = f"quality_{number}"
                         settings = views.restore_quality(preset_id)
-                        frame, _ = prepare_table_source(summary, restored_settings=settings)
+                        frame, _ = prepare_quality_source(summary, restored_settings=settings)
                         panel = ui.nav_panel(preset.get('name') or f"Quality {number}",
                                              quality_tab_ui(tab_id, frame, settings), value=tab_id)
                         snapshot = quality_tab_server(tab_id, frame, settings)
@@ -3194,7 +3398,7 @@ if (!window.__apmColorPickerInstalled) {
             with reactive.isolate():
                 initialized = initializer.new_quality(selected, number)
             frame, steps = initialized.frame, initialized.lineage
-            initial_settings = {"source_steps": steps}
+            initial_settings = initialized.settings
             panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(tab_id, frame, initial_settings), value=tab_id)
             settings = quality_tab_server(tab_id, frame, initial_settings)
             workspace.add_quality(tab_id, settings)
@@ -3243,7 +3447,7 @@ if (!window.__apmColorPickerInstalled) {
                     number = next_quality.get() + 1
                     next_quality.set(number)
                     replacement = f"quality_{number}"
-                    frame, _ = prepare_table_source(summary, restored_settings=settings)
+                    frame, _ = prepare_quality_source(summary, restored_settings=settings)
                     panel = ui.nav_panel(f"Quality {number}", quality_tab_ui(replacement, frame, settings), value=replacement)
                     quality_snapshot = quality_tab_server(replacement, frame, settings)
                     workspace.add_quality(replacement, quality_snapshot)

@@ -7,14 +7,14 @@ from __future__ import annotations
 
 SNAPSHOT_INPUT_KEYS = ("plot_type", "x", "y", "numeric_subset_columns", "datetime_start", "datetime_end",
         "group_by", "frequency", "aggregate", "only_complete", "flooring_timestamp",
-        "palette", "template", "title", "title_font_size", "plot_dpi", "legend_position",
+        "palette", "template", "title", "title_font_size", "plot_dpi", "plot_height_pct", "legend_position",
         "legend_inside", "legend_labels", "legend_columns", "legend_font_size", "multi_y_color_by",
         "x_axis_label", "y_axis_label", "x_tick_labels", "y_tick_labels", "x_min", "x_max", "y_min", "y_max",
         "show_grid", "x_major_ticks", "x_minor_ticks", "y_major_ticks",
         "y_minor_ticks", "axis_font_size", "tick_font_size",
         "line_width", "line_alpha", "line_style", "scatter_size", "scatter_marker",
         "scatter_alpha", "bins", "hist_density", "hist_stacked", "hist_type",
-        "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation", "bar_box_width",
+        "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation", "bar_box_width", "bar_stacking",
         "multi_panel", "independent_panel_limits", "panel_by", "panel_titles",
         "panel_font_size", "panel_hspace", "panel_wspace", "visible_elements")
 
@@ -47,6 +47,9 @@ def snapshot_inputs(current, input_values):
     """
     from copy import deepcopy
     result = deepcopy(current)
+    # Retired option: retain compatibility when loading older saved plots,
+    # but do not write a no-longer-effective width control on new saves.
+    result.pop("plot_width_pct", None)
     for key, value in input_values.items():
         if key in SNAPSHOT_INPUT_KEYS and value is not None:
             result[key] = list(value) if isinstance(value, (tuple, list)) else value

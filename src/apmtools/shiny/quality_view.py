@@ -116,3 +116,83 @@ def missing_interval_runs(report):
                 run = []
         finish()
     return pd.DataFrame(rows, columns=fields)
+
+
+def quality_grouped_heatmaps(data, settings):
+    """Return ``(group title, coverage matrix)`` pairs for selected groupings.
+
+    Grouping is performed on raw filtered observations, independently of any
+    plot/table aggregation. The Stage 4A engine is reused for each subset.
+    """
+    group_cols = list(dict.fromkeys(settings.get('group_by', []) or []))
+    missing = [name for name in group_cols if name not in data.columns]
+    if missing:
+        raise ValueError(f"Grouping columns are absent: {missing}")
+    if any(name == settings.get('time_col', 'datetime') for name in group_cols):
+        raise ValueError('The timestamp column cannot be used for grouping')
+    variable = selected_heatmap_variable(settings.get('value_cols', []), settings.get('heatmap_variable'))
+    if data.empty or not variable:
+        return []
+    if not group_cols:
+        return [('All observations', quality_heatmap_data(
+            quality_report(data, settings), variable, mode='threshold_coverage'))]
+    results = []
+    for key, subset in data.groupby(group_cols, dropna=False, sort=True, observed=True):
+        keys = key if isinstance(key, tuple) else (key,)
+        title = ', '.join(f'{name}: {value}' for name, value in zip(group_cols, keys))
+        matrix = quality_heatmap_data(quality_report(subset, settings), variable,
+                                      mode='threshold_coverage')
+        results.append((title, matrix))
+    return results
+
+
+def quality_heatmap_height(matrix):
+    """Responsive per-group output height in CSS pixels (one figure per group).
+
+    Expand with the number of monitor rows, without any shared fixed-height
+    viewport or cap that would compress larger groups.
+    """
+    return max(360, 270 + 32 * len(matrix.index))
+
+
+def quality_heatmap_figure(title, matrix, settings):
+    """Draw exactly one independent, titled completeness heatmap.
+
+    The Matplotlib figure and colourbar belong only to the supplied group.
+    ``quality_grouped_heatmaps`` computes matrices once upstream and the
+    Shiny output renders each independently.
+    """
+    import matplotlib.pyplot as plt
+    from matplotlib.colors import Normalize
+
+    height = quality_heatmap_height(matrix)
+    fig, ax = plt.subplots(figsize=(10, height / 100))
+    if matrix.empty:
+        ax.text(0.5, 0.5, "No data for selected measurement",
+                ha="center", va="center", transform=ax.transAxes)
+        ax.set_axis_off()
+        ax.set_title(str(title))
+    else:
+        colors = plt.get_cmap("viridis").copy()
+        colors.set_bad("lightgray")
+        image = ax.imshow(matrix.to_numpy(dtype=float), aspect="auto",
+                          interpolation="nearest", cmap=colors,
+                          norm=Normalize(vmin=0, vmax=1))
+        ax.set_yticks(range(len(matrix.index)))
+        ax.set_yticklabels([str(value) for value in matrix.index], fontsize=8)
+        count = len(matrix.columns)
+        step = max(1, count // 8)
+        ticks = sorted(set([0, count - 1] + list(range(0, count, step))))
+        ax.set_xticks(ticks)
+        ax.set_xticklabels([str(matrix.columns[i]) for i in ticks],
+                           rotation=35, ha="right", fontsize=8)
+        ax.set_xlabel("Aggregation interval")
+        ax.set_ylabel(str(settings.get("id_col", "identifier")))
+        ax.set_title(
+            f"{title} — {settings.get('heatmap_variable')} "
+            f"(complete at ≥ {float(settings.get('min_completeness', 1)):.0%})"
+        )
+        fig.colorbar(image, ax=ax, ticks=[0, .25, .5, .75, 1],
+                     label="Coverage (passing bins displayed as 100%)")
+    fig.tight_layout()
+    return fig

@@ -34,7 +34,11 @@ def _standalone_matplotlib_script(spec, options):
     import inspect
     import pprint
 
+    from .bar_stacking import selected_stack_columns, stacked_bar_segments, stacked_bar_legend_key
+    from .legend_identity import canonical_legend_key, canonical_legend_map, legend_label
     dependencies = (
+        selected_stack_columns, stacked_bar_segments, stacked_bar_legend_key,
+        canonical_legend_key, canonical_legend_map, legend_label,
         _axis_label, _parse_label_map, _series_style_maps, _bounded_float,
         _line_style, _scatter_marker, _composite_labels,
         _frequency_timedelta, _add_gap_sections, _matplotlib_defaults,
@@ -43,6 +47,17 @@ def _standalone_matplotlib_script(spec, options):
         _fit_inside_legends, _place_outside_legend, _matplotlib_direct_figure,
     )
     source = "\n\n".join(inspect.getsource(fn) for fn in dependencies)
+    # Stacking helpers are embedded above, not imported from a package in the
+    # standalone script. Other legacy renderer imports are unchanged.
+    source = source.replace("from .bar_stacking import stacked_bar_segments, stacked_bar_legend_key", "")
+    source = source.replace("from .bar_stacking import stacked_bar_segments", "")
+    source = source.replace("from .bar_stacking import selected_stack_columns", "")
+    source = source.replace("from .bar_stacking import stacked_bar_legend_key", "")
+    source = source.replace("from .legend_identity import canonical_legend_map, legend_label", "")
+    # Profiling decorators belong to the package and are not available in the
+    # standalone script; strip them from embedded source.
+    source = "\n".join(line for line in source.split("\n")
+                       if not line.lstrip().startswith("@traced("))
     metadata = {key: spec.get(key) for key in
                 ("kind", "x", "ys", "groups", "categories", "frequency")}
     date_columns = [str(c) for c in spec["data"].columns
@@ -52,7 +67,7 @@ def _standalone_matplotlib_script(spec, options):
         '# Run: python plot_script.py\n'
         '# Dependencies: pip install pandas numpy matplotlib\n'
         'from pathlib import Path\n'
-        'import pandas as pd\nimport numpy as np\n'
+        'import pandas as pd\nimport numpy as np\nimport re\n'
         'from datetime import datetime, date, timedelta\n\n'
         'VARIABLE_UNITS = ' + pprint.pformat(VARIABLE_UNITS, sort_dicts=True) + '\n'
         '_MPL_PALETTES = ' + pprint.pformat(_MPL_PALETTES, sort_dicts=True) + '\n\n'
