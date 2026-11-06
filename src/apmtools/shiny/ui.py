@@ -13,7 +13,7 @@ from ..units import upas_units, lascar_units, purple_units
 
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
-from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices, bar_box_category_choices
+from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices, bar_box_category_choices, available_group_columns
 from .view_aggregation import normalize_statistics
 from .quality_filters import filter_quality_data
 from .derived_views import prepare_table_source
@@ -93,14 +93,21 @@ def _build_summary_ui_server(
     columns = _alphabetical(summary.columns)
     column_map = {str(c): c for c in summary.columns}
     numeric_columns = _alphabetical(_numeric_columns(summary))
-    categorical_columns = _categorical_columns(summary)
+    categorical_columns = _alphabetical(
+        _categorical_columns(summary)
+        + [name for name in FREQUENCIES.values()
+           if name is not None and name in summary.columns]
+    )
     datetime_columns = _datetime_columns(summary)
     timedelta_columns = _timedelta_columns(summary)
     time_group_columns = [f for f in FREQUENCIES.values() if f is not None and f not in column_map]
-    group_columns = _alphabetical(
+    # Real source columns remain eligible regardless of aggregation. Generated
+    # frequency columns are added reactively only while that aggregation runs.
+    physical_group_columns = _alphabetical(
         [c for c in columns if not pd.api.types.is_numeric_dtype(summary[column_map[c]])]
-        + time_group_columns
+        + [c for c in FREQUENCIES.values() if c is not None and c in column_map]
     )
+    group_columns = physical_group_columns
     for name in time_group_columns:
         column_map[name] = name
 
@@ -415,7 +422,7 @@ if (!window.__apmColorPickerInstalled) {
         )
 
     @module.server
-    def plot_tab_server(input, output, session, initial_filters=None, config_tab_id=None):
+    def plot_tab_server(input, output, session, initial_filters=None, config_tab_id=None, *, recovery_paused):
             initial_filters = initial_filters or {}
             # One stable output per stage: changing a later stage does not
             # recreate the inputs belonging to earlier stages.
@@ -1090,7 +1097,10 @@ if (!window.__apmColorPickerInstalled) {
                 y_raw = _optional_input("y", [])
                 xs = [x_raw] if isinstance(x_raw, str) else list(x_raw or [])
                 ys = [y_raw] if isinstance(y_raw, str) else list(y_raw or [])
-                choices = list(group_columns)
+                choices = available_group_columns(
+                    physical_group_columns, time_group_columns,
+                    _optional_input("frequency", "None"), _optional_input("aggregate", []),
+                )
                 if kind in ("histogram", "scatter") and len(xs) > 1:
                     choices.append("variables_x")
                 if kind != "histogram" and len(ys) > 1:
@@ -1115,7 +1125,7 @@ if (!window.__apmColorPickerInstalled) {
                     if isinstance(restored, str):
                         restored = [restored]
                     for name in restored:
-                        if name in ("variables_x", "variables_y", "statistics") and name in choices and name not in selected:
+                        if name in (*time_group_columns, "variables_x", "variables_y", "statistics") and name in choices and name not in selected:
                             selected.append(name)
                 ui.update_selectize("group_by", choices={c: c for c in choices}, selected=selected)
 
@@ -1150,8 +1160,13 @@ if (!window.__apmColorPickerInstalled) {
                 ):
                     return pd.DataFrame()
 
+                valid_groups = available_group_columns(
+                    physical_group_columns, time_group_columns,
+                    input.frequency(), input.aggregate(),
+                )
                 selected_groups = [g for g in (input.group_by() or [])
-                                   if g not in ("variables_x", "variables_y", "statistics")]
+                                   if g not in ("variables_x", "variables_y", "statistics")
+                                   and g in valid_groups]
                 # Generate only explicitly requested temporal categories. A
                 # selected X frequency can be used without adding it to Group by.
                 # The returned index column identifies original source rows.
@@ -1235,7 +1250,12 @@ if (!window.__apmColorPickerInstalled) {
                 selected_x = ([x_input] if isinstance(x_input, str) else list(x_input or []))
                 y_input = None if selected_plot == "histogram" else input.y()
                 selected_y = ([y_input] if isinstance(y_input, str) else list(y_input or []))
-                selected_groups = list(input.group_by() or [])
+                valid_groups = available_group_columns(
+                    physical_group_columns, time_group_columns,
+                    input.frequency(), input.aggregate(),
+                )
+                selected_groups = [g for g in (input.group_by() or [])
+                                   if g in valid_groups or g in ("variables_x", "variables_y", "statistics")]
                 physical_groups = [g for g in selected_groups if g not in ("variables_x", "variables_y", "statistics")]
                 frequency = FREQUENCIES.get(input.frequency())
                 should_aggregate = bool(normalize_statistics(input.aggregate()))
@@ -3360,7 +3380,7 @@ if (!window.__apmColorPickerInstalled) {
                     tab_id = f"plot_{number}"
                     initialized = initializer.restored_plot(preset_id, tab_id, number)
                     panel = ui.nav_panel(initialized.label, plot_tab_ui(tab_id, initialized.settings), value=tab_id)
-                    snapshot = plot_tab_server(tab_id, initialized.settings, config_tab_id=tab_id)
+                    snapshot = plot_tab_server(tab_id, initialized.settings, config_tab_id=tab_id, recovery_paused=recovery_paused)
                     workspace.add_plot(tab_id, snapshot)
                     begin_history(tab_id, initialized.settings, restored=True)
                     register_draft(tab_id, snapshot)
@@ -3382,7 +3402,7 @@ if (!window.__apmColorPickerInstalled) {
             with reactive.isolate():
                 initialized = initializer.new_plot(selected, number)
             new_panel = ui.nav_panel(initialized.label, plot_tab_ui(tab_id, initialized.settings), value=tab_id)
-            snapshot = plot_tab_server(tab_id, initialized.settings, config_tab_id=tab_id)
+            snapshot = plot_tab_server(tab_id, initialized.settings, config_tab_id=tab_id, recovery_paused=recovery_paused)
             workspace.add_plot(tab_id, snapshot)
             begin_history(tab_id, initialized.settings)
             register_draft(tab_id, snapshot)
@@ -3458,7 +3478,7 @@ if (!window.__apmColorPickerInstalled) {
                     replacement = f"plot_{number}"
                     label = f"Plot {number}"
                     panel = ui.nav_panel(label, plot_tab_ui(replacement, settings), value=replacement)
-                    snapshot = plot_tab_server(replacement, settings, config_tab_id=replacement)
+                    snapshot = plot_tab_server(replacement, settings, config_tab_id=replacement, recovery_paused=recovery_paused)
                     workspace.add_plot(replacement, snapshot)
                     manager.update(replacement, settings)
                     register_draft(replacement, snapshot)

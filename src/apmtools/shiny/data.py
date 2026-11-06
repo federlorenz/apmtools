@@ -11,6 +11,22 @@ from ..units import upas_units, lascar_units, purple_units
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 
 
+def available_group_columns(physical_columns, generated_frequencies, selected_frequency,
+                            selected_statistics):
+    """Offer derived time groups only when their frequency aggregation is active.
+
+    Physical input columns, including a real ``hour`` column, are never removed.
+    The generated set must exclude any names present in the source dataframe.
+    """
+    frequency = FREQUENCIES.get(selected_frequency, selected_frequency)
+    from .view_aggregation import normalize_statistics
+    choices = list(dict.fromkeys(physical_columns))
+    if (normalize_statistics(selected_statistics) and frequency is not None
+            and frequency in generated_frequencies and frequency not in choices):
+        choices.append(frequency)
+    return choices
+
+
 def bar_box_category_choices(categorical_columns, selected_frequency, selected_statistics=None):
     """Add the selected frequency category only with active statistical aggregation.
 

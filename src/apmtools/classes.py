@@ -7,9 +7,74 @@ from datetime import timedelta
 from io import StringIO
 from csv import writer
 from dateutil.parser import parse
+import functools
+import inspect
+import json
+import operator
+from functools import reduce
 
 from .units import upas_units, lascar_units, purple_units, lcm_units
 from .completeness import analyse_completeness, complete_interval_mask
+from .history_codec import encode_value, decode_value, load_history, save_history as _save_history_file
+
+
+_OPS = {">": operator.gt, ">=": operator.ge, "<": operator.lt,
+        "<=": operator.le, "==": operator.eq, "!=": operator.ne}
+
+def _evaluate_condition(df, spec):
+    """spec examples:
+       {"column": "age", "op": ">=", "value": 18}
+       {"column": "group", "op": "isin", "value": ["a", "b"]}
+       {"column": "age", "op": "isna"}
+       {"and": [spec, spec, ...]} / {"or": [...]} / {"not": spec}
+    """
+    if "and" in spec:
+        return reduce(operator.and_, (_evaluate_condition(df, s) for s in spec["and"]))
+    if "or" in spec:
+        return reduce(operator.or_, (_evaluate_condition(df, s) for s in spec["or"]))
+    if "not" in spec:
+        return ~_evaluate_condition(df, spec["not"])
+    col, op = df[spec["column"]], spec["op"]
+    if op == "isin":
+        return col.isin(spec["value"])
+    if op == "isna":
+        return col.isna()
+    if op == "notna":
+        return col.notna()
+    return _OPS[op](col, spec["value"])
+
+def _as_mask(df, m):
+    """Condition dict, boolean Series or array -> clean boolean Series."""
+    if isinstance(m, dict):
+        m = _evaluate_condition(df, m)
+    return pd.Series(m, index=df.index).fillna(False).astype(bool)
+
+def recorded(func):
+    """Run the method, then append the call to the result's `history`.
+    Raises TypeError up front if the arguments can't be stored in JSON."""
+    sig = inspect.signature(func)
+
+    @functools.wraps(func)
+    def wrapper(self, *args, **kwargs):
+        bound = sig.bind(self, *args, **kwargs)
+        bound.apply_defaults()
+        params = {k: v for k, v in bound.arguments.items() if k != "self"}
+        if isinstance(params.get("mapping"), dict):          # keep key types
+            params["mapping"] = [[k, v] for k, v in params["mapping"].items()]
+        try:
+            params = encode_value(params)
+        except TypeError as e:
+            raise TypeError(
+                f"{func.__name__}: arguments must be history-serializable "
+                f"(no masks, Series or callables). {e}") from None
+
+        result = func(self, *args, **kwargs)
+        result.history = list(getattr(self, "history", None) or []) + [
+            {"method": func.__name__, "args": params}]
+        return result
+    return wrapper
+
+###
 
 class DictionaryPlus(dict):
     def __init__(self, *args, **kwargs):
@@ -458,12 +523,21 @@ class Dataset(DictionaryPlus):
                 f"\nSubset by {filter_dict} on style {filter_style} by condition {condition}"
             return a
 
-    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, utc_timezone_shift=0, interpolate=False, add_m={}):
+    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, utc_timezone=0, interpolate=False, add_m={}, message_callback=None):
 
         from .data_processing import upas_processing, lascar_processing, purple_processing, lcm_processing
 
+        def emit(message):
+            # Preserve the original console output; the callback is opt-in.
+            print(message)
+            if message_callback is not None:
+                try:
+                    message_callback(str(message))
+                except Exception:
+                    pass  # A UI listener must not terminate a filesystem scan.
+
         if len(set(levels).intersection(set(["identifier", "start", "end", "length", "datetime", "timedelta","pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))) > 0:
-            print(
+            emit(
                 f"the following levels names are not allowed: {set(levels).intersection(set(["identifier", "start", "end", "length", "datetime", "timedelta", "pm25", "pm25correctedrh", "pm25correctedrhandgrav", "filterid", "grav_not", "grav","PM2.5","PM10","C02","NO2"]))}. Please choose different level names")
             return
         if levels_dict == None:
@@ -494,7 +568,7 @@ class Dataset(DictionaryPlus):
                 pass
             elif os.path.isfile(f"{directory}{j}"):
                 if monitor_signature(f"{directory}{j}") == None:
-                    print(
+                    emit(
                         f"file {directory}{j} is not associated with any monitor type.")
                 else:
                     monitor = monitor_signature(f"{directory}{j}")
@@ -512,7 +586,7 @@ class Dataset(DictionaryPlus):
                                     processed.m[key] = value
                                 self[str(uuid.uuid4())] = processed
                             except:
-                                print(
+                                emit(
                                     f"processing of file {directory}{j} failed. Is this a {monitor} file?")
                         case "lascar":
                             try:
@@ -527,12 +601,12 @@ class Dataset(DictionaryPlus):
                                     processed.m[key] = value
                                 self[str(uuid.uuid4())] = processed
                             except:
-                                print(
+                                emit(
                                     f"processing of file {directory}{j} failed. Is this a {monitor} file?")
                         case "lcm":
                             try:
                                 processed = lcm_processing(
-                                    directory, file=j, interpolate_data=interpolate, timezone_shift=timedelta(hours=utc_timezone_shift))
+                                    directory, file=j, interpolate_data=interpolate, timezone_shift=timedelta(hours=utc_timezone))
                                 for k, v in levels_dict.items():
                                     if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
                                         processed.m[k] = v
@@ -542,12 +616,12 @@ class Dataset(DictionaryPlus):
                                     processed.m[key] = value
                                 self[str(uuid.uuid4())] = processed
                             except:
-                                print(
+                                emit(
                                     f"processing of file {directory}{j} failed. Is this a {monitor} file?")
                         case "purple":
                             try:
                                 processed = purple_processing(
-                                    f"{directory}/", timezone_shift=timedelta(hours=utc_timezone_shift), interpolate_data=interpolate)
+                                    f"{directory}/", timezone_shift=timedelta(hours=utc_timezone), interpolate_data=interpolate)
                                 for k, v in levels_dict.items():
                                     if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
                                         processed.m[k] = v
@@ -558,7 +632,7 @@ class Dataset(DictionaryPlus):
                                 self[str(uuid.uuid4())] = processed
                                 break
                             except:
-                                print(
+                                emit(
                                     f"processing of purple air directory {directory}{j} failed.")
                                 break
 
@@ -573,9 +647,17 @@ class Dataset(DictionaryPlus):
                             if levels[r] not in levels[:level+1]:
                                 levels_dict[levels[r]] = None
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
-                                     level=level+1, monitor=monitor, levels_dict=levels_dict, utc_timezone_shift=utc_timezone_shift, interpolate=interpolate, add_m=add_m)
+                                     level=level+1, monitor=monitor, levels_dict=levels_dict, utc_timezone=utc_timezone, interpolate=interpolate, add_m=add_m, message_callback=message_callback)
 
-    def save_summary(self, save_csv=True, filename="./", all_variables=False, merged=True):
+    def save_summary(self, save_csv=True, filename="./", all_variables=False, merged=True, message_callback=None):
+        def emit(message):
+            print(message)
+            if message_callback is not None:
+                try:
+                    message_callback(str(message))
+                except Exception:
+                    pass  # Reporting cannot corrupt Summary construction.
+
         types_in = list(set(type(v) for v in self.values()))
 
         def match_class(x):
@@ -629,7 +711,7 @@ class Dataset(DictionaryPlus):
                 df.writerow(columns1+columns2+columns3+columns4)
                 count = 0
                 for k, v in d.items():
-                    print(f"processing UPAS {count+1} out of {len(d)}")
+                    emit(f"processing UPAS {count+1} out of {len(d)}")
                     v = v.dropna(subset="PM2_5MC")
                     identifier = k
                     start = v.start
@@ -698,7 +780,7 @@ class Dataset(DictionaryPlus):
                 df.writerow(columns1+columns2+columns3)
                 count = 0
                 for k, v in d.items():
-                    print(f"processing Lascar {count+1} out of {len(d)}")
+                    emit(f"processing Lascar {count+1} out of {len(d)}")
                     v = v.dropna(subset="CO(ppm)")
                     identifier = k
                     start = v.start
@@ -748,7 +830,7 @@ class Dataset(DictionaryPlus):
                 df.writerow(columns1+columns2+columns3+columns4)
                 count = 0
                 for k, v in d.items():
-                    print(f"processing Lcm {count+1} out of {len(d)}")
+                    emit(f"processing Lcm {count+1} out of {len(d)}")
                     v = v.dropna(subset="PM2.5")
                     identifier = k
                     start = v.start
@@ -796,7 +878,7 @@ class Dataset(DictionaryPlus):
                 df.writerow(columns1+columns2+columns3+columns4)
                 count = 0
                 for k, v in d.items():
-                    print(f"processing Purple {count+1} out of {len(d)}")
+                    emit(f"processing Purple {count+1} out of {len(d)}")
                     v = v.dropna(subset="pm_adj")
                     identifier = k
                     start = v.start
@@ -1012,7 +1094,7 @@ class Group(pd.DataFrame):
 
 class Summary(pd.DataFrame):
 
-    _metadata = ['metadata', 'views', 'variable', 'description']
+    _metadata = ['metadata', 'views', 'variable', 'description', "history"]
 
     @property
     def _constructor(self):
@@ -1025,6 +1107,7 @@ class Summary(pd.DataFrame):
         self.variable = variable
         self.description = description
         self.views = None
+        self.history = None
 
     @property
     def plots(self):
@@ -1036,8 +1119,17 @@ class Summary(pd.DataFrame):
         self.views = value
 
     def __setattr__(self, name, value):
+        """Assign Summary metadata without pandas' column-creation fallback.
+
+        Older pickles may hold a stale instance-level ``_metadata``.  Always
+        consult the class declaration for metadata names; ordinary DataFrame
+        attributes and column-assignment semantics continue through pandas.
+        """
         if name in ("plots", "views") and value is not None and not isinstance(value, list):
             raise TypeError("Summary.views must be None or a list")
+        if name in type(self)._metadata or name == "plots":
+            object.__setattr__(self, name, value)
+            return
         super().__setattr__(name, value)
 
     def __setstate__(self, state):
@@ -1051,7 +1143,7 @@ class Summary(pd.DataFrame):
         if "views" not in self.__dict__:
             object.__setattr__(self, "views", legacy)
         for name, default in (("views", None), ("variable", None),
-                              ("description", ""), ("metadata", set())):
+                              ("description", ""), ("metadata", set()), ("history", None)):
             if name not in self.__dict__:
                 object.__setattr__(self, name, default)
 
@@ -1061,67 +1153,48 @@ class Summary(pd.DataFrame):
             self.metadata = getattr(other, "metadata", set()).copy()
             self.description = getattr(other, "description", "")
             self.views = getattr(other, "views", getattr(other, "plots", None))
+            self.history = copy.deepcopy(getattr(other, "history", None))
 
         return self
 
-    def subset(self, filter_dict={}, filter_style='all'):
-        """Return rows matching values specified in ``filter_dict``.
-
-        Parameters
-        ----------
-        filter_dict : dict
-            Mapping of column names to iterables of accepted values.
-        filter_style : {'all', 'any', 'negative all', 'negative any'}
-            ``all`` keeps rows matching every supplied condition; ``any`` keeps
-            rows matching at least one condition. ``negative all`` keeps rows
-            that match none of the supplied conditions, and ``negative any``
-            keeps rows that do not match any individual condition.
-
-        Notes
-        -----
-        Filtering is performed positionally rather than assuming that the
-        DataFrame index is ``0..n-1``.  This is important because ``Summary``
-        objects commonly acquire non-contiguous indices after previous
-        filtering operations.
-        """
-        
+    def _subset_impl(self, filter_dict=None, filter_style='all'):
+        """Apply categorical filters without recording an internal history step."""
+        if filter_dict is None:
+            filter_dict = {}
         if not isinstance(filter_dict, dict):
-            print("subset function error: type filter_dict should be dict")
-            return
-
-        return_dict = copy.deepcopy(self)
-        return_dict.views = None
-        a = {}
-
+            raise TypeError("subset: filter_dict must be a dictionary")
         if filter_style not in {'all', 'any', 'negative all', 'negative any'}:
-            return return_dict
+            raise ValueError(f"subset: invalid filter_style {filter_style!r}")
 
-
-        # Only conditions referring to existing columns can be evaluated.
         conditions = []
         for column, values in filter_dict.items():
-            if type(values) is not list:
+            if not isinstance(values, list):
                 values = [values]
-            if column in return_dict.columns:
-                conditions.append(return_dict[column].isin(values).to_numpy())
+            if column in self.columns:
+                conditions.append(self[column].isin(values).to_numpy())
 
         if not conditions:
-            return return_dict
+            result = self.copy(deep=False)
+        else:
+            conditions = pd.DataFrame(conditions, dtype=bool)
+            if filter_style == 'all':
+                mask = conditions.all(axis=0).to_numpy()
+            elif filter_style == 'any':
+                mask = conditions.any(axis=0).to_numpy()
+            elif filter_style == 'negative all':
+                mask = (~conditions).all(axis=0).to_numpy()
+            else:  # negative any
+                mask = (~conditions).any(axis=0).to_numpy()
+            result = self.loc[mask].copy()
 
-        conditions = pd.DataFrame(conditions, dtype=bool)
+        result.views = None
+        result.description = self.description + f"\nSubset by {filter_dict} on style {filter_style}"
+        return result
 
-        if filter_style == 'all':
-            mask = conditions.all(axis=0).to_numpy()
-        elif filter_style == 'any':
-            mask = conditions.any(axis=0).to_numpy()
-        elif filter_style == 'negative all':
-            mask = (~conditions).all(axis=0).to_numpy()
-        else:  # negative any
-            mask = (~conditions).any(axis=0).to_numpy()
-        
-        return_dict.description = self.description + f"\nSubset by {filter_dict} on style {filter_style}"
-
-        return return_dict.loc[mask]
+    @recorded
+    def subset(self, filter_dict=None, filter_style='all'):
+        """Return a new Summary matching categorical filters, recording one step."""
+        return self._subset_impl(filter_dict, filter_style)
 
     def show(self, number=0, key=None):
         """
@@ -1139,6 +1212,7 @@ class Summary(pd.DataFrame):
         except:
             print("something's wrong")
 
+    @recorded
     def dtfilter(
             self,
             time_start=None,
@@ -1146,45 +1220,51 @@ class Summary(pd.DataFrame):
             date_start=None,
             date_end=None,
             day=None):
-        """Filters a file by time or date\n
-            Input time as dt.time(hrs,min), and date as dt.date(year,month,day),\n
-            and day as [1,2] list of days, with 1 Monday and 7 Sunday,\n
-            if selecting a specific date interval that includes time, just specify\n
-            that as dt.datetime interval under date_start and date_end"""
-        if type(time_start) is str:
+        """Filter datetime values, recording one reproducible history step.
+
+        Date intervals are start-inclusive and end-exclusive. With both time
+        endpoints supplied, an overnight interval crosses midnight. Weekdays
+        are ISO values 1 (Monday) through 7 (Sunday).
+        """
+        if isinstance(time_start, str):
             time_start = parse(time_start).time()
-        if type(time_end) is str:
+        if isinstance(time_end, str):
             time_end = parse(time_end).time()
-        if type(date_start) is str:
+        if isinstance(date_start, str):
             date_start = parse(date_start)
-        if type(date_end) is str:
+        if isinstance(date_end, str):
             date_end = parse(date_end)
 
+        # Always start with a fresh mask so even no-op calls return a new object.
+        mask = pd.Series(True, index=self.index)
+        dtcol = self["datetime"]
         if date_start is not None:
-            self = self.loc[self["datetime"] >= date_start]
+            mask &= dtcol >= date_start
         if date_end is not None:
-            self = self.loc[self["datetime"] < date_end]
-        if (time_start is not None) & (time_end is not None):
-            if time_start > time_end:
-                self = self.loc[(self["datetime"].map(lambda x:x.time()) >= time_start)
-                                | (self["datetime"].map(lambda x: x.time()) < time_end)]
+            mask &= dtcol < date_end
+        if time_start is not None or time_end is not None:
+            times = pd.to_datetime(dtcol).dt.time
+            if time_start is not None and time_end is not None:
+                if time_start > time_end:
+                    mask &= ((times >= time_start) | (times < time_end))
+                else:
+                    mask &= ((times >= time_start) & (times < time_end))
+            elif time_start is not None:
+                mask &= times >= time_start
             else:
-                self = self.loc[(self["datetime"].map(lambda x: x.time()) >= time_start)
-                                & (self["datetime"].map(lambda x: x.time()) < time_end)]
-        if (time_start is not None) & (time_end is None):
-            self = self.loc[self["datetime"].map(
-                lambda x: x.time()) >= time_start]
-        if (time_start is None) & (time_end is not None):
-            self = self.loc[self["datetime"].map(
-                lambda x: x.time()) <= time_end]
-
+                # Preserve the existing end-only inclusive convention.
+                mask &= times < time_end
         if day is not None:
-            self = self.loc[[a in day for a in [self["datetime"].map(lambda x: x.date().isoweekday())
-                                                for i in range(len(self["datetime"]))]]]
-            
-        self.description = self.description + \
-            f"\nFiltered by {time_start if time_start != None else ""} till {time_end if time_end != None else ""}, {date_start if date_start != None else ""} till {date_end if date_end != None else ""}, {day if day != None else ""}"
-        result = self.reset_index()
+            weekdays = pd.to_datetime(dtcol).dt.isocalendar().day
+            mask &= weekdays.isin(day if isinstance(day, (list, tuple, set)) else [day])
+
+        result = self.loc[mask.fillna(False).to_numpy()].copy().reset_index()
+        result.description = (self.description +
+            f"\nFiltered by {time_start if time_start is not None else ''} till "
+            f"{time_end if time_end is not None else ''}, "
+            f"{date_start if date_start is not None else ''} till "
+            f"{date_end if date_end is not None else ''}, "
+            f"{day if day is not None else ''}")
         result.views = None
         return result
 
@@ -1445,13 +1525,139 @@ class Summary(pd.DataFrame):
 
         return output
     
+    @recorded
     def get_monitor(self, value):
-        
-        out = self.subset({"monitor": [value]})
-        out = out.dropna(axis=1,how="all")
-        out.views = None
-        return out
+        """Select a monitor without separately recording the internal subset."""
+        result = self._subset_impl({"monitor": [value]}, 'all')
+        result = result.dropna(axis=1, how="all")
+        result.views = None
+        return result
 
+    @recorded
+    def change_values(self, column, mapping):
+        if not isinstance(mapping, dict):
+            mapping = {k: v for k, v in mapping}
+        result = self.copy()
+        datatype = result[column].dtype
+
+
+        def map_value(x):
+            try:
+                return mapping.get(x, x)
+            except TypeError:  # x is unhashable, so it can't be a key in mapping
+                return x
+
+        result[column] = result[column].map(map_value)
+
+        try:
+            result[column] = result[column].astype(datatype)
+        except (ValueError, TypeError):
+            pass
+
+        result.views = None
+        return result
+
+    @recorded
+    def map_values(self, target_column, mask, when_true, when_false=None, subset=None):
+        """mask:   condition dict deciding True/False, e.g.
+                   {"column": "age", "op": ">=", "value": 18}
+        when_false: if None, rows where the mask is False keep their values.
+        subset: optional condition dict; only rows satisfying it are eligible
+                for change. Rows outside it always keep their original values.
+        Mask and subset are both evaluated on the data as it was on entry.
+        """
+        result = self.copy()
+        original = result[target_column]
+        datatype = original.dtype
+
+        mask = _as_mask(result, mask)
+        scope = (_as_mask(result, subset) if subset is not None
+                 else pd.Series(True, index=result.index))
+
+        if when_false is None:
+            new_values = original.where(~(mask & scope), when_true)
+        else:
+            new_values = pd.Series(
+                np.where(mask, when_true, when_false), index=result.index
+            ).where(scope, original)
+
+        result[target_column] = new_values
+        try:
+            result[target_column] = result[target_column].astype(datatype)
+        except (ValueError, TypeError):
+            pass
+
+        result.views = None
+        return result
+
+    @recorded
+    def edit_columns(self, action, column, new_name=None, fill=None):
+        """Return a modified copy of the DataFrame; the original is never changed.
+
+        action:   "add" | "rename" | "remove" | "duplicate"
+        column:   add       -> name of the new column
+                rename    -> existing column to rename
+                remove    -> existing column to drop
+                duplicate -> existing column to copy
+        new_name: required for "rename" and "duplicate"
+
+        Invalid name situations fail quietly: the unchanged copy is returned.
+        """
+        result = self.copy()
+        cols = result.columns
+
+        if action == "add":
+            if column in cols:
+                return result
+            result[column] = fill                      # appended at the end
+
+        elif action == "rename":
+            if column not in cols or new_name is None or new_name in cols:
+                return result
+            result = result.rename(columns={column: new_name})
+
+        elif action == "remove":
+            if column not in cols:
+                return result
+            result = result.drop(columns=[column])
+
+        elif action == "duplicate":
+            if column not in cols or new_name is None or new_name in cols:
+                return result
+            result[new_name] = result[column].copy()     # appended at the end
+
+        else:
+            return result
+
+        result.views = None
+        return result
+
+    # ---- serialization -------------------------------------------------
+    def save_history(self, path):
+        """Save transformation history as strict, versioned JSON."""
+        _save_history_file(path, self.history or [])
+
+    def apply_history(self, source):
+        """Replay approved recorded transformations from a path or step list.
+
+        History describes explicitly recorded methods. Arbitrary pandas
+        slicing and other non-recorded operations are not captured.
+        """
+        steps = load_history(source)   # Validate *all* steps before execution.
+        validated = []
+        for index, step in enumerate(steps):
+            method = getattr(self, step["method"])
+            kwargs = decode_value(step["args"])
+            try:
+                inspect.signature(method).bind(**kwargs)
+            except TypeError as exc:
+                raise ValueError(f"Invalid arguments for history step {index}: {exc}") from exc
+            validated.append((step["method"], kwargs))
+
+        result = self
+        for method_name, kwargs in validated:
+            result = getattr(result, method_name)(**kwargs)
+        return result
 
 class Apm(pd.DataFrame):
     monitor = "apm"
