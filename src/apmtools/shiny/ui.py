@@ -20,12 +20,13 @@ from .derived_views import prepare_table_source
 from .quality_source import prepare_quality_source
 from .quality_view import quality_report, quality_summary, quality_heatmap_data, quality_grouped_heatmaps, quality_heatmap_figure, quality_heatmap_height, QUALITY_FREQUENCIES, selected_heatmap_variable
 from .matplotlib_renderer import _axis_bounds_from_spec, _format_panel_bounds, _matplotlib_defaults, _matplotlib_direct_figure, _pad_axis_bounds, _panel_axis_bounds, _panel_partitions, _panel_trace_defaults
+from .histogram_stats import effective_histogram_bin_mode
 from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
 from .tab_initialization import TabInitializer
 from .workspace_controller import WorkspaceController
 from .profiling import traced, marker
-from .state import SNAPSHOT_INPUT_KEYS, reconcile_visibility, snapshot_inputs
+from .state import SNAPSHOT_INPUT_KEYS, reconcile_visibility, snapshot_inputs, normalize_histogram_view, restore_dynamic_histogram_x
 from .text_editors import update_label_mapping
 
 
@@ -72,6 +73,7 @@ def _build_summary_ui_server(
 ):
     """Create, but do not start, an interactive Shiny app for a Summary."""
     from shiny import App, reactive, render, ui, module
+    from shiny.types import SilentException
     try:
         import shinyswatch
     except ImportError as exc:
@@ -195,9 +197,21 @@ def _build_summary_ui_server(
 
     @module.ui
     def plot_tab_ui(initial_filters=None):
-        initial_filters = initial_filters or {}
+        initial_filters = normalize_histogram_view(initial_filters)
         def initial(name, default):
-            return initial_filters.get(name, default)
+            if name in initial_filters:
+                return initial_filters[name]
+            # Legacy Summary.views encoded histogram settings as three
+            # separate flags; translate only when new keys are absent.
+            if name == "hist_appearance":
+                return {"bar": "bars", "barstacked": "bars", "step": "step",
+                        "stepfilled": "stepfilled"}.get(initial_filters.get("hist_type", "bar"), "bars")
+            if name == "hist_arrangement":
+                return "stack" if (str(initial_filters.get("hist_stacked", "False")) == "True"
+                                   or initial_filters.get("hist_type") == "barstacked") else "layer"
+            if name == "hist_stat":
+                return "density" if str(initial_filters.get("hist_density", "False")) == "True" else "count"
+            return default
         return ui.div(
 
             ui.tags.style("""
@@ -249,6 +263,23 @@ if (!window.__apmColorPickerInstalled) {
                     ui.div(ui.navset_tab(
                     ui.nav_panel("Plot settings",
                         ui.input_select("plot_type", "Plot type", choices=PLOT_TYPES, selected=initial("plot_type", plot_type)),
+                        # Histograms use a permanently registered selector.  A
+                        # render.ui X input can mount after the first restored
+                        # plot render and leave the chart blank indefinitely.
+                        # Keep the public saved-view key as "x" (see snapshot).
+                        ui.panel_conditional("input.plot_type === 'histogram'",
+                            ui.input_selectize("histogram_x", "X-axis / variables",
+                                choices={c: c for c in numeric_columns},
+                                selected=[x for x in (
+                                    [initial("x", [])] if isinstance(initial("x", []), str)
+                                    else list(initial("x", []) or [])) if x in numeric_columns],
+                                multiple=True)),
+                        # A restored histogram needs one explicit redraw after
+                        # its browser inputs and plot output have been bound.
+                        # The signal is local to this plot module and does not
+                        # enter Summary.views or invalidate other plot tabs.
+                        ui.div(ui.input_numeric("histogram_restore_tick", "Histogram restore signal", value=0),
+                               style="display:none"),
                         ui.output_ui("x_control"),
                         ui.output_ui("y_control")),
                     ui.nav_panel("Plot filters",
@@ -334,6 +365,31 @@ if (!window.__apmColorPickerInstalled) {
                                                  if not (initial("multi_panel", False) and name in initial("panel_by", []))},
                                         selected=initial("bar_stacking", []), multiple=True),
                                     ui.help_text("Stack selected grouping variables; remaining groups are shown side by side.")),
+                                ui.panel_conditional("input.plot_type === 'histogram'",
+                                    ui.h5("Histogram appearance"),
+                                    ui.input_select("hist_bin_mode", "Bin selection", choices={"count":"Number of bins", "auto":"Auto", "fd":"Freedman–Diaconis", "scott":"Scott", "sturges":"Sturges", "width":"Bin width"}, selected=initial("hist_bin_mode", "count")),
+                                    ui.panel_conditional("input.hist_bin_mode === 'count'",
+                                        ui.input_numeric("bins", "Histogram bins", value=initial("bins", 30), min=1, max=10000)),
+                                    ui.panel_conditional("input.hist_bin_mode === 'width'",
+                                        ui.input_numeric("hist_bin_width", "Bin width", value=initial("hist_bin_width", 1.0), min=0.000000001)),
+                                    ui.input_text("hist_range_min", "Bin range minimum (optional)", value=initial("hist_range_min", "")),
+                                    ui.input_text("hist_range_max", "Bin range maximum (optional)", value=initial("hist_range_max", "")),
+                                    ui.input_checkbox("hist_discrete", "Discrete (integer-centred bins)", value=initial("hist_discrete", False)),
+                                    ui.input_checkbox("hist_kde", "Show KDE (overlay, continuous only)", value=initial("hist_kde", False)),
+                                    ui.panel_conditional("input.hist_kde === true",
+                                        ui.input_numeric("hist_kde_bw", "KDE bandwidth multiplier", value=initial("hist_kde_bw", 1.0), min=0.05, max=20, step=0.1)),
+                                    ui.input_select("hist_appearance", "Appearance", choices={"bars":"Bars", "step":"Step", "stepfilled":"Filled step", "poly":"Polygon"}, selected=initial("hist_appearance", "bars")),
+                                    ui.input_select("hist_arrangement", "Arrangement", choices={"layer":"Overlay", "dodge":"Dodge (side by side)", "stack":"Stack", "fill":"Fill (100% stacked)"}, selected=initial("hist_arrangement", "layer")),
+                                    ui.input_select("hist_stat", "Statistic", choices={"count":"Count", "frequency":"Frequency", "probability":"Probability", "percent":"Percent", "density":"Density"}, selected=initial("hist_stat", "count")),
+                                    ui.input_checkbox("hist_common_bins", "Common bins across groups", value=initial("hist_common_bins", True)),
+                                    ui.input_checkbox("hist_common_norm", "Common normalization", value=initial("hist_common_norm", str(initial_filters.get("hist_density", "False")) == "True")),
+                                    ui.panel_conditional("input.hist_common_norm === true",
+                                        ui.input_select("hist_panel_norm_scope", "Panel normalization scope",
+                                            choices={"global": "Across all panels", "panel": "Within each panel"},
+                                            selected=initial("hist_panel_norm_scope", "global"))),
+                                    ui.help_text("Stack, Dodge and Fill always align bin edges across groups."),
+                                    ui.input_select("hist_cumulative", "Cumulative", choices={"0":"False","1":"True (ascending)","-1":"True (descending)"}, selected=initial("hist_cumulative", "0")),
+                                    ui.input_text_area("hist_alpha", "Histogram alpha (name=0..1; ...)", value=initial("hist_alpha", ""), rows=4)),
                                 ui.help_text("100% uses the automatic plot height; width always adapts to the available space."),
                                 ui.input_numeric("plot_dpi", "Plot DPI", value=initial("plot_dpi", 100), min=30, max=600, step=25),
                                 ui.div(ui.input_action_button("decrease_plot_dpi", "− DPI"),
@@ -381,13 +437,6 @@ if (!window.__apmColorPickerInstalled) {
                                 ui.input_text_area("scatter_size", "Marker size (name=size; ...)", value=initial("scatter_size", ""), rows=4),
                                 ui.input_text_area("scatter_marker", "Marker type (name=dot/cross; ...)", value=initial("scatter_marker", ""), rows=4),
                                 ui.input_text_area("scatter_alpha", "Marker alpha (name=0..1; ...)", value=initial("scatter_alpha", ""), rows=4)),
-                            ui.panel_conditional("input.plot_type === 'histogram'",
-                                ui.input_numeric("bins", "Histogram bins", value=initial("bins", 30), min=1, max=200),
-                                ui.input_select("hist_density", "Density", choices={"False":"False","True":"True"}, selected=initial("hist_density", "False")),
-                                ui.input_select("hist_stacked", "Stacked", choices={"False":"False","True":"True"}, selected=initial("hist_stacked", "False")),
-                                ui.input_select("hist_type", "Histogram type", choices={"bar":"bar","barstacked":"barstacked","step":"step","stepfilled":"stepfilled"}, selected=initial("hist_type", "bar")),
-                                ui.input_select("hist_cumulative", "Cumulative", choices={"0":"False","1":"True (ascending)","-1":"True (descending)"}, selected=initial("hist_cumulative", "0")),
-                                ui.input_text_area("hist_alpha", "Histogram alpha (name=0..1; ...)", value=initial("hist_alpha", ""), rows=4)),
                             ui.panel_conditional("input.plot_type === 'bar' || input.plot_type === 'box'",
                                 ui.input_numeric("bar_box_width", "Bar / box width", min=0.20, max=3.00,
                                                  value=initial("bar_box_width", 1.0), step=0.05)),
@@ -423,7 +472,7 @@ if (!window.__apmColorPickerInstalled) {
 
     @module.server
     def plot_tab_server(input, output, session, initial_filters=None, config_tab_id=None, *, recovery_paused):
-            initial_filters = initial_filters or {}
+            initial_filters = normalize_histogram_view(initial_filters)
             # One stable output per stage: changing a later stage does not
             # recreate the inputs belonging to earlier stages.
             def _make_subset_values_ui(stage):
@@ -652,7 +701,11 @@ if (!window.__apmColorPickerInstalled) {
                 from .legend_identity import variable_aliases
                 with reactive.isolate():
                     aggregate = normalize_statistics(_optional_input("aggregate", []))
-                    source_y = _optional_input("y", [])
+                    kind = _optional_input("plot_type", initial_filters.get("plot_type", "line"))
+                    # Histogram tabs do not mount the Y input.  Use their X
+                    # variables as the legend's source-variable aliases.
+                    source_y = (_plot_x_selection() if kind == "histogram"
+                                else _optional_input("y", []))
                 sources = [source_y] if isinstance(source_y, str) else list(source_y or [])
                 return variable_aliases(sources, aggregate[0] if aggregate else None)
 
@@ -939,6 +992,10 @@ if (!window.__apmColorPickerInstalled) {
                 if kind in ("box", "bar"):
                     choices = bar_box_category_choices(categorical_columns, input.frequency(), input.aggregate())
                     multiple = True
+                elif kind == "histogram":
+                    # The static histogram_x control handles histogram X.
+                    # Do not create a second, asynchronous selectize here.
+                    return ui.div()
                 elif kind == "line":
                     choices = _alphabetical(datetime_columns + timedelta_columns)
                     multiple = False
@@ -991,9 +1048,31 @@ if (!window.__apmColorPickerInstalled) {
                 """
                 try:
                     value = getattr(input, name)()
-                except (AttributeError, KeyError, TypeError):
+                except (AttributeError, KeyError, TypeError, SilentException):
                     return default
                 return default if value is None else value
+
+            # X is supplied by render.ui, unlike the static histogram inputs.
+            # On a restored tab Shiny may render the plot before the X selectize
+            # has mounted. Preserve the saved selection only during that initial
+            # gap; after receiving a real X selection, an empty user selection
+            # must remain empty rather than resurrecting the saved value.
+            _x_selection_mounted = [False]
+
+            def _plot_x_selection():
+                # Unlike the other plot types, histogram X is a statically
+                # mounted input.  This avoids an asynchronous render.ui cycle
+                # when a saved histogram tab is restored.  The old "x" saved
+                # configuration key is still authoritative before mounting.
+                kind = _optional_input("plot_type", initial_filters.get("plot_type"))
+                if kind == "histogram":
+                    value = _optional_input("histogram_x", None)
+                    if value is not None and value != '' and value != [] and value != ():
+                        _x_selection_mounted[0] = True
+                    return restore_dynamic_histogram_x(
+                        value, initial_filters.get("x", []),
+                        mounted=_x_selection_mounted[0], kind="histogram")
+                return _optional_input("x", [])
 
             # Panel controls are static UI inputs.  Previously they were created
             # by a render.ui output inside an inactive tab, so Shiny did not
@@ -1093,7 +1172,7 @@ if (!window.__apmColorPickerInstalled) {
             @traced('sync_axis_group_choices', kind='reactive_effect', trigger=None)
             def sync_axis_group_choices():
                 kind = input.plot_type()
-                x_raw = _optional_input("x", [])
+                x_raw = _plot_x_selection()
                 y_raw = _optional_input("y", [])
                 xs = [x_raw] if isinstance(x_raw, str) else list(x_raw or [])
                 ys = [y_raw] if isinstance(y_raw, str) else list(y_raw or [])
@@ -1138,7 +1217,7 @@ if (!window.__apmColorPickerInstalled) {
                 if current is None or current.empty:
                     return pd.DataFrame()
                 kind = input.plot_type()
-                x_input = input.x()
+                x_input = _plot_x_selection()
                 selected_x = ([x_input] if isinstance(x_input, str) else list(x_input or []))
                 if not selected_x or any(c not in column_map for c in selected_x):
                     return pd.DataFrame()
@@ -1246,7 +1325,7 @@ if (!window.__apmColorPickerInstalled) {
                     return {"error": "Select a frequency or at least one Group by variable to apply a statistical function"}
                 plot_df = selected_data()
                 selected_plot = input.plot_type()
-                x_input = input.x()
+                x_input = _plot_x_selection()
                 selected_x = ([x_input] if isinstance(x_input, str) else list(x_input or []))
                 y_input = None if selected_plot == "histogram" else input.y()
                 selected_y = ([y_input] if isinstance(y_input, str) else list(y_input or []))
@@ -1547,6 +1626,7 @@ if (!window.__apmColorPickerInstalled) {
             _automatic_bar_y_limits = {}
             _last_line_style_keys = [None]
             _last_scatter_style_keys = [None]
+            _last_hist_alpha_keys = [None]
             # Arm automatic axis-label regeneration only after the restored
             # X/Y selectors have actually reached their saved values. This
             # avoids treating intermediate selector initialization as an edit.
@@ -1557,12 +1637,29 @@ if (!window.__apmColorPickerInstalled) {
             @reactive.event(prepared_plot, lambda: tuple(_optional_input("bar_stacking", []) or ()),
                             lambda: _optional_input("multi_panel", False) if input.group_by() else False,
                             lambda: tuple(_optional_input("panel_by", []) or []) if input.group_by() and len(input.group_by()) > 1 else (),
-                            lambda: _optional_input("independent_panel_limits", True) if input.group_by() and _optional_input("multi_panel", False) else True, ignore_none=False)
+                            lambda: _optional_input("independent_panel_limits", True) if input.group_by() and _optional_input("multi_panel", False) else True,
+                            lambda: tuple(_optional_input(k) for k in ("hist_stat", "hist_arrangement", "hist_appearance", "hist_common_bins", "hist_common_norm", "hist_panel_norm_scope", "bins", "hist_cumulative", "hist_bin_mode", "hist_bin_width", "hist_range_min", "hist_range_max", "hist_discrete", "hist_kde", "hist_kde_bw")) if input.plot_type() == "histogram" else (),
+                            ignore_none=False)
             def populate_appearance_from_plot():
                 from .appearance import _parse_label_map
                 spec = prepared_plot()
                 if "error" in spec:
                     return
+                # Reject the discrete checkbox for fractional observations before
+                # axis-limit calculation. A renderer-level fallback also handles
+                # the brief interval before Shiny applies this input update.
+                if spec.get("kind") == "histogram" and _optional_input("hist_discrete", False):
+                    values = pd.to_numeric(spec["data"][spec["x"]], errors="coerce").to_numpy(
+                        dtype=float, na_value=np.nan)
+                    mode = effective_histogram_bin_mode(
+                        values, "discrete",
+                        range_min=_optional_input("hist_range_min", "") or None,
+                        range_max=_optional_input("hist_range_max", "") or None)
+                    if mode != "discrete":
+                        ui.update_checkbox("hist_discrete", value=False)
+                        ui.notification_show(
+                            "Discrete bins require integer observations; using ordinary bins instead.",
+                            type="warning", duration=5)
                 defaults = _matplotlib_defaults(spec, palette="Default")
                 names = defaults["names"]
                 selected_groups_for_legend = list(input.group_by() or [])
@@ -1593,7 +1690,7 @@ if (!window.__apmColorPickerInstalled) {
                 # them when the user changes either axis variable selection.
                 # Changes to grouping, panels or appearance do not reset labels.
                 current_axis_selection = (
-                    tuple(_optional_input("x", []) or []),
+                    tuple(_plot_x_selection() or []),
                     tuple(_optional_input("y", []) or []),
                 )
                 saved_axis_selection = (
@@ -1613,14 +1710,29 @@ if (!window.__apmColorPickerInstalled) {
 
                 if axis_selection_changed or "x_axis_label" not in initial_filters:
                     ui.update_text("x_axis_label", value=defaults["x_label"])
+                if spec["kind"] == "histogram":
+                    hist_arrangement = _optional_input("hist_arrangement", "layer")
+                    hist_stat = _optional_input("hist_stat", "count")
+                    defaults["y_label"] = ("Proportion" if hist_arrangement == "fill" else
+                        ("Cumulative " if int(_optional_input("hist_cumulative", "0")) else "") +
+                        {"count": "Count", "frequency": "Frequency", "probability": "Probability",
+                         "percent": "Percent", "density": "Density"}.get(hist_stat, "Count"))
                 if axis_selection_changed or "y_axis_label" not in initial_filters:
                     ui.update_text_area("y_axis_label", value=defaults["y_label"])
                 limits = _axis_bounds_from_spec(
                     spec,
-                    bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
-                    density=input.hist_density() == "True" if spec["kind"] == "histogram" else False,
-                    stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
-                    cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
+                    bins=int(_optional_input("bins", initial_filters.get("bins", 30)) or 30) if spec["kind"] == "histogram" else 30,
+                    hist_stat=_optional_input("hist_stat", initial_filters.get("hist_stat", "density" if str(initial_filters.get("hist_density", "False")) == "True" else "count")) if spec["kind"] == "histogram" else "count",
+                    hist_arrangement=_optional_input("hist_arrangement", initial_filters.get("hist_arrangement", "stack" if (str(initial_filters.get("hist_stacked", "False")) == "True" or initial_filters.get("hist_type") == "barstacked") else "layer")) if spec["kind"] == "histogram" else "layer",
+                    hist_common_bins=bool(_optional_input("hist_common_bins", True)),
+                    hist_common_norm=bool(_optional_input("hist_common_norm", False)),
+                    hist_bin_mode=("discrete" if _optional_input("hist_discrete", False) else _optional_input("hist_bin_mode", "count")),
+                    hist_bin_width=float(_optional_input("hist_bin_width", 1.0) or 1.0),
+                    hist_range_min=_optional_input("hist_range_min", "") or None,
+                    hist_range_max=_optional_input("hist_range_max", "") or None,
+                    hist_kde=bool(_optional_input("hist_kde", False)),
+                    hist_kde_bw=float(_optional_input("hist_kde_bw", 1.0) or 1.0),
+                    cumulative=int(_optional_input("hist_cumulative", initial_filters.get("hist_cumulative", "0")) or 0) if spec["kind"] == "histogram" else 0,
                     bar_stacking=_optional_input("bar_stacking", []) if spec["kind"] == "bar" else (),
                 )
                 if spec["kind"] == "box" and not spec.get("multi_axis") and not input.box_showfliers():
@@ -1638,10 +1750,19 @@ if (!window.__apmColorPickerInstalled) {
                     panel_variable = _effective_panel_groups(selected_groups)
                     panel_bounds = _panel_axis_bounds(
                         spec, panel_variable,
-                        bins=int(input.bins()) if spec["kind"] == "histogram" else 30,
-                        density=input.hist_density() == "True" if spec["kind"] == "histogram" else False,
-                        stacked=(input.hist_stacked() == "True" or input.hist_type() == "barstacked") if spec["kind"] == "histogram" else False,
-                        cumulative=int(input.hist_cumulative()) if spec["kind"] == "histogram" else 0,
+                        bins=int(_optional_input("bins", initial_filters.get("bins", 30)) or 30) if spec["kind"] == "histogram" else 30,
+                        hist_stat=_optional_input("hist_stat", "count"),
+                        hist_arrangement=_optional_input("hist_arrangement", "layer"),
+                        hist_common_bins=bool(_optional_input("hist_common_bins", True)),
+                        hist_common_norm=bool(_optional_input("hist_common_norm", False)),
+                        hist_panel_norm_scope=_optional_input("hist_panel_norm_scope", "global"),
+                        hist_bin_mode=("discrete" if _optional_input("hist_discrete", False) else _optional_input("hist_bin_mode", "count")),
+                        hist_bin_width=float(_optional_input("hist_bin_width", 1.0) or 1.0),
+                        hist_range_min=_optional_input("hist_range_min", "") or None,
+                        hist_range_max=_optional_input("hist_range_max", "") or None,
+                        hist_kde=bool(_optional_input("hist_kde", False)),
+                        hist_kde_bw=float(_optional_input("hist_kde_bw", 1.0) or 1.0),
+                        cumulative=int(_optional_input("hist_cumulative", initial_filters.get("hist_cumulative", "0")) or 0) if spec["kind"] == "histogram" else 0,
                         bar_stacking=_optional_input("bar_stacking", []) if spec["kind"] == "bar" else (),
                     )
                     if panel_bounds:
@@ -1658,7 +1779,7 @@ if (!window.__apmColorPickerInstalled) {
                 # Remember these generated values before sending asynchronous
                 # updates to the browser. A stacked redraw may occur while the
                 # previous (unstacked) values are still mounted in the inputs.
-                if spec["kind"] == "bar":
+                if spec["kind"] in ("bar", "histogram"):
                     remember_auto_limits(_automatic_bar_y_limits, limits)
                 for field, value in limits.items():
                     # A restored plot's explicit axis bounds are authoritative.
@@ -1708,7 +1829,22 @@ if (!window.__apmColorPickerInstalled) {
                             )
                             ui.update_text_area(field, value=updated)
                 elif kind == "histogram":
-                    ui.update_text_area("hist_alpha", value="\n".join(f"{name}=0.65" for name in names))
+                    # A restored histogram can initialize before its X selector
+                    # mounts. Never overwrite saved alpha during that first
+                    # rendering pass; subsequent trace changes retain matching
+                    # custom values and initialize only new groups.
+                    current_keys = tuple(names)
+                    previous_keys = _last_hist_alpha_keys[0]
+                    _last_hist_alpha_keys[0] = current_keys
+                    if previous_keys != current_keys and not (
+                            previous_keys is None and "hist_alpha" in initial_filters):
+                        with reactive.isolate():
+                            existing_alpha = _parse_label_map(_optional_input("hist_alpha", ""))
+                        updated_alpha = "\n".join(
+                            f"{name}={existing_alpha.get(name, '0.65')}" for name in names
+                        )
+                        if updated_alpha != str(_optional_input("hist_alpha", "")):
+                            ui.update_text_area("hist_alpha", value=updated_alpha)
                 elif kind == "scatter":
                     # Preserve user edits across preparation updates; only
                     # synchronize when the actual trace identities change.
@@ -1857,9 +1993,19 @@ if (!window.__apmColorPickerInstalled) {
                 for field in ("line_alpha", "line_style", "scatter_size", "scatter_marker", "scatter_alpha"):
                     ui.update_text_area(field, value="")
                 ui.update_numeric("bins", value=30)
-                ui.update_select("hist_density", selected="False")
-                ui.update_select("hist_stacked", selected="False")
-                ui.update_select("hist_type", selected="bar")
+                ui.update_select("hist_bin_mode", selected="count")
+                ui.update_numeric("hist_bin_width", value=1.0)
+                ui.update_text("hist_range_min", value="")
+                ui.update_text("hist_range_max", value="")
+                ui.update_checkbox("hist_discrete", value=False)
+                ui.update_checkbox("hist_kde", value=False)
+                ui.update_numeric("hist_kde_bw", value=1.0)
+                ui.update_select("hist_appearance", selected="bars")
+                ui.update_select("hist_arrangement", selected="layer")
+                ui.update_select("hist_stat", selected="count")
+                ui.update_checkbox("hist_common_bins", value=True)
+                ui.update_checkbox("hist_common_norm", value=False)
+                ui.update_select("hist_panel_norm_scope", selected="global")
                 ui.update_select("hist_cumulative", selected="0")
                 ui.update_checkbox("only_complete", value=True)
                 ui.update_checkbox("flooring_timestamp", value=True)
@@ -2043,10 +2189,20 @@ if (!window.__apmColorPickerInstalled) {
                     scatter_size=(_optional_input("scatter_size", "") if input.plot_type() == "scatter" else ""),
                     scatter_marker=(_optional_input("scatter_marker", "") if input.plot_type() == "scatter" else ""),
                     scatter_alpha=(_optional_input("scatter_alpha", "") if input.plot_type() == "scatter" else ""),
-                    bins=int(_optional_input("bins", 30)) if input.plot_type() == "histogram" else 30,
-                    density=_optional_input("hist_density", "False") == "True" if input.plot_type() == "histogram" else False,
-                    stacked=_optional_input("hist_stacked", "False") == "True" if input.plot_type() == "histogram" else False,
-                    histtype=_optional_input("hist_type", "bar") if input.plot_type() == "histogram" else "bar",
+                    bins=int(_optional_input("bins", initial_filters.get("bins", 30)) or 30) if input.plot_type() == "histogram" else 30,
+                    hist_stat=_optional_input("hist_stat", "count") if input.plot_type() == "histogram" else "count",
+                    hist_arrangement=_optional_input("hist_arrangement", "layer") if input.plot_type() == "histogram" else "layer",
+                    hist_appearance=_optional_input("hist_appearance", "bars") if input.plot_type() == "histogram" else "bars",
+                    hist_common_bins=bool(_optional_input("hist_common_bins", True)),
+                    hist_common_norm=bool(_optional_input("hist_common_norm", False)),
+                    hist_panel_norm_scope=_optional_input("hist_panel_norm_scope", "global"),
+                    hist_bin_mode=("discrete" if _optional_input("hist_discrete", False) else _optional_input("hist_bin_mode", "count")),
+                    hist_bin_width=float(_optional_input("hist_bin_width", 1.0) or 1.0),
+                    hist_range_min=_optional_input("hist_range_min", "") or None,
+                    hist_range_max=_optional_input("hist_range_max", "") or None,
+                    hist_discrete=bool(_optional_input("hist_discrete", False)),
+                    hist_kde=bool(_optional_input("hist_kde", False)),
+                    hist_kde_bw=float(_optional_input("hist_kde_bw", 1.0) or 1.0),
                     cumulative=int(_optional_input("hist_cumulative", "0")) if input.plot_type() == "histogram" else 0,
                     panel_by=(panel_groups if multi_panel else None),
                     independent_panel_limits=(bool(_optional_input("independent_panel_limits", True))
@@ -2055,7 +2211,7 @@ if (!window.__apmColorPickerInstalled) {
                     panel_hspace=(float(_optional_input("panel_hspace", 0.90) or 0) if multi_panel else 0.90),
                     panel_wspace=(float(_optional_input("panel_wspace", 0.38) or 0) if multi_panel else 0.38),
                 )
-                if input.plot_type() == "bar":
+                if input.plot_type() in ("bar", "histogram"):
                     # The Y bounds controls contain auto-generated text, which
                     # must not clip bars when stack totals change. Only values
                     # not generated by the application are explicit overrides.
@@ -2085,6 +2241,12 @@ if (!window.__apmColorPickerInstalled) {
             @render.plot
             @traced('plot', kind='render', trigger=None)
             def plot():
+                # Saved histogram inputs can be bound after the plot output.
+                # The browser sends this one-time signal once both are ready.
+                # This is deliberately a plot-only dependency; it does not
+                # update Plot type or reset any saved appearance settings.
+                if initial_filters.get("plot_type") == "histogram":
+                    _optional_input("histogram_restore_tick", 0)
                 if recovery_paused.get():
                     # Replaces an expensive future draw with a cheap placeholder.
                     # This is a cooperative pause, not interruption of running code.
@@ -2093,11 +2255,25 @@ if (!window.__apmColorPickerInstalled) {
                     fig.text(0.5, 0.5, "Plot paused — click Resume to redraw",
                              ha="center", va="center")
                     return fig
-                fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
-                _capture_legend(fig)
-                _capture_ticks(fig)
-                _apply_matplotlib_tick_labels(fig)
-                return fig
+                try:
+                    fig = _matplotlib_direct_figure(prepared_plot(), **matplotlib_options())
+                    _capture_legend(fig)
+                    _capture_ticks(fig)
+                    _apply_matplotlib_tick_labels(fig)
+                    return fig
+                except Exception as exc:
+                    # Do not leave a restored histogram as an unexplained blank
+                    # chart. Keep the original traceback in the Python console
+                    # and show the underlying cause directly in the plot area.
+                    if initial_filters.get("plot_type") != "histogram":
+                        raise
+                    import traceback
+                    traceback.print_exc()
+                    from matplotlib.figure import Figure
+                    fig = Figure(figsize=(8, 3))
+                    fig.text(0.5, 0.5, f"Histogram could not render:\n{type(exc).__name__}: {exc}",
+                             ha="center", va="center", wrap=True)
+                    return fig
 
             def snapshot():
                 keys = SNAPSHOT_INPUT_KEYS
@@ -2116,6 +2292,10 @@ if (!window.__apmColorPickerInstalled) {
                     except Exception:
                         # Inputs in inactive tabs may not have been initialized yet.
                         continue
+                # Histogram X belongs to a stable control named histogram_x;
+                # serialize it under the established Summary.views "x" key.
+                if _optional_input("plot_type", initial_filters.get("plot_type")) == "histogram":
+                    mounted["x"] = _plot_x_selection()
                 result = snapshot_inputs(result, mounted)
                 # Snapshot the same effective filter state used by the renderer,
                 # including saved values for controls not yet mounted.
@@ -2920,14 +3100,38 @@ if (!window.__apmColorPickerInstalled) {
             new ResizeObserver(resize).observe(el);
             resize();
           });
+          // Signal a restored histogram's plot output once the browser has
+          // mounted its saved X selectize and the figure output.  Shiny can
+          // otherwise complete the first render before all inputs exist, with
+          // no later invalidation until Plot type is manually changed.
+          const histogramRestoreSignalled = new WeakSet();
+          const signalRestoredHistograms = () => {
+            if (!window.Shiny || typeof window.Shiny.setInputValue !== 'function') return;
+            document.querySelectorAll('.summary-plot-tab').forEach(tab => {
+              if (histogramRestoreSignalled.has(tab)) return;
+              const tick = tab.querySelector('[id$="-histogram_restore_tick"]');
+              const kind = tab.querySelector('[id$="-plot_type"]');
+              const x = tab.querySelector('[id$="-histogram_x"]');
+              const output = tab.querySelector('.shiny-plot-output');
+              if (!tick || kind?.value !== 'histogram' || !x || !output) return;
+              if (!x.classList.contains('shiny-bound-input') ||
+                  !output.classList.contains('shiny-bound-output')) return;
+              histogramRestoreSignalled.add(tab);
+              requestAnimationFrame(() => {
+                if (tab.isConnected)
+                  window.Shiny?.setInputValue?.(tick.id, 1, {priority:'event'});
+              });
+            });
+          };
+          document.addEventListener('shiny:bound', () => requestAnimationFrame(signalRestoredHistograms));
           // Only watch tab/container insertions, never individual plot nodes.
           let installPending = false;
           new MutationObserver(() => {
             if (installPending) return;
             installPending = true;
-            requestAnimationFrame(() => {installPending = false; install();});
+            requestAnimationFrame(() => {installPending = false; install(); signalRestoredHistograms();});
           }).observe(document.body, {childList:true, subtree:true});
-          document.addEventListener('shown.bs.tab', () => requestAnimationFrame(install));
+          document.addEventListener('shown.bs.tab', () => requestAnimationFrame(() => { install(); signalRestoredHistograms(); }));
           // A dimension input does not change the container width, so the
           // ResizeObserver must also be notified when the height percentage changes.
           const resizeForDimensionInput = event => {

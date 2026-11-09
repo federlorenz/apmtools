@@ -14,9 +14,51 @@ SNAPSHOT_INPUT_KEYS = ("plot_type", "x", "y", "numeric_subset_columns", "datetim
         "y_minor_ticks", "axis_font_size", "tick_font_size",
         "line_width", "line_alpha", "line_style", "scatter_size", "scatter_marker",
         "scatter_alpha", "bins", "hist_density", "hist_stacked", "hist_type",
-        "hist_cumulative", "hist_alpha", "box_showfliers", "box_orientation", "bar_box_width", "bar_stacking",
+        "hist_cumulative", "hist_alpha", "hist_appearance", "hist_arrangement", "hist_stat", "hist_common_bins", "hist_common_norm", "hist_panel_norm_scope", "hist_bin_mode", "hist_bin_width",
+        "hist_range_min", "hist_range_max", "hist_discrete", "hist_kde", "hist_kde_bw", "box_showfliers", "box_orientation", "bar_box_width", "bar_stacking",
         "multi_panel", "independent_panel_limits", "panel_by", "panel_titles",
         "panel_font_size", "panel_hspace", "panel_wspace", "visible_elements")
+
+
+def normalize_histogram_view(settings):
+    """Make legacy Summary.views histogram settings usable by current controls.
+
+    Old keys are retained for external consumers; new keys take precedence.
+    This is deliberately a pure function so loading/snapshotting never mutates
+    the stored or caller-owned view dictionary.
+    """
+    settings = dict(settings or {})
+    old_keys = {"hist_density", "hist_stacked", "hist_type"}
+    if not old_keys.intersection(settings):
+        return settings
+    old_type = settings.get("hist_type", "bar")
+    old_density = str(settings.get("hist_density", "False")).lower() == "true"
+    old_stack = str(settings.get("hist_stacked", "False")).lower() == "true"
+    settings.setdefault("hist_appearance", {
+        "bar": "bars", "barstacked": "bars", "step": "step",
+        "stepfilled": "stepfilled"}.get(old_type, "bars"))
+    settings.setdefault("hist_arrangement", "stack" if old_stack or old_type == "barstacked" else "layer")
+    settings.setdefault("hist_stat", "density" if old_density else "count")
+    settings.setdefault("hist_common_bins", True)
+    # Matplotlib's legacy density=True with multiple groups used one pooled
+    # denominator; preserve that exact behaviour for restored views.
+    settings.setdefault("hist_common_norm", bool(old_density))
+    return settings
+
+
+
+def restore_dynamic_histogram_x(current, saved, *, mounted=False, kind=None):
+    """Resolve the dynamically mounted X selector while restoring a histogram.
+
+    An absent/initially empty selector is not a user edit. After the first
+    nonempty value is seen, empty selections are intentional and must not be
+    replaced by the saved configuration. Other plot types never use this
+    restoration fallback.
+    """
+    empty = current is None or current == '' or current == [] or current == ()
+    if empty and not mounted and kind == 'histogram':
+        return list(saved) if isinstance(saved, (tuple, list)) else saved
+    return current
 
 
 def reconcile_visibility(keys, previous, saved):
@@ -46,7 +88,7 @@ def snapshot_inputs(current, input_values):
     Unmounted inputs must not erase settings restored from a saved plot.
     """
     from copy import deepcopy
-    result = deepcopy(current)
+    result = deepcopy(normalize_histogram_view(current))
     # Retired option: retain compatibility when loading older saved plots,
     # but do not write a no-longer-effective width control on new saves.
     result.pop("plot_width_pct", None)

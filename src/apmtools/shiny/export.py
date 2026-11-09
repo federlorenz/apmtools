@@ -36,7 +36,9 @@ def _standalone_matplotlib_script(spec, options):
 
     from .bar_stacking import selected_stack_columns, stacked_bar_segments, stacked_bar_legend_key
     from .legend_identity import canonical_legend_key, canonical_legend_map, legend_label
+    from .histogram_stats import histogram_heights, histogram_bin_edges, histogram_kde, effective_histogram_bin_mode
     dependencies = (
+        effective_histogram_bin_mode, histogram_bin_edges, histogram_kde, histogram_heights,
         selected_stack_columns, stacked_bar_segments, stacked_bar_legend_key,
         canonical_legend_key, canonical_legend_map, legend_label,
         _axis_label, _parse_label_map, _series_style_maps, _bounded_float,

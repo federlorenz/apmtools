@@ -10,6 +10,7 @@ from ..units import upas_units, lascar_units, purple_units
 
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
 from .appearance import _axis_label, _bounded_float, _line_style, _matplotlib_tick_controls, _parse_axis_limit, _parse_label_map, _scatter_marker, _series_style_maps
+from .histogram_stats import histogram_heights, histogram_bin_edges, histogram_kde, effective_histogram_bin_mode
 from .data import _add_gap_sections, _add_source_sections, _composite_labels
 
 
@@ -39,7 +40,12 @@ def _matplotlib_defaults(spec, *, palette="Default"):
 
 
 
-def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumulative=0, bar_stacking=()):
+def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumulative=0,
+                           hist_stat=None, hist_arrangement=None, hist_common_bins=True,
+                           hist_common_norm=False, hist_edges=None,
+                           hist_norm_total=None, bar_stacking=(), hist_bin_mode='count',
+                           hist_bin_width=1.0, hist_range_min=None, hist_range_max=None,
+                           hist_kde=False, hist_kde_bw=1.0):
     """Compute editable axis bounds from the prepared data, without rendering.
 
     Datetime X bounds are ISO timestamps; categorical X bounds are intentionally
@@ -79,23 +85,45 @@ def _axis_bounds_from_spec(spec, *, bins=30, density=False, stacked=False, cumul
     if kind not in ("bar", "box"):
         fill("x", df[x])
     if kind == "histogram":
-        values = pd.to_numeric(df[x], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
-        values = values[np.isfinite(values)]
-        if len(values):
-            groups = ([pd.to_numeric(part[x], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
-                       for _, part in df.groupby("__plot_group", sort=False)]
-                      if spec["groups"] and "__plot_group" in df else [values])
-            edges = np.histogram_bin_edges(values, bins=max(1, int(bins)))
-            histograms = np.array([np.histogram(v[np.isfinite(v)], bins=edges)[0]
-                                   for v in groups], dtype=float)
-            if density:
-                total = histograms.sum()
-                if total:
-                    histograms /= total * np.diff(edges)
-            if cumulative:
-                histograms = histograms.cumsum(axis=1)
-            ymax = (histograms.sum(axis=0).max() if stacked and histograms.size
-                    else histograms.max() if histograms.size else 0)
+        group_col = ("__hist_series" if spec.get("hist_variables") and "__hist_series" in df
+                     else "__plot_group" if spec["groups"] and "__plot_group" in df else None)
+        parts = ([part for _, part in df.groupby(group_col, sort=False)]
+                 if group_col else [df])
+        arrays = [pd.to_numeric(part[x], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
+                  for part in parts]
+        arrangement = hist_arrangement or ("stack" if stacked else "layer")
+        edges, heights = histogram_heights(arrays, bins=bins,
+            stat=hist_stat or ("density" if density else "count"), arrangement=arrangement,
+            common_bins=hist_common_bins, common_norm=hist_common_norm, cumulative=cumulative,
+            common_edges=hist_edges, norm_total=hist_norm_total,
+            bin_mode=hist_bin_mode, bin_width=hist_bin_width,
+            range_min=hist_range_min, range_max=hist_range_max)
+        if heights:
+            bounds["x_min"] = format(float(min(e[0] for e in edges)), ".12g")
+            bounds["x_max"] = format(float(max(e[-1] for e in edges)), ".12g")
+            ymax = (np.stack(heights).sum(axis=0).max()
+                    if arrangement in ("stack", "fill") else max(h.max() for h in heights))
+            if hist_kde and hist_bin_mode != "discrete" and arrangement == "layer" and not cumulative:
+                pooled_total = hist_norm_total if hist_common_norm and hist_norm_total is not None else sum(map(len, arrays))
+                for group, edge in zip(arrays, edges):
+                    finite = group[np.isfinite(group)]
+                    if len(finite) < 2:
+                        continue
+                    grid = np.linspace(edge[0], edge[-1], 256)
+                    curve = histogram_kde(finite, grid, bandwidth=hist_kde_bw)
+                    scale = float(np.median(np.diff(edge)))
+                    denominator = pooled_total if hist_common_norm else len(finite)
+                    if hist_stat == "count":
+                        curve *= len(finite) * scale
+                    elif hist_stat == "frequency":
+                        curve *= len(finite)
+                    elif hist_stat == "density":
+                        curve *= len(finite) / denominator if denominator else 0
+                    elif hist_stat == "probability":
+                        curve *= scale * len(finite) / denominator if denominator else 0
+                    elif hist_stat == "percent":
+                        curve *= scale * 100 * len(finite) / denominator if denominator else 0
+                    ymax = max(float(ymax), float(curve.max()))
             bounds["y_min"], bounds["y_max"] = "0", format(float(ymax), ".12g")
     elif kind == "bar" and bar_stacking:
         from .bar_stacking import stacked_bar_segments
@@ -216,6 +244,30 @@ def _panel_axis_bounds(spec, panel_by, **kwargs):
     if "error" in spec:
         return {}
     result = {}
+    scope = kwargs.pop("hist_panel_norm_scope", "global")
+    if scope not in ("global", "panel"):
+        raise ValueError(f"Invalid histogram panel normalization scope: {scope}")
+    if spec.get("kind") == "histogram":
+        global_values = pd.to_numeric(spec["data"][spec["x"]], errors="coerce").to_numpy(
+            dtype=float, na_value=np.nan)
+        global_values = global_values[np.isfinite(global_values)]
+        if len(global_values):
+            kwargs = dict(kwargs)
+            if (kwargs.get("hist_common_bins", True) or
+                    kwargs.get("hist_arrangement", "layer") != "layer"):
+                kwargs["hist_edges"] = histogram_bin_edges(global_values, bins=kwargs.get("bins", 30),
+                    bin_mode=effective_histogram_bin_mode(global_values, kwargs.get("hist_bin_mode", "count"),
+                        range_min=kwargs.get("hist_range_min"), range_max=kwargs.get("hist_range_max")),
+                    bin_width=kwargs.get("hist_bin_width", 1.0),
+                    range_min=kwargs.get("hist_range_min"),
+                    range_max=kwargs.get("hist_range_max"))
+            if kwargs.get("hist_common_norm", False) and scope == "global":
+                in_domain = global_values
+                if kwargs.get("hist_range_min") not in (None, ''):
+                    in_domain = in_domain[in_domain >= float(kwargs["hist_range_min"])]
+                if kwargs.get("hist_range_max") not in (None, ''):
+                    in_domain = in_domain[in_domain <= float(kwargs["hist_range_max"])]
+                kwargs["hist_norm_total"] = len(in_domain)
     for title, part, remaining in _panel_partitions(spec, panel_by):
         sub_spec = {**spec, "data": part, "groups": remaining}
         result[title] = _axis_bounds_from_spec(sub_spec, **kwargs)
@@ -375,8 +427,14 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               legend_font_size=12, panel_font_size=14, plot_dpi=100,
                               plot_height_pct=100, bins=30, density=False,
                               stacked=False, histtype="bar", cumulative=0,
+                              hist_stat=None, hist_arrangement=None, hist_appearance=None,
+                              hist_common_bins=True, hist_common_norm=False,
+                              hist_panel_norm_scope="global", hist_bin_mode='count', hist_bin_width=1.0,
+                              hist_range_min=None, hist_range_max=None,
+                              hist_discrete=False, hist_kde=False, hist_kde_bw=1.0,
                               panel_by=None, independent_panel_limits=True, panel_titles="",
                               panel_hspace=0.90, panel_wspace=0.38, _axes=None,
+                              _hist_shared_edges=None, _hist_norm_total=None,
                               x_major_ticks=6, y_major_ticks=6, x_minor_ticks=False, y_minor_ticks=False):
     """Draw directly from the filtered/aggregated DataFrame, without Plotly."""
     import matplotlib
@@ -396,6 +454,8 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         return fig
 
     df, kind, x, ys = spec["data"], spec["kind"], spec["x"], spec["ys"]
+    if hist_panel_norm_scope not in ("global", "panel"):
+        raise ValueError(f"Invalid histogram panel normalization scope: {hist_panel_norm_scope}")
     # A long-form Y grouping must render its value column, not a source
     # column removed by melt(). Normalize the local spec before faceting.
     if kind == "scatter" and "__axis_y_value" in df.columns and any(y not in df.columns for y in ys):
@@ -433,6 +493,26 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
             nrows = math.ceil(len(partitions) / ncols)
             fig, axes = plt.subplots(nrows, ncols, figsize=(5.4*ncols, 4.7*nrows * float(plot_height_pct) / 100), dpi=plot_dpi,
                                      squeeze=False, sharex=False, sharey=False)
+            # Common bins and normalization span all facets, not only the
+            # subset of observations shown within an individual panel.
+            if kind == "histogram":
+                global_values = pd.to_numeric(df[spec["x"]], errors="coerce").to_numpy(
+                    dtype=float, na_value=np.nan)
+                global_values = global_values[np.isfinite(global_values)]
+                if len(global_values):
+                    if hist_common_bins or (hist_arrangement or ("stack" if stacked else "layer")) != "layer":
+                        _hist_shared_edges = histogram_bin_edges(global_values, bins=bins,
+                            bin_mode=effective_histogram_bin_mode(global_values,
+                                "discrete" if hist_discrete else hist_bin_mode,
+                                range_min=hist_range_min, range_max=hist_range_max),
+                            bin_width=hist_bin_width, range_min=hist_range_min,
+                            range_max=hist_range_max)
+                    in_domain = global_values
+                    if hist_range_min not in (None, ''):
+                        in_domain = in_domain[in_domain >= float(hist_range_min)]
+                    if hist_range_max not in (None, ''):
+                        in_domain = in_domain[in_domain <= float(hist_range_max)]
+                    _hist_norm_total = len(in_domain) if hist_panel_norm_scope == "global" else None
             for idx, (panel_title, panel_df, other_groups) in enumerate(partitions):
                 panel_spec = {**spec, "data": panel_df, "groups": other_groups,
                               "_original_groups": spec["groups"],
@@ -455,7 +535,16 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     panel_font_size=panel_font_size, plot_dpi=plot_dpi,
                     plot_height_pct=plot_height_pct,
                     bins=bins, density=density,
-                    stacked=stacked, histtype=histtype, cumulative=cumulative, _axes=panel_ax,
+                    stacked=stacked, histtype=histtype, cumulative=cumulative,
+                    hist_stat=hist_stat, hist_arrangement=hist_arrangement,
+                    hist_appearance=hist_appearance, hist_common_bins=hist_common_bins,
+                    hist_common_norm=hist_common_norm,
+                    hist_panel_norm_scope=hist_panel_norm_scope,
+                    hist_bin_mode=hist_bin_mode, hist_bin_width=hist_bin_width,
+                    hist_range_min=hist_range_min, hist_range_max=hist_range_max,
+                    hist_discrete=hist_discrete, hist_kde=hist_kde, hist_kde_bw=hist_kde_bw,
+                    _axes=panel_ax,
+                    _hist_shared_edges=_hist_shared_edges, _hist_norm_total=_hist_norm_total,
                     x_major_ticks=x_major_ticks, y_major_ticks=y_major_ticks,
                     x_minor_ticks=x_minor_ticks, y_minor_ticks=y_minor_ticks)
             # Resolve the axes once; reuse the same ordered panel collection for
@@ -673,31 +762,83 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     elif kind == "histogram":
         arrays = []
         for name, rows in series():
-            vals = pd.to_numeric(rows[x], errors="coerce").to_numpy(dtype=float)
+            vals = pd.to_numeric(rows[x], errors="coerce").to_numpy(dtype=float, na_value=np.nan)
             arrays.append(vals[np.isfinite(vals)])
-        all_vals = np.concatenate(arrays) if arrays else np.array([])
-        if len(all_vals):
-            edges = np.histogram_bin_edges(all_vals, bins=max(1, int(bins)))
-            _, _, hist_patches = ax.hist(
-                arrays, bins=edges, density=density,
-                stacked=stacked or histtype == "barstacked",
-                histtype=("bar" if histtype == "barstacked" else histtype),
-                cumulative=cumulative if cumulative else False,
-                color=[colors[n] for n in labels],
-                label=[legend_label(rename, n, aliases) for n in labels])
-            # Matplotlib returns one patch container per group for bar and
-            # one polygon per group for step/stepfilled.
-            for name, group_patches in zip(labels, hist_patches):
+        arrangement = hist_arrangement or ("stack" if stacked or histtype == "barstacked" else "layer")
+        appearance = hist_appearance or {"bar":"bars", "barstacked":"bars", "step":"step",
+                                         "stepfilled":"stepfilled"}.get(histtype, "bars")
+        stat = hist_stat or ("density" if density else "count")
+        edges, heights = histogram_heights(arrays, bins=bins, stat=stat,
+            arrangement=arrangement, common_bins=hist_common_bins,
+            common_norm=hist_common_norm, cumulative=cumulative,
+            common_edges=_hist_shared_edges,
+            norm_total=_hist_norm_total if hist_common_norm else None,
+            bin_mode=("discrete" if hist_discrete else hist_bin_mode),
+            bin_width=hist_bin_width, range_min=hist_range_min, range_max=hist_range_max)
+        if heights:
+            bottoms = np.zeros_like(heights[0]) if arrangement in ("stack", "fill") else None
+            nseries = len(heights)
+            for i, (name, edge, height) in enumerate(zip(labels, edges, heights)):
+                label = legend_label(rename, name, aliases)
                 alpha = _bounded_float(histogram_alphas, name,
-                                       1 if histtype == "step" else .65, 0, 1)
-                if hasattr(group_patches, "set_alpha"):
-                    group_patches.set_alpha(alpha)
+                                       1 if appearance == "step" else .65, 0, 1)
+                color = colors[name]
+                widths = np.diff(edge)
+                if arrangement == "dodge":
+                    width = widths / nseries
+                    left = edge[:-1] + i * width
                 else:
-                    for patch in group_patches:
-                        patch.set_alpha(alpha)
-        defaults["y_label"] = ("Cumulative probability" if cumulative and density else
-                               "Cumulative count" if cumulative else
-                               "Probability density" if density else "Count")
+                    width = widths
+                    left = edge[:-1]
+                baseline = bottoms if bottoms is not None else np.zeros_like(height)
+                if appearance == "bars":
+                    ax.bar(left, height, width=width, align="edge", bottom=baseline,
+                           color=color, alpha=alpha, label=label)
+                elif appearance in ("step", "stepfilled"):
+                    display_edges = (np.r_[left, left[-1] + width[-1]]
+                                     if arrangement == "dodge" else edge)
+                    ax.stairs(baseline + height, display_edges, baseline=baseline,
+                              fill=appearance == "stepfilled", alpha=alpha,
+                              color=color, label=label)
+                elif appearance == "poly":
+                    mids = edge[:-1] + widths / 2
+                    ax.plot(mids, baseline + height, color=color, alpha=alpha, label=label)
+                else:
+                    raise ValueError(f"Unknown histogram appearance: {appearance}")
+                if hist_kde and not hist_discrete and arrangement == "layer" and not cumulative:
+                    # KDE follows the selected histogram statistic and the
+                    # actual bin width; for variable-width bins use median.
+                    group = arrays[i]
+                    if hist_range_min not in (None, ''):
+                        group = group[group >= float(hist_range_min)]
+                    if hist_range_max not in (None, ''):
+                        group = group[group <= float(hist_range_max)]
+                    denom = (_hist_norm_total if hist_common_norm and _hist_norm_total is not None
+                             else sum(np.count_nonzero((a >= float(hist_range_min) if hist_range_min not in (None, '') else np.ones(len(a), dtype=bool)) &
+                                                       (a <= float(hist_range_max) if hist_range_max not in (None, '') else np.ones(len(a), dtype=bool))) for a in arrays)
+                             if hist_common_norm else len(group))
+                    if len(group) > 1 and len(edge) > 1:
+                        grid = np.linspace(edge[0], edge[-1], 256)
+                        kde = histogram_kde(group, grid, bandwidth=hist_kde_bw)
+                        width_scale = float(np.median(np.diff(edge)))
+                        if stat == "count":
+                            kde *= len(group) * width_scale
+                        elif stat == "frequency":
+                            kde *= len(group)
+                        elif stat == "density":
+                            kde *= len(group) / denom if denom else 0
+                        elif stat == "probability":
+                            kde *= (len(group) / denom if denom else 0) * width_scale
+                        elif stat == "percent":
+                            kde *= (len(group) / denom if denom else 0) * width_scale * 100
+                        ax.plot(grid, kde, color=color, linestyle="-", linewidth=1.7,
+                                label="_nolegend_")
+                if bottoms is not None:
+                    bottoms = bottoms + height
+        defaults["y_label"] = ("Proportion" if arrangement == "fill" else
+            ("Cumulative " if cumulative else "") +
+            {"count":"Count", "frequency":"Frequency", "probability":"Probability",
+             "percent":"Percent", "density":"Density"}[stat])
     elif kind == "scatter":
         for name, rows in series():
             color = colors.get(name, palette_values[0])
