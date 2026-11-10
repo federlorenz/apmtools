@@ -115,7 +115,7 @@ def _parse_datetime_filter(value):
 
 
 @traced('_apply_filters', kind="data" if 'shiny/data.py' not in ("plot_configs.py", "shiny/matplotlib_renderer.py") else "service")
-def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None):
+def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None, *, datetime_intervals=None):
     """Apply Summary filters, accepting dates, times and full datetimes.
 
     Invalid or partially entered values are ignored until they become valid,
@@ -137,21 +137,45 @@ def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None)
             mask &= matches
         filtered = filtered.loc[mask].copy()
 
-    start_kind, start = _parse_datetime_filter(datetime_start)
-    end_kind, end = _parse_datetime_filter(datetime_end)
-    kwargs = {}
-    if start_kind in ("date", "datetime"):
-        kwargs["date_start"] = datetime.combine(start, time.min) if start_kind == "date" else start
-    elif start_kind == "time":
-        kwargs["time_start"] = start
-    if end_kind in ("date", "datetime"):
-        # dtfilter uses an exclusive upper bound. A date-only end bound
-        # therefore means the end of that calendar day, not its midnight.
-        kwargs["date_end"] = datetime.combine(end + timedelta(days=1), time.min) if end_kind == "date" else end
-    elif end_kind == "time":
-        kwargs["time_end"] = end
-    if kwargs:
-        filtered = filtered.dtfilter(**kwargs)
+    from .datetime_intervals import normalize_datetime_intervals
+    windows = normalize_datetime_intervals(datetime_intervals, datetime_start, datetime_end)
+    if not windows:
+        return filtered
+
+    # A unique positional marker avoids relying on duplicate/nonconsecutive
+    # DataFrame indexes; Summary.dtfilter() resets the index on return.
+    marker = '__apmtools_datetime_interval_row__'
+    while marker in filtered.columns:
+        marker += '_'
+    marked = filtered.copy(deep=False)
+    marked = marked.assign(**{marker: np.arange(len(filtered), dtype=np.int64)})
+    positives = []
+    negatives = []
+    for window in windows:
+        start_kind, start = _parse_datetime_filter(window['start'])
+        end_kind, end = _parse_datetime_filter(window['end'])
+        kwargs = {}
+        if start_kind in ('date', 'datetime'):
+            kwargs['date_start'] = datetime.combine(start, time.min) if start_kind == 'date' else start
+        elif start_kind == 'time':
+            kwargs['time_start'] = start
+        if end_kind in ('date', 'datetime'):
+            kwargs['date_end'] = datetime.combine(end + timedelta(days=1), time.min) if end_kind == 'date' else end
+        elif end_kind == 'time':
+            kwargs['time_end'] = end
+        # Ignore incomplete/invalid bounds while the user is typing.
+        if not kwargs:
+            continue
+        selected = marked.dtfilter(**kwargs)
+        positions = np.asarray(selected[marker], dtype=np.int64)
+        (negatives if window['type'] == 'negative' else positives).append(positions)
+    keep = np.zeros(len(filtered), dtype=bool) if positives else np.ones(len(filtered), dtype=bool)
+    for positions in positives:
+        keep[positions] = True
+    for positions in negatives:
+        keep[positions] = False
+    filtered = filtered.iloc[np.flatnonzero(keep)].copy()
+
     return filtered
 
 

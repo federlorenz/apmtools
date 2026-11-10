@@ -19,4 +19,5 @@ def filter_config_fields(state):
         "numeric_subset_columns": list(state["numeric_bounds"]),
         "datetime_start": state["start"],
         "datetime_end": state["end"],
+        "datetime_intervals": copy.deepcopy(state.get("intervals", [])),
     }

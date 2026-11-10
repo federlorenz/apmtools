@@ -43,7 +43,7 @@ class PlotConfigManager:
     DATA_KEYS = frozenset({
         'plot_type', 'x', 'y', 'numeric_subset_columns',
         'numeric_subset_bounds', 'subset_chain', 'datetime_start',
-        'datetime_end', 'group_by', 'frequency', 'aggregate',
+        'datetime_end', 'datetime_intervals', 'group_by', 'frequency', 'aggregate',
         'only_complete', 'flooring_timestamp', 'multi_y_color_by',
     })
 

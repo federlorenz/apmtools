@@ -776,7 +776,8 @@ def pur_average(pur: pd.DataFrame):
     chadj = (a*chclean)+(b*pur[rh])+c
     pur['pm_adj'] = chadj
 
-def purple_processing(directory, interpolation=1, interval="30 seconds", timezone_shift = dt.timedelta(hours=0), interpolate_data=True):
+
+def purple_processing(directory, interpolation=1, interval="30 seconds", timezone_shift=dt.timedelta(hours=0), interpolate_data=True):
     numeric = ['current_temp_f',
                'current_humidity',
                'current_dewpoint_f',
@@ -849,6 +850,18 @@ def lascar_processing(directory, file, interpolation=1,interval="30 seconds", in
     out = Lascar(df)
     return out
 
+
+def csv_processing(directory, file, time_column="timestamp", date_format=None, monitor_name=None, timezone_shift=dt.timedelta(hours=0)):
+    if date_format == None:
+        df = pd.read_csv(directory+file,  index_col=time_column, parse_dates=True)
+    else:
+        df = pd.read_csv(directory+file,  index_col=time_column, date_format=date_format)
+    df.index = df.index.tz_localize(None)
+    df.index = df.index + timezone_shift
+    out = Apm(df)
+    if monitor_name!=None:
+        out.monitor = monitor_name
+    return out
 
 def lcm_processing(directory, file, interpolation=1, interval="300 seconds", interpolate_data=True, timezone_shift=dt.timedelta(hours=0)):
     numeric = ["PM2.5",	"PM10",	"CO2",	"NO2",	"Temperature",	"Humidity"]

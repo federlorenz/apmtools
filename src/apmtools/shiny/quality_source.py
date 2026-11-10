@@ -11,7 +11,7 @@ import copy
 from .inherited_source import source_frame
 
 
-_FILTER_FIELDS = ('subset_chain', 'datetime_start', 'datetime_end',
+_FILTER_FIELDS = ('subset_chain', 'datetime_start', 'datetime_end', 'datetime_intervals',
                   'numeric_subset_columns', 'numeric_subset_bounds')
 
 

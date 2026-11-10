@@ -5,7 +5,7 @@ transitions testable without a running Shiny session.
 """
 from __future__ import annotations
 
-SNAPSHOT_INPUT_KEYS = ("plot_type", "x", "y", "numeric_subset_columns", "datetime_start", "datetime_end",
+SNAPSHOT_INPUT_KEYS = ("plot_type", "x", "y", "numeric_subset_columns", "datetime_start", "datetime_end", "datetime_intervals",
         "group_by", "frequency", "aggregate", "only_complete", "flooring_timestamp",
         "palette", "template", "title", "title_font_size", "plot_dpi", "plot_height_pct", "legend_position",
         "legend_inside", "legend_labels", "legend_columns", "legend_font_size", "multi_y_color_by",

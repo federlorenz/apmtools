@@ -6,6 +6,7 @@ import pandas as pd
 
 from datetime import datetime, time, timedelta
 from .data import _parse_datetime_filter, _subset_choices
+from .datetime_intervals import saved_datetime_intervals
 
 
 def filter_quality_data(frame, settings):
@@ -43,21 +44,42 @@ def filter_quality_data(frame, settings):
                          if pd.api.types.is_datetime64_any_dtype(current[col])), None)
     if time_col is not None:
         timestamps = pd.to_datetime(current[time_col], errors='coerce')
-        mask = pd.Series(True, index=current.index)
-        for field, lower in (('datetime_start', True), ('datetime_end', False)):
-            kind, value = _parse_datetime_filter(settings.get(field))
-            if kind == 'date':
-                bound = datetime.combine(value, time.min)
-                if lower:
-                    mask &= timestamps.ge(bound)
-                else:
-                    mask &= timestamps.lt(bound + timedelta(days=1))
-            elif kind == 'datetime':
-                mask &= timestamps.ge(value) if lower else timestamps.lt(value)
-            elif kind == 'time':
+        intervals = saved_datetime_intervals(settings)
+        positives, negatives = [], []
+        for window in intervals:
+            start_kind, start = _parse_datetime_filter(window['start'])
+            end_kind, end = _parse_datetime_filter(window['end'])
+            mask = pd.Series(True, index=current.index)
+            active = False
+            if start_kind in ('date', 'datetime'):
+                bound = datetime.combine(start, time.min) if start_kind == 'date' else start
+                mask &= timestamps.ge(bound)
+                active = True
+            if end_kind in ('date', 'datetime'):
+                bound = (datetime.combine(end + timedelta(days=1), time.min)
+                         if end_kind == 'date' else end)
+                mask &= timestamps.lt(bound)
+                active = True
+            if start_kind == 'time' or end_kind == 'time':
+                begin = start if start_kind == 'time' else None
+                finish = end if end_kind == 'time' else None
                 times = timestamps.dt.time
-                mask &= times.ge(value) if lower else times.lt(value)
-        current = current.loc[mask.fillna(False)].copy()
+                if begin is not None and finish is not None:
+                    mask &= ((times >= begin) | (times < finish)) if begin > finish else (
+                        (times >= begin) & (times < finish))
+                elif begin is not None:
+                    mask &= times >= begin
+                else:
+                    mask &= times < finish
+                active = True
+            if active:
+                (negatives if window['type'] == 'negative' else positives).append(mask.fillna(False))
+        keep = pd.Series(False if positives else True, index=current.index)
+        for mask in positives:
+            keep |= mask
+        for mask in negatives:
+            keep &= ~mask
+        current = current.loc[keep.to_numpy()].copy()
     for column in settings.get('numeric_subset_columns', []):
         if column not in current.columns or not pd.api.types.is_numeric_dtype(current[column]):
             continue

@@ -127,6 +127,7 @@ class PlotApp:
         from .operation_log import OperationLog, stream_operation
         from .dataset_creation import scan_folder_async, scan_results_frame, scan_parameters, scan_directory_choices, parse_scan_levels, create_summary_async, summary_destination
         from .shiny.ui import _table_preview_frame
+        from . import dataset_editing as editing
         import shinyswatch
 
         app_ui = ui.page_fluid(
@@ -145,6 +146,20 @@ class PlotApp:
                 margin-top:.5rem; align-items:stretch;}
               .summary-empty-dataset-panels > div {border:1px solid var(--bs-border-color); border-radius:.5rem;
                 min-height:0; min-width:0; background:var(--bs-body-bg); overflow:auto;}
+              .summary-modify-sidebar-toolbar {display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.5rem;}
+              .summary-modify-panels {margin-top:.5rem; height:max(420px, calc(100dvh - 210px));}
+              .summary-modify-panels.summary-modify-left-hidden {grid-template-columns:minmax(0,3fr) minmax(10rem,1fr);}
+              .summary-modify-panels.summary-modify-right-hidden {grid-template-columns:minmax(10rem,1fr) minmax(0,3fr);}
+              .summary-modify-panels.summary-modify-left-hidden.summary-modify-right-hidden {grid-template-columns:minmax(0,1fr);}
+              .summary-modify-left-hidden .summary-modify-left,
+              .summary-modify-right-hidden .summary-modify-right {display:none;}
+              @media(max-width:850px) {
+                .summary-modify-panels, .summary-modify-panels.summary-modify-left-hidden,
+                .summary-modify-panels.summary-modify-right-hidden,
+                .summary-modify-panels.summary-modify-left-hidden.summary-modify-right-hidden {
+                    grid-template-columns:minmax(0,1fr); height:auto; }
+                .summary-modify-main {min-height:400px;}
+              }
               .summary-create-left {padding:.75rem; min-width:0;}
               .summary-create-main {padding:.75rem; min-width:0; display:flex; flex-direction:column;
                 overflow:hidden !important;}
@@ -198,6 +213,19 @@ class PlotApp:
                 .summary-create-main {height:max(400px, calc(100dvh - 180px));}}
             """),
             ui.tags.script("""
+              // Delegate clicks because Modify dataset can be recreated on tab changes.
+              document.addEventListener('click', function(event) {
+                const button = event.target.closest && event.target.closest('.modify-sidebar-toggle');
+                if (!button) return;
+                const workspace = button.closest('.summary-modify-workspace');
+                const panels = workspace && workspace.querySelector('.summary-modify-panels');
+                if (!panels) return;
+                const side = button.getAttribute('data-side');
+                if (side !== 'left' && side !== 'right') return;
+                const hidden = panels.classList.toggle('summary-modify-' + side + '-hidden');
+                button.textContent = (hidden ? 'Show ' : 'Hide ') + side + ' sidebar';
+                button.setAttribute('aria-expanded', String(!hidden));
+              });
               // Full-width resize grip; no Shiny reactive values or polling needed.
               // Grabbing the top grip and moving upward makes the log taller.
               (function () {
@@ -255,6 +283,10 @@ class PlotApp:
             generation = reactive.value(0)
             blank_tabs = reactive.value(())
             selected_blank_tab = reactive.value(None)
+            modify_open = reactive.value(False)
+            plot_open = reactive.value(False)
+            modify_timeline = reactive.value(None)
+            selected_loaded_tab = reactive.value("plots")
             status = reactive.value("" if self.summary is not None else "No dataset loaded")
             scan_folder_path = reactive.value("")
             scan_browse_path = reactive.value(Path.home().resolve())
@@ -283,17 +315,48 @@ class PlotApp:
 
             @render.ui
             def dataset_toolbar_actions():
-                if dataset.get() is not None:
+                # The Summary produced in Create dataset is available before
+                # the user elects to open the Plot/Table workspace.
+                has_summary = dataset.get() is not None or generated_summary.get() is not None
+                if has_summary:
                     return ui.div(
-                        ui.input_action_button("save_dataset_root", "Save dataset", class_="btn-outline-primary"),
-                        ui.input_action_button("close_dataset", "Close dataset", class_="btn-outline-danger"),
+                        ui.input_action_button("modify_dataset", "Modify Dataset", class_="btn-outline-primary"),
+                        ui.input_action_button("save_dataset_root", "Save Dataset", class_="btn-outline-primary"),
+                        ui.input_action_button("close_dataset", "Close Dataset", class_="btn-outline-danger"),
+                        ui.input_action_button("plot_table_dataset", "Plot/Table Dataset", class_="btn-outline-primary"),
                         class_="d-flex gap-1 align-items-center",
                     )
                 return ui.div(
                     ui.input_action_button("create_dataset", "Create dataset", class_="btn-outline-primary"),
-                    ui.input_action_button("modify_dataset", "Modify dataset", class_="btn-outline-primary"),
                     class_="d-flex gap-1 align-items-center",
                 )
+
+            @reactive.effect
+            @reactive.event(input.plot_table_dataset)
+            def activate_plot_table_workspace():
+                nonlocal scanned_dataset
+                data = dataset.get()
+                if data is None:
+                    data = generated_summary.get()
+                    if data is None:
+                        return
+                    # Promote an in-memory Create dataset result into the
+                    # normal loaded Summary lifecycle only on explicit request.
+                    self._set_dataset(data)
+                    dataset.set(self.summary)
+                    modify_timeline.set(None)
+                    modify_open.set(False)
+                    generation.set(generation.get() + 1)
+                    create_epoch.set(create_epoch.get() + 1)
+                    blank_tabs.set(())
+                    selected_blank_tab.set(None)
+                    scanned_dataset = None
+                    scan_output.set(None)
+                    scan_completed.set(False)
+                    generated_summary.set(None)
+                    self.created_summary = None
+                plot_open.set(True)
+                selected_loaded_tab.set("plots")
 
             @reactive.effect
             @reactive.event(input.create_dataset)
@@ -307,11 +370,33 @@ class PlotApp:
             @reactive.effect
             @reactive.event(input.modify_dataset)
             def modify_empty_workspace():
-                if dataset.get() is None:
+                if dataset.get() is not None:
+                    modify_open.set(True)
+                    selected_loaded_tab.set("modify")
+                else:
                     tabs = blank_tabs.get()
                     if "modify" not in tabs:
                         blank_tabs.set((*tabs, "modify"))
                     selected_blank_tab.set("modify")
+
+            @reactive.effect
+            @reactive.event(input.loaded_dataset_tabs)
+            def track_loaded_dataset_tab():
+                """Respect direct navigation between the plot and Modify tabs."""
+                selection = input.loaded_dataset_tabs()
+                if selection in ("plots", "modify") and selected_loaded_tab.get() != selection:
+                    selected_loaded_tab.set(selection)
+
+            @reactive.effect
+            @reactive.event(input.close_modify_dataset_tab)
+            def close_modify_dataset_tab():
+                if dataset.get() is not None:
+                    modify_open.set(False)
+                    selected_loaded_tab.set("plots")
+                else:
+                    remaining = tuple(tab for tab in blank_tabs.get() if tab != "modify")
+                    blank_tabs.set(remaining)
+                    selected_blank_tab.set(remaining[-1] if remaining else None)
 
             @reactive.effect
             @reactive.event(input.close_create_dataset_tab)
@@ -653,6 +738,274 @@ class PlotApp:
                     if epoch == create_epoch.get():
                         scan_busy.set(False)
 
+            def _modify_source():
+                source = dataset.get()
+                return source if source is not None else generated_summary.get()
+
+            def _active_modify_timeline():
+                source = _modify_source()
+                if source is None:
+                    return None
+                timeline = modify_timeline.get()
+                if timeline is None or timeline.current is not source:
+                    from .summary_timeline import SummaryStepTimeline
+                    timeline = SummaryStepTimeline(source)
+                    modify_timeline.set(timeline)
+                return timeline
+
+            @render.ui
+            def modify_result_content():
+                """Preview the current Summary without copying the full dataset."""
+                summary = dataset.get()
+                if summary is None:
+                    summary = generated_summary.get()
+                if summary is None:
+                    return ui.div(ui.p("Create or open a Summary to modify it."), class_="p-3")
+                return ui.div(
+                    ui.div(
+                        ui.strong(f"Summary rows: {len(summary):,}"),
+                        ui.input_select("modify_preview_rows", "Rows in grid preview",
+                                        choices={"500": "500 rows", "1000": "1,000 rows",
+                                                 "5000": "5,000 rows", "all": "All rows"},
+                                        selected="1000"),
+                        class_="d-flex align-items-center justify-content-between gap-3 flex-wrap summary-scan-preview-toolbar",
+                    ),
+                    ui.div(ui.output_data_frame("modify_results_grid"), class_="summary-scan-grid"),
+                    class_="summary-scan-results-content",
+                )
+
+            @render.data_frame
+            def modify_results_grid():
+                from shiny import render as shiny_render
+                import pandas as pd
+                summary = dataset.get()
+                if summary is None:
+                    summary = generated_summary.get()
+                if summary is None:
+                    return shiny_render.DataGrid(pd.DataFrame(), width="100%")
+                try:
+                    row_count = input.modify_preview_rows() or "1000"
+                except Exception:
+                    row_count = "1000"
+                preview = _table_preview_frame(summary, row_count).copy()
+                for name in preview.columns:
+                    if preview[name].dtype == object:
+                        preview[name] = preview[name].map(
+                            lambda value: value if isinstance(value, (str, int, float, bool)) or value is None
+                            else str(value))
+                return shiny_render.DataGrid(preview, filters=True, width="100%", height="100%")
+
+            @render.ui
+            def modify_editor_sidebar():
+                """Structural column edits in the left Modify dataset sidebar."""
+                summary = _modify_source()
+                if summary is None:
+                    return ui.p("Open or create a Summary first.")
+                if not len(summary.columns):
+                    return ui.p("No columns available")
+                return ui.navset_tab(
+                    ui.nav_panel("Edit columns",
+                        ui.h6("Edit column names"),
+                        ui.input_text_area("modify_rename_mapping", "Old=new (one per line)", rows=5,
+                                           value=editing.rename_defaults(summary)),
+                        ui.input_action_button("modify_apply_rename", "Apply names", class_="btn-outline-primary w-100"),
+                        ui.hr(),
+                        ui.h6("Keep columns"),
+                        ui.input_text_area("modify_keep_columns", "Comma-separated names to keep", rows=3,
+                                           value=editing.keep_defaults(summary)),
+                        ui.input_action_button("modify_apply_keep", "Keep listed columns", class_="btn-outline-primary w-100"),
+                        ui.hr(),
+                        ui.h6("Create column"),
+                        ui.input_text("modify_new_name", "Column name"),
+                        ui.input_text("modify_new_fill", "Initial value (optional)"),
+                        ui.input_action_button("modify_apply_create", "Create column", class_="btn-outline-primary w-100"),
+                    ),
+                    id="modify_editor_tabs",
+                )
+
+            @render.ui
+            def modify_editor_right_sidebar():
+                """Value edits and history in the right Modify dataset sidebar."""
+                summary = _modify_source()
+                if summary is None:
+                    return ui.p("Open or create a Summary first.")
+                if not len(summary.columns):
+                    return ui.p("No columns available")
+                timeline = _active_modify_timeline()
+                names = list(map(str, summary.columns))
+                choices = {name: name for name in names}
+                return ui.navset_tab(
+                    ui.nav_panel("Edit/Map column values",
+                        ui.h6("Edit column values"),
+                        ui.input_select("modify_values_column", "Column", choices=choices),
+                        ui.output_ui("modify_values_mapping_editor"),
+                        ui.input_action_button("modify_apply_values", "Apply values", class_="btn-outline-primary w-100"),
+                        ui.hr(),
+                        ui.h6("Map values"),
+                        ui.input_select("modify_map_target", "Target column", choices=choices),
+                        ui.input_select("modify_map_condition", "Condition column", choices=choices),
+                        ui.input_select("modify_map_operator", "Condition",
+                                        choices={op: op for op in ('==', '!=', '>', '>=', '<', '<=', 'isin', 'isna', 'notna')}),
+                        ui.input_text("modify_map_value", "Compare with (comma-separated for isin)"),
+                        ui.input_text("modify_map_true", "Value when True"),
+                        ui.input_checkbox("modify_map_has_false", "Set value when False", value=False),
+                        ui.input_text("modify_map_false", "Value when False (optional)"),
+                        ui.input_action_button("modify_apply_map", "Apply mapping", class_="btn-outline-primary w-100"),
+                        ui.hr(),
+                        ui.h6("Calculate column"),
+                        ui.input_text("modify_calc_name", "New or existing column name"),
+                        ui.input_text_area("modify_calc_expression", "Expression", rows=3,
+                                           placeholder="a * 0.7 + b * 0.3"),
+                        ui.input_action_button("modify_apply_calculate", "Calculate column", class_="btn-outline-primary w-100"),
+                    ),
+                    ui.nav_panel("History",
+                        ui.h6("Transformation history"),
+                        ui.input_select("modify_history_step", "Dataset state",
+                                        choices=timeline.options(), selected=str(timeline.cursor)),
+                        ui.p("Select a step to preview that dataset state. Later steps remain available until you apply a new edit.", class_="form-text"),
+                        ui.p(f"{timeline.history_prefix} earlier recorded step(s) were present when this Summary was opened. "
+                             "Those intermediate states require the original source data to reconstruct."
+                             if timeline.history_prefix else "Original editing state is the Summary when this editor opened.",
+                             class_="form-text"),
+                    ),
+                    id="modify_editor_right_tabs",
+                )
+
+            @render.ui
+            def modify_values_mapping_editor():
+                summary = dataset.get()
+                if summary is None:
+                    summary = generated_summary.get()
+                if summary is None or len(summary.columns) == 0:
+                    return ui.div()
+                try:
+                    selected = input.modify_values_column()
+                except Exception:
+                    selected = None
+                if selected not in summary.columns:
+                    selected = str(summary.columns[0])
+                values = editing.values_defaults(summary, selected)
+                return ui.div(
+                    ui.input_text_area("modify_values_mapping", "Old=new (one per line)",
+                                       rows=5, value=values),
+                    ui.p("Up to 200 distinct non-missing values are shown. Edit the right-hand side to replace values.",
+                         class_="form-text"),
+                )
+
+            def _commit_modified_summary(result, *, message="Summary updated; change recorded in history."):
+
+                source = dataset.get()
+                if source is None:
+                    self.created_summary = result
+                    generated_summary.set(result)
+                else:
+                    # Refresh the plotting workspace with the edited Summary.
+                    # Retain source-level plots; column transformations themselves
+                    # clear stale views as defined by the Summary methods.
+                    self.original_summary = result
+                    self.summary = result.copy(deep=False)
+                    dataset.set(self.summary)
+                    # The loaded workspace owns a shallow Summary copy. Keep
+                    # the timeline pointing at that exact live object.
+                    timeline = modify_timeline.get()
+                    if timeline is not None and timeline.current is result:
+                        timeline.current = self.summary
+                        modify_timeline.set(timeline)
+                    generation.set(generation.get() + 1)
+                status.set(f"Summary modified: {len(result):,} rows, {len(result.columns)} columns")
+                ui.notification_show(message, type="message", duration=5)
+
+            def _run_modify(operation):
+                timeline = _active_modify_timeline()
+                if timeline is None:
+                    ui.notification_show("Open or create a Summary first", type="warning")
+                    return
+                try:
+                    result = operation(timeline.current)
+                    if result is timeline.current:
+                        raise ValueError("Operation did not produce a new Summary")
+                    timeline.append(result)
+                    modify_timeline.set(timeline)
+                    _commit_modified_summary(result)
+                except Exception as exc:
+                    ui.notification_show(f"Could not modify Summary: {exc}", type="error", duration=10)
+
+            @reactive.effect
+            @reactive.event(input.modify_history_step)
+            def modify_select_history_step():
+                timeline = _active_modify_timeline()
+                if timeline is None:
+                    return
+                try:
+                    index = int(input.modify_history_step())
+                    if index == timeline.cursor:
+                        return
+                    result = timeline.select(index)
+                    modify_timeline.set(timeline)
+                    _commit_modified_summary(
+                        result, message=f"Showing dataset at history step {index} of {timeline.count}")
+                except Exception as exc:
+                    ui.notification_show(f"Could not restore history step: {exc}",
+                                         type="error", duration=10)
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_rename)
+            def modify_apply_rename():
+                _run_modify(lambda data: editing.edit_rename(data, input.modify_rename_mapping()))
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_values)
+            def modify_apply_values():
+                _run_modify(lambda data: editing.edit_values(data, input.modify_values_column(), input.modify_values_mapping()))
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_keep)
+            def modify_apply_keep():
+                _run_modify(lambda data: editing.edit_keep_text(data, input.modify_keep_columns()))
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_create)
+            def modify_apply_create():
+                _run_modify(lambda data: editing.create_column(data, input.modify_new_name(), input.modify_new_fill()))
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_map)
+            def modify_apply_map():
+                _run_modify(lambda data: editing.map_column(
+                    data, input.modify_map_target(), input.modify_map_condition(),
+                    input.modify_map_operator(), input.modify_map_value(),
+                    input.modify_map_true(), input.modify_map_false(),
+                    bool(input.modify_map_has_false())))
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_calculate)
+            def modify_apply_calculate():
+                _run_modify(lambda data: editing.calculate_column(data, input.modify_calc_name(), input.modify_calc_expression()))
+
+            def modify_workspace():
+                """Editable Summary with independently collapsible sidebars."""
+                return ui.div(
+                    ui.div(
+                        ui.tags.button("Hide left sidebar", type="button",
+                                       class_="btn btn-outline-secondary btn-sm modify-sidebar-toggle",
+                                       **{"data-side": "left", "aria-expanded": "true"}),
+                        ui.tags.button("Hide right sidebar", type="button",
+                                       class_="btn btn-outline-secondary btn-sm modify-sidebar-toggle",
+                                       **{"data-side": "right", "aria-expanded": "true"}),
+                        class_="summary-modify-sidebar-toolbar",
+                    ),
+                    ui.div(
+                        ui.div(ui.output_ui("modify_editor_sidebar"),
+                               class_="summary-empty-dataset-left summary-create-left summary-modify-left"),
+                        ui.div(ui.output_ui("modify_result_content"),
+                               class_="summary-empty-dataset-main summary-create-main summary-modify-main"),
+                        ui.div(ui.output_ui("modify_editor_right_sidebar"),
+                               class_="summary-empty-dataset-right summary-create-left summary-modify-right"),
+                        class_="summary-empty-dataset-panels summary-modify-panels",
+                    ),
+                    class_="summary-modify-workspace",
+                )
+
             @render.ui
             def scan_result_content():
                 if scan_busy.get():
@@ -698,7 +1051,7 @@ class PlotApp:
             @reactive.effect
             @reactive.event(input.close_dataset)
             def confirm_close_dataset():
-                if dataset.get() is None:
+                if dataset.get() is None and generated_summary.get() is None:
                     return
                 ui.modal_show(ui.modal(
                     ui.p("Close the current dataset? Unsaved dataset changes and plot settings may be lost."),
@@ -710,11 +1063,23 @@ class PlotApp:
             @reactive.effect
             @reactive.event(input.confirm_close_dataset)
             def close_current_dataset():
-                if dataset.get() is None:
+                nonlocal scanned_dataset
+                if dataset.get() is None and generated_summary.get() is None:
                     return
                 self.original_summary = None
                 self.summary = None
                 dataset.set(None)
+                modify_timeline.set(None)
+                modify_open.set(False)
+                selected_loaded_tab.set("plots")
+                # Close also clears an in-memory Summary created in the wizard.
+                self.created_summary = None
+                generated_summary.set(None)
+                scan_completed.set(False)
+                scan_output.set(None)
+                scanned_dataset = None
+                create_epoch.set(create_epoch.get() + 1)
+                plot_open.set(False)
                 generation.set(generation.get() + 1)
                 blank_tabs.set(())
                 selected_blank_tab.set(None)
@@ -724,8 +1089,8 @@ class PlotApp:
             @reactive.effect
             @reactive.event(input.save_dataset_root)
             def show_root_save_dialog():
-                if dataset.get() is None or self.original_summary is None:
-                    ui.notification_show("Open a dataset before saving", type="warning")
+                if dataset.get() is None and generated_summary.get() is None:
+                    ui.notification_show("Open or create a dataset before saving", type="warning")
                     return
                 ui.modal_show(ui.modal(
                     ui.p("Save the loaded Summary and its saved plot configurations as a pickle."),
@@ -742,7 +1107,8 @@ class PlotApp:
             def save_root_dataset():
                 try:
                     target = save_summary_pickle(
-                        self.original_summary, input.root_dataset_path(),
+                        (self.original_summary if dataset.get() is not None else generated_summary.get()),
+                        input.root_dataset_path(),
                         overwrite=bool(input.root_dataset_overwrite()))
                     ui.modal_remove()
                     ui.notification_show(f"Dataset saved to {target}", type="message", duration=8)
@@ -781,6 +1147,10 @@ class PlotApp:
                     return
                 self._set_dataset(replacement)
                 dataset.set(self.summary)
+                modify_timeline.set(None)
+                modify_open.set(False)
+                selected_loaded_tab.set("plots")
+                plot_open.set(False)
                 generation.set(generation.get() + 1)
                 create_epoch.set(create_epoch.get() + 1)
                 blank_tabs.set(())
@@ -849,12 +1219,12 @@ class PlotApp:
                         *(ui.nav_panel(
                             (ui.tags.span(
                                 labels[mode],
-                                ui.input_action_button("close_create_dataset_tab", "×",
-                                                       class_="btn btn-sm btn-link text-danger p-0 ms-2",
-                                                       title="Close Create dataset tab")
-                                if mode == "create" else ui.div(),
-                                class_="d-inline-flex align-items-center") if mode == "create" else labels[mode]),
-                            ui.div(
+                                ui.input_action_button(
+                                    "close_create_dataset_tab" if mode == "create" else "close_modify_dataset_tab",
+                                    "×", class_="btn btn-sm btn-link text-danger p-0 ms-2",
+                                    title=f"Close {labels[mode]} tab"),
+                                class_="d-inline-flex align-items-center")),
+                            (ui.div(
                                 (ui.div(
                                     ui.navset_tab(
                                         *( [ui.nav_panel(ui.tags.span("Scan folder", class_="summary-scan-tab-label"),
@@ -892,18 +1262,39 @@ class PlotApp:
                                  if mode == "create" else ui.div(class_="summary-empty-dataset-main")),
                                 ui.div(class_="summary-empty-dataset-right summary-create-right" if mode == "create" else "summary-empty-dataset-right"),
                                 class_="summary-empty-dataset-panels",
-                            ),
+                            ) if mode == "create" else modify_workspace()),
                             value=mode,
                         ) for mode in tabs),
                         id="blank_dataset_tabs",
                         selected=selected_blank_tab.get(),
+                    )
+                if not plot_open.get():
+                    if modify_open.get():
+                        return modify_workspace()
+                    return ui.div(
+                        ui.h3("Summary ready"),
+                        ui.p("Choose Modify Dataset or Plot/Table Dataset from the toolbar."),
+                        class_="p-4",
                     )
                 name = f"dataset_{generation.get()}"
                 # Mount effect is responsible for module registration.
                 # This render function only creates the UI markup.
                 if mounted_generation.get() != generation.get():
                     return ui.div("Loading plotting workspace...")
-                return ui_factories[name](name)
+                workspace = ui_factories[name](name)
+                if not modify_open.get():
+                    return workspace
+                return ui.navset_tab(
+                    ui.nav_panel("Plots", workspace, value="plots"),
+                    ui.nav_panel(
+                        ui.tags.span("Modify dataset",
+                            ui.input_action_button("close_modify_dataset_tab", "×",
+                                class_="btn btn-sm btn-link text-danger p-0 ms-2",
+                                title="Close Modify dataset tab"),
+                            class_="d-inline-flex align-items-center"),
+                        modify_workspace(), value="modify"),
+                    id="loaded_dataset_tabs", selected=selected_loaded_tab.get(),
+                )
 
         return App(app_ui, server)
 

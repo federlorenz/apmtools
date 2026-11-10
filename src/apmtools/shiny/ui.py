@@ -1,6 +1,8 @@
 """Shiny application controls, reactive server and launch."""
 from __future__ import annotations
 from .filter_config import filter_config_fields as _filter_config_fields
+from .datetime_intervals import (MAX_DATETIME_INTERVALS, datetime_interval_controls,
+                                 input_datetime_intervals)
 import threading
 import json
 import os
@@ -316,10 +318,7 @@ if (!window.__apmColorPickerInstalled) {
                             choices={c: c for c in numeric_columns},
                             selected=initial("numeric_subset_columns", []), multiple=True),
                         ui.output_ui("numeric_subset_bounds"),
-                        ui.input_text("datetime_start", "Start datetime", value=initial("datetime_start", ""),
-                            placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
-                        ui.input_text("datetime_end", "End datetime", value=initial("datetime_end", ""),
-                            placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                        *datetime_interval_controls(ui, initial_filters),
                         ui.help_text("Filters affect this plot only. New plots inherit the selected plot settings.")),
                     ui.nav_panel("Group by",
                         ui.input_selectize("group_by", "Group by", choices={c:c for c in group_columns},
@@ -586,34 +585,47 @@ if (!window.__apmColorPickerInstalled) {
                             return config_manager.value(config_tab_id, name, default) if hasattr(config_manager, "value") else config_manager.get(config_tab_id).get(name, default)
                 return initial_filters.get(name, default)
 
+            # Later datetime widgets can be hidden when this calc first runs.
+            # A freshly mounted widget is not guaranteed to have been an input
+            # dependency of that first cached calculation. Explicitly invalidate
+            # the filter state on every filter edit, including newly shown ranges.
+            _filter_input_revision = reactive.value(0)
+
             @reactive.calc
             @traced('filter_state', kind='reactive_calc', trigger=None)
             def filter_state():
-                def text_value(name):
+                _filter_input_revision.get()
+                def _optional_filter_input(name, default):
                     try:
-                        return str(getattr(input, name)() or "").strip()
+                        return str(input[name]() or '').strip()
                     except Exception:
-                        return str(_live_setting(name, "") or "").strip()
-
+                        return default
+                intervals = input_datetime_intervals(
+                    lambda name, default: _optional_filter_input(name, default),
+                    {'datetime_intervals': _live_setting('datetime_intervals', initial_filters.get('datetime_intervals')),
+                     'datetime_start': _live_setting('datetime_start', initial_filters.get('datetime_start', '')),
+                     'datetime_end': _live_setting('datetime_end', initial_filters.get('datetime_end', ''))})
                 result = {"stages": _restored_subset_chain(),
                         "numeric_bounds": _restored_numeric_bounds(),
-                        "start": text_value("datetime_start"),
-                        "end": text_value("datetime_end")}
+                        "start": intervals[0]['start'] if intervals else '',
+                        "end": intervals[0]['end'] if intervals else '',
+                        "intervals": intervals}
                 return result
 
 
             def _commit_filter_event():
-                """Commit a user filter event without subscribing to configuration writes.
+                """Invalidate filter data and persist a fresh view of every interval.
 
-                Reading all effective controls in an isolated scope prevents an
-                unrelated input from becoming a dependency of this event handler.
-                Missing dynamic controls retain their canonical draft values.
+                Later datetime inputs may have been absent at the time the first
+                filter_state() ran. Invalidate its cache *before* reading it, so
+                an edit to interval 2+ is not lost behind the first interval's
+                previously cached result. This applies to unsaved plots too.
                 """
-                if config_manager is None or config_tab_id is None:
-                    return
                 with reactive.isolate():
-                    changes = _filter_config_fields(filter_state())
-                    _patch_live_config(config_tab_id, changes)
+                    _filter_input_revision.set(_filter_input_revision.get() + 1)
+                    if config_manager is not None and config_tab_id is not None:
+                        changes = _filter_config_fields(filter_state())
+                        _patch_live_config(config_tab_id, changes)
 
             def _register_filter_event(input_name):
                 """Register a per-control event, including dynamically mounted inputs."""
@@ -635,8 +647,13 @@ if (!window.__apmColorPickerInstalled) {
             # broad synchronization effect, each handler observes one UI input;
             # no handler subscribes to the draft it writes.
             _filter_event_handlers = []
-            for _name in ("numeric_subset_columns", "datetime_start", "datetime_end"):
+            for _name in ("numeric_subset_columns",):
                 _filter_event_handlers.append(_register_filter_event(_name))
+            for _index in range(MAX_DATETIME_INTERVALS):
+                for _name in (("datetime_start" if _index == 0 else f"datetime_start_{_index}"),
+                              ("datetime_end" if _index == 0 else f"datetime_end_{_index}"),
+                              f"datetime_mode_{_index}"):
+                    _filter_event_handlers.append(_register_filter_event(_name))
             for _stage in range(max_subset_stages):
                 for _prefix in ("subset_column", "subset_values", "subset_style"):
                     _filter_event_handlers.append(
@@ -674,7 +691,7 @@ if (!window.__apmColorPickerInstalled) {
                             {column_map[stage["column"]]: selected},
                             filter_style=stage["style"],
                         )
-                current = _apply_filters(current, {}, state["start"], state["end"])
+                current = _apply_filters(current, {}, state["start"], state["end"], datetime_intervals=state["intervals"])
                 for name, bounds in state["numeric_bounds"].items():
                     values = pd.to_numeric(current[column_map[name]], errors="coerce")
                     for suffix, comparison in (("gt", "gt"), ("lt", "lt")):
@@ -1948,8 +1965,10 @@ if (!window.__apmColorPickerInstalled) {
                     ui.update_select(f"subset_column_{_i}", selected="")
                     ui.update_select(f"subset_style_{_i}", selected="all")
                 ui.update_selectize("numeric_subset_columns", selected=[])
-                ui.update_text("datetime_start", value="")
-                ui.update_text("datetime_end", value="")
+                for _index in range(MAX_DATETIME_INTERVALS):
+                    ui.update_text("datetime_start" if _index == 0 else f"datetime_start_{_index}", value="")
+                    ui.update_text("datetime_end" if _index == 0 else f"datetime_end_{_index}", value="")
+                    ui.update_select(f"datetime_mode_{_index}", selected="positive")
                 ui.update_selectize("group_by", selected=[])
                 ui.update_checkbox("multi_panel", value=False)
                 ui.update_selectize("bar_stacking", selected=[])
@@ -2679,10 +2698,7 @@ if (!window.__apmColorPickerInstalled) {
                                 choices={c: c for c in numeric}, multiple=True,
                                 selected=settings.get("numeric_subset_columns", [])),
                             ui.output_ui("numeric_subset_bounds"),
-                            ui.input_text("datetime_start", "Start datetime", value=settings.get("datetime_start", ""),
-                                placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
-                            ui.input_text("datetime_end", "End datetime", value=settings.get("datetime_end", ""),
-                                placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                            *datetime_interval_controls(ui, settings),
                         ),
                         ui.nav_panel("Frequency/Grouping/Statistical aggregation",
                             ui.input_selectize("group_by", "Group by", choices={c: c for c in groups},
@@ -2725,6 +2741,42 @@ if (!window.__apmColorPickerInstalled) {
 
     @module.server
     def table_tab_server(input, output, session, frame, settings=None):
+        _table_datetime_revision = reactive.value(0)
+
+        def table_datetime_intervals():
+            _table_datetime_revision.get()
+            def read(name, default):
+                try:
+                    return input[name]()
+                except Exception:
+                    return default
+            return input_datetime_intervals(read, settings)
+
+        # Ensure dynamically revealed ranges invalidate the table, even if they
+        # did not exist when the table's first reactive calculation ran.
+        _table_datetime_handlers = []
+        for _interval_index in range(MAX_DATETIME_INTERVALS):
+            for _input_id in (
+                'datetime_start' if _interval_index == 0 else f'datetime_start_{_interval_index}',
+                'datetime_end' if _interval_index == 0 else f'datetime_end_{_interval_index}',
+                f'datetime_mode_{_interval_index}',
+            ):
+                def _make_datetime_handler(input_id):
+                    def _value():
+                        try:
+                            return input[input_id]()
+                        except Exception:
+                            return None
+
+                    @reactive.effect
+                    @reactive.event(_value, ignore_init=True)
+                    def _changed():
+                        with reactive.isolate():
+                            _table_datetime_revision.set(_table_datetime_revision.get() + 1)
+                    return _changed
+
+                _table_datetime_handlers.append(_make_datetime_handler(_input_id))
+
         settings = settings or {}
         # Preserve Summary methods on snapshots made from plots and tables.
         if hasattr(summary, "subset") and not hasattr(frame, "subset"):
@@ -2802,7 +2854,7 @@ if (!window.__apmColorPickerInstalled) {
                     except Exception:
                         style = "all"
                     current = current.subset({name: values}, filter_style=style)
-            current = _apply_filters(current, {}, input.datetime_start(), input.datetime_end())
+            current = _apply_filters(current, {}, datetime_intervals=table_datetime_intervals())
             for name in list(input.numeric_subset_columns() or []):
                 if name not in numeric:
                     continue
@@ -2948,9 +3000,13 @@ if (!window.__apmColorPickerInstalled) {
                     except Exception:
                         bounds[name][suffix] = ""
             freq = input.frequency()
+            intervals = table_datetime_intervals()
             return {"subset_chain": chain, "numeric_subset_columns": list(input.numeric_subset_columns() or []),
-                    "numeric_subset_bounds": bounds, "datetime_start": input.datetime_start() or "",
-                    "datetime_end": input.datetime_end() or "", "group_by": list(input.group_by() or []),
+                    "numeric_subset_bounds": bounds,
+                    "datetime_start": intervals[0]['start'] if intervals else '',
+                    "datetime_end": intervals[0]['end'] if intervals else '',
+                    "datetime_intervals": intervals,
+                    "group_by": list(input.group_by() or []),
                     "frequency": freq, "aggregate": input.aggregate(),
                     "aggregate_columns": list(input.aggregate_columns() or []),
                     "only_complete": bool(input.only_complete()) if FREQUENCIES.get(freq) is not None else True,

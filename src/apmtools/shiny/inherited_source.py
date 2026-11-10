@@ -77,7 +77,8 @@ def _legacy_source_frame(summary, steps):
             selected = [mapping[k] for k in item.get('values', []) if k in mapping]
             if selected:
                 current = current.subset({name: selected}, filter_style=item.get('style', 'all'))
-        current = _apply_filters(current, {}, step.get('datetime_start'), step.get('datetime_end'))
+        current = _apply_filters(current, {}, step.get('datetime_start'), step.get('datetime_end'),
+                                 datetime_intervals=step.get('datetime_intervals'))
         for name in step.get('numeric_subset_columns', []):
             if name not in current.columns:
                 raise ValueError(f'Inherited numeric column is unavailable: {name}')

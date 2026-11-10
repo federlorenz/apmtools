@@ -16,6 +16,7 @@ from functools import reduce
 from .units import upas_units, lascar_units, purple_units, lcm_units
 from .completeness import analyse_completeness, complete_interval_mask
 from .history_codec import encode_value, decode_value, load_history, save_history as _save_history_file
+from .column_expressions import evaluate_column_expression
 
 
 _OPS = {">": operator.gt, ">=": operator.ge, "<": operator.lt,
@@ -523,9 +524,9 @@ class Dataset(DictionaryPlus):
                 f"\nSubset by {filter_dict} on style {filter_style} by condition {condition}"
             return a
 
-    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, utc_timezone=0, interpolate=False, add_m={}, message_callback=None):
+    def scan_folder(self, directory="./", levels=[], level=0, monitor=None, levels_dict=None, utc_timezone=0, interpolate=False, add_m={}, message_callback=None, signatures ={}):
 
-        from .data_processing import upas_processing, lascar_processing, purple_processing, lcm_processing
+        from .data_processing import upas_processing, lascar_processing, purple_processing, lcm_processing,csv_processing
 
         def emit(message):
             # Preserve the original console output; the callback is opt-in.
@@ -548,15 +549,27 @@ class Dataset(DictionaryPlus):
         def monitor_signature(f):
             try:
                 with open(f, encoding="utf-8") as file:
-                    line = file.readline().split(",")[1:3]
+                    line = file.readline().split(",")
+                for key,value in signatures.items():
+                    if value["signature"] == line:
+                        return (key,value)
                 match line:
+                    case ['PARAMETERS','VALUE', 'UNITS/NOTES\n']:
+                        return "upas"
+                    case ["UTCDateTime", "mac_address", "firmware_ver", "hardware", "current_temp_f", "current_humidity", "current_dewpoint_f", "pressure", "adc", "mem", "rssi", "uptime", "pm1_0_cf_1", "pm2_5_cf_1", "pm10_0_cf_1", "pm1_0_atm", "pm2_5_atm", "pm10_0_atm", "pm2.5_aqi_cf_1", "pm2.5_aqi_atm", "p_0_3_um", "p_0_5_um", "p_1_0_um", "p_2_5_um", "p_5_0_um", "p_10_0_um", "pm1_0_cf_1_b", "pm2_5_cf_1_b", "pm10_0_cf_1_b", "pm1_0_atm_b", "pm2_5_atm_b", "pm10_0_atm_b", "pm2.5_aqi_cf_1_b", "pm2.5_aqi_atm_b", "p_0_3_um_b", "p_0_5_um_b", "p_1_0_um_b", "p_2_5_um_b", "p_5_0_um_b", "p_10_0_um_b", "gas\n"]:
+                        return "purple"
+                    case ["timestamp","date","sensorName","deviceId","resolution","PM2.5","PM10","CO2","NO2","Temperature","Humidity\n"]:
+                        return "lcm"
+                    case _:
+                        pass
+                match line[1:3]:
                     case ['VALUE', 'UNITS/NOTES\n']:
                         return "upas"
-                    case ['mac_address', 'firmware_ver']:
+                    case ["mac_address", "firmware_ver"]:
                         return "purple"
                     case ['Time', 'CO(ppm)']:
                         return "lascar"
-                    case ['date','sensorName']:
+                    case ["date","sensorName"]:
                         return "lcm"
                     case _:
                         return None
@@ -572,6 +585,20 @@ class Dataset(DictionaryPlus):
                         f"file {directory}{j} is not associated with any monitor type.")
                 else:
                     monitor = monitor_signature(f"{directory}{j}")
+                    if isinstance(monitor,tuple):
+                        try:
+                            processed = csv_processing(directory, file=j, time_column=monitor[1]["time_column"], date_format=monitor[
+                                                       1]["date_format"], monitor_name=monitor[0], timezone_shift=timedelta(hours=utc_timezone))
+                            for k, v in levels_dict.items():
+                                if (v not in ["None", "_", "-", None]) and (k not in ["monitor", "", None, "-", "_"]):
+                                    processed.m[k] = v
+                            processed.m["rejected"] = False
+                            processed.m["filename"] = j
+                            for key, value in add_m.items():
+                                processed.m[key] = value
+                            self[str(uuid.uuid4())] = processed
+                        except:
+                            emit(f"processing of file {directory}{j} failed. Is this a {monitor[0]} file?")
                     match monitor:
                         case "upas":
                             try:
@@ -669,8 +696,8 @@ class Dataset(DictionaryPlus):
                 return ("purple", run_purple())
             elif x is Lcm:
                 return ("lcm", run_lcm())
-            # elif x is Apm:
-            #     return "Apm"
+            elif x is Apm:
+                return ("apm", run_apm())
             # elif x is PolarH10:
             #     return "PolarH10"
             # elif x is Sum:
@@ -692,6 +719,56 @@ class Dataset(DictionaryPlus):
                     return "PolarH10"
                 case Sum():
                     return "Sum"
+
+        def run_apm():
+            d = self.subset(condition=lambda x: match_monitor(x) == "Apm")
+            columns1 = ["identifier", "monitor",
+                        "start", "end", "length", "datetime", "timedelta"]
+            columns2 = list(set(d.meta()))
+            columns3 = ["apm_"+i for i in list(d.set_attrib("columns"))]
+
+            buffer = StringIO()
+            with buffer as file:
+                df = writer(file, delimiter=",")
+                df.writerow(columns1+columns2+columns3)
+                count = 0
+                for k, v in d.items():
+                    emit(f"processing Apm {count+1} out of {len(d)}")
+                    v = v.dropna(how="all")
+                    identifier = k
+                    start = v.start
+                    end = v.end
+                    length = v.length
+                    monitor_name = v.monitor
+                    for i in range(len(v)):
+                        app = []
+                        app.append(identifier)
+                        app.append(monitor_name)
+                        app.append(start)
+                        app.append(end)
+                        app.append(length)
+                        app.append(v.index[i])
+                        app.append(v.index[i]-v.start)
+                        for m in columns2:
+                            if m in v.m.keys():
+                                app.append(v.m[m] if v.m[m] != None else "")
+                            else:
+                                app.append("")
+                        for col in columns3:
+                            if col[4:] in v.columns:
+                                app.append(v[col[4:]].iloc[i])
+                            else:
+                                app.append(None)
+                        df.writerow(list(map(str, app)))
+                    count += 1
+                file.seek(0)
+                out = pd.read_csv(file)
+                out["start"] = pd.to_datetime(out["start"])
+                out["end"] = pd.to_datetime(out["end"])
+                out["length"] = pd.to_timedelta(out["length"])
+                out["datetime"] = pd.to_datetime(out["datetime"])
+                out["timedelta"] = pd.to_timedelta(out["timedelta"])
+                return (Summary(out, metadata=set(columns2)))
 
         def run_upas():
             a = 0.524
@@ -1632,6 +1709,30 @@ class Summary(pd.DataFrame):
         result.views = None
         return result
 
+    @recorded
+    def calculate_column(self, name, expression):
+        """Create or replace a column using a restricted vector expression.
+
+        Examples::
+
+            summary.calculate_column('weighted', 'a * 0.7 + b * 0.3')
+            summary.calculate_column('flag', 'where(a > 10, 1, 0)')
+            summary.calculate_column('ratio', "col('PM 2.5') / b")
+
+        This returns an independent Summary and records JSON-replayable history.
+        Only explicitly approved mathematical functions and operators are allowed.
+        """
+        if not isinstance(name, str) or not name:
+            raise ValueError('name must be a non-empty column name')
+        if not self.columns.is_unique:
+            raise ValueError('calculate_column requires unique column names')
+        # Evaluate against original data before creating/replacing the target.
+        values = evaluate_column_expression(self, expression)
+        result = self.copy()
+        result[name] = values
+        result.views = None
+        return result
+
     # ---- serialization -------------------------------------------------
     def save_history(self, path):
         """Save transformation history as strict, versioned JSON."""
@@ -1674,6 +1775,10 @@ class Apm(pd.DataFrame):
     @property
     def _constructor_sliced(self):
         return ApmSeries
+
+    @property
+    def units(self):
+        return {}
 
     @property
     def end(self):
@@ -1990,7 +2095,6 @@ class Lascar(Apm):
         self.variable = "CO(ppm)"
     _metadata = ['m']
     
-
     @property
     def _constructor(self):
         return Lascar

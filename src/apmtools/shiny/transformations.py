@@ -86,7 +86,8 @@ def from_legacy_source_steps(steps: list[dict] | None) -> DataViewSpec:
             operations.append(TransformStep('subset', item))
         operations.append(TransformStep('datetime', {
             'start': settings.get('datetime_start'),
-            'end': settings.get('datetime_end')}))
+            'end': settings.get('datetime_end'),
+            'intervals': settings.get('datetime_intervals')}))
         for name in settings.get('numeric_subset_columns', []):
             operations.append(TransformStep('numeric', {
                 'column': name,
@@ -155,7 +156,8 @@ def execute_view(summary, spec: DataViewSpec | Mapping[str, Any]):
             if values:
                 current = current.subset({name: values}, filter_style=p.get('style', 'all'))
         elif step.operation == 'datetime':
-            current = _apply_filters(current, {}, p.get('start'), p.get('end'))
+            current = _apply_filters(current, {}, p.get('start'), p.get('end'),
+                                     datetime_intervals=p.get('intervals'))
         elif step.operation == 'numeric':
             name = p.get('column')
             if name not in current.columns:
