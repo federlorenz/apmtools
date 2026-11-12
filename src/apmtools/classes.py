@@ -551,7 +551,9 @@ class Dataset(DictionaryPlus):
                 with open(f, encoding="utf-8") as file:
                     line = file.readline().split(",")
                 for key,value in signatures.items():
-                    if value["signature"] == line:
+                    # File header fields include a newline on the final column;
+                    # user-entered signatures are ordinary column names.
+                    if [str(field).strip() for field in value["signature"]] == [field.strip() for field in line]:
                         return (key,value)
                 match line:
                     case ['PARAMETERS','VALUE', 'UNITS/NOTES\n']:
@@ -674,7 +676,7 @@ class Dataset(DictionaryPlus):
                             if levels[r] not in levels[:level+1]:
                                 levels_dict[levels[r]] = None
                     self.scan_folder(directory=f"{directory}{j}/", levels=levels,
-                                     level=level+1, monitor=monitor, levels_dict=levels_dict, utc_timezone=utc_timezone, interpolate=interpolate, add_m=add_m, message_callback=message_callback)
+                                     level=level+1, monitor=monitor, levels_dict=levels_dict, utc_timezone=utc_timezone, interpolate=interpolate, add_m=add_m, message_callback=message_callback, signatures=signatures)
 
     def save_summary(self, save_csv=True, filename="./", all_variables=False, merged=True, message_callback=None):
         def emit(message):
@@ -1072,7 +1074,6 @@ class Dataset(DictionaryPlus):
 
             df = pd.DataFrame(columns=columns1+columns2+columns3)
 
-            count = 0
             for k, v in d.items():
                 app = []
                 v = v.dropna(subset="PM2_5MC")
@@ -1081,7 +1082,10 @@ class Dataset(DictionaryPlus):
                 app.append(v.end)
                 app.append(v.length)
                 for m in columns2:
-                    app.append(v.m[m] if v.m[m] != None else "")
+                    if m in v.m:
+                        app.append(v.m[m] if v.m[m] != None else "")
+                    else:
+                        app.append("")
                 app.append(
                     f"{v.m["filter"].filterid if v.m["filter"].filterid != None else ""}")
                 app.append(
@@ -1273,6 +1277,57 @@ class Summary(pd.DataFrame):
         """Return a new Summary matching categorical filters, recording one step."""
         return self._subset_impl(filter_dict, filter_style)
 
+    @recorded
+    def filter_dataset(self, subset_chain=None, datetime_intervals=None, numeric_subset_bounds=None):
+        """Apply table-style filters and record one replayable history step.
+
+        Categorical stages are applied sequentially; positive datetime windows
+        are unioned and negative windows excluded. Numeric bounds are strict,
+        preserving rows whose filtered numeric value is missing, as in tables.
+        """
+        from .shiny.data import _apply_filters
+        from .shiny.datetime_intervals import normalize_datetime_intervals
+        result = self.copy(deep=False)
+        for stage in subset_chain or []:
+            column = stage.get('column')
+            values = stage.get('values') or []
+            style = stage.get('style', 'all')
+            if column not in result.columns:
+                raise KeyError(f"Unknown subset column: {column}")
+            if style not in ('all', 'any', 'negative all', 'negative any'):
+                raise ValueError(f"Invalid subset style: {style}")
+            if not values:
+                continue
+            # For one selected column, all/any coincide, as do negative all/any.
+            selected = result[column].isin([v for v in values if v is not None])
+            if any(v is None for v in values):
+                selected |= result[column].isna()
+            if style.startswith('negative'):
+                selected = ~selected
+            result = result.loc[selected.fillna(False)].copy()
+        windows = normalize_datetime_intervals(datetime_intervals)
+        if windows:
+            if 'datetime' not in result.columns:
+                raise KeyError('Datetime filters require a datetime column')
+            result = _apply_filters(result, {}, datetime_intervals=windows)
+        for column, bounds in (numeric_subset_bounds or {}).items():
+            if column not in result.columns:
+                raise KeyError(f"Unknown numeric subset column: {column}")
+            values = pd.to_numeric(result[column], errors='coerce')
+            for key in ('gt', 'lt'):
+                raw = bounds.get(key)
+                if raw is None or str(raw).strip() == '':
+                    continue
+                bound = float(raw)
+                if not np.isfinite(bound):
+                    raise ValueError('Numeric filter bounds must be finite')
+                mask = values.gt(bound) if key == 'gt' else values.lt(bound)
+                result = result.loc[mask.fillna(False) | values.isna()].copy()
+                values = values.loc[result.index]
+        result.views = None
+        result.description = self.description + '\nFiltered dataset'
+        return result
+
     def show(self, number=0, key=None):
         """
         return an element of a dictionary
@@ -1366,7 +1421,7 @@ class Summary(pd.DataFrame):
             include_empty_intervals=include_empty_intervals)
 
     def group_stat(self, value_cols, frequency=None, grouping_by=["identifier"], time_col='datetime', id_col='identifier',
-                   min_completeness=1.0, only_complete=True, flooring_timestamp=True, aggregate=["mean"]):
+                   min_completeness=1.0, only_complete=True, flooring_timestamp=True, aggregate=["mean"], uncertainty=None):
         """
         Filter a DataFrame down to only the (monitor, hour) groups that have
         a full hour of data, then it's ready for an hourly groupby/mean.
@@ -1380,6 +1435,13 @@ class Summary(pd.DataFrame):
 
         Returns the filtered row-level DataFrame (not yet aggregated), so you
         can still group/aggregate however you like afterwards.
+
+        Optional ``uncertainty`` (e.g. ``{"method": "ci", "confidence": 95}``)
+        retains ``<value>_n``, ``<value>_sd``, ``<value>_se`` and
+        ``<value>_<method>_lower/upper`` alongside the requested aggregate.
+        Statistical units are the filtered input rows. Sequential aggregation
+        deliberately treats each materialized input row as a new unit; it does
+        not infer independence or reconstruct lost raw observations.
         """
 
         if len(self) < 1:
@@ -1583,6 +1645,13 @@ class Summary(pd.DataFrame):
             output = df
 
         if aggregate is not None:
+            # Compute uncertainty on the same filtered, pre-aggregation rows.
+            # This is intentionally descriptive of the current row units;
+            # previous aggregation cannot be silently reversed.
+            if uncertainty is not None:
+                from .uncertainty import grouped_uncertainty
+                uncertainty_frame = grouped_uncertainty(
+                    df, grouping_keys, value_cols, uncertainty)
             output = output[value_cols].agg(aggregate)
 
         if aggregate != None and (frequency != None or grouping_by != None):
@@ -1592,6 +1661,9 @@ class Summary(pd.DataFrame):
             ]
 
         output = output.reset_index()
+        if aggregate is not None and uncertainty is not None:
+            output = output.merge(uncertainty_frame, on=grouping_keys,
+                                  how="left", sort=False, validate="one_to_one")
 
         output = Group(output)
 
@@ -1599,6 +1671,9 @@ class Summary(pd.DataFrame):
         output.m["frequency"] = frequency
         output.m["grouping_by"] = grouping_by
         output.m["aggregate"] = aggregate
+        if uncertainty is not None:
+            from .uncertainty import validate_uncertainty
+            output.m["uncertainty"] = validate_uncertainty(uncertainty)
 
         return output
     

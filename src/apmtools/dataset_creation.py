@@ -90,7 +90,62 @@ def scan_directory_choices(directory):
     return sorted(names, key=str.casefold)
 
 
-def scan_parameters(directory, levels, utc_timezone=0, metadata=None):
+def custom_monitor_signatures(name="", signature="", time_column="", custom_format=False, date_format=""):
+    """Build a custom monitor specification from the Create Dataset inputs.
+
+    An entirely blank definition disables the feature. Partially completed
+    definitions are rejected rather than silently scanning without a monitor.
+    """
+    name = str(name or "").strip()
+    time_column = str(time_column or "").strip()
+    if isinstance(signature, str):
+        fields = [part.strip() for part in signature.split(",")] if signature.strip() else []
+    else:
+        fields = [str(part).strip() for part in (signature or [])]
+    date_format = str(date_format or "").strip()
+    if not (name or fields or time_column or custom_format or date_format):
+        return {}
+    if not name:
+        raise ValueError("Enter a custom monitor name")
+    if not fields or any(not field for field in fields):
+        raise ValueError("Enter a comma-separated monitor signature with no empty columns")
+    if not time_column:
+        raise ValueError("Enter a monitor timestamp column")
+    if time_column not in fields:
+        raise ValueError("Monitor timestamp column must appear in the monitor signature")
+    if custom_format and not date_format:
+        raise ValueError("Enter a custom timestamp format or uncheck the custom format option")
+    return {name: {"signature": fields, "time_column": time_column,
+                   "date_format": date_format if custom_format else None}}
+
+
+def multiple_custom_monitor_signatures(monitors):
+    """Build scan_folder signatures from multiple independent monitor entries.
+
+    Completely blank entries (including the trailing editor row) are ignored.
+    Incomplete entries, duplicate monitor names, and invalid timestamp columns
+    raise ValueError with the row number for actionable UI feedback.
+    """
+    result = {}
+    for index, monitor in enumerate(monitors, 1):
+        name = monitor.get("name", "")
+        try:
+            specification = custom_monitor_signatures(
+                name, monitor.get("signature", ""),
+                monitor.get("time_column", ""),
+                bool(monitor.get("custom_format", False)),
+                monitor.get("date_format", ""),
+            )
+        except ValueError as exc:
+            raise ValueError(f"Custom monitor {index}: {exc}") from exc
+        for key, value in specification.items():
+            if key in result:
+                raise ValueError(f"Custom monitor {index}: duplicate monitor name {key!r}")
+            result[key] = value
+    return result
+
+
+def scan_parameters(directory, levels, utc_timezone=0, metadata=None, *, signatures=None):
     """Validate browser-supplied settings for ``Dataset.scan_folder``.
 
     Paths refer to the computer running Shiny (not the remote browser).
@@ -128,22 +183,24 @@ def scan_parameters(directory, levels, utc_timezone=0, metadata=None):
     add_m = dict(metadata or {})
     if any(not isinstance(k, str) or not k.strip() for k in add_m):
         raise ValueError("Metadata category names must be non-empty strings")
+    custom = dict(signatures or {})
     return {
         "directory": str(path) + os.sep,
         "levels": cleaned,
         "utc_timezone": tz,
         "add_m": add_m,
+        **({"signatures": custom} if custom else {}),
     }
 
 
-def scan_folder_dataset(directory, levels, utc_timezone=0, metadata=None, *, dataset=None, message_callback=None):
+def scan_folder_dataset(directory, levels, utc_timezone=0, metadata=None, *, dataset=None, message_callback=None, signatures=None):
     """Scan into a supplied Dataset, creating one only for the first scan.
 
     The scanner appends recognized monitors to the same Dataset instance.
     Existing entries are retained on subsequent scans.
     """
     from .classes import Dataset
-    params = scan_parameters(directory, levels, utc_timezone, metadata)
+    params = scan_parameters(directory, levels, utc_timezone, metadata, signatures=signatures)
     if dataset is not None and not isinstance(dataset, Dataset):
         raise TypeError("Existing scan target must be a Dataset")
     result = dataset if dataset is not None else Dataset()
@@ -154,7 +211,7 @@ def scan_folder_dataset(directory, levels, utc_timezone=0, metadata=None, *, dat
 
 
 
-async def scan_folder_async(directory, levels, utc_timezone=0, metadata=None, *, dataset=None, message_callback=None):
+async def scan_folder_async(directory, levels, utc_timezone=0, metadata=None, *, dataset=None, message_callback=None, signatures=None):
     """Scan off the Shiny event loop without its shared thread executor.
 
     ``asyncio.to_thread`` relies on the event loop's default executor, which
@@ -177,6 +234,8 @@ async def scan_folder_async(directory, levels, utc_timezone=0, metadata=None, *,
     def work():
         try:
             extra = {"message_callback": message_callback} if message_callback is not None else {}
+            if signatures:
+                extra["signatures"] = signatures
             if dataset is None:
                 result = scan_folder_dataset(directory, levels, utc_timezone, metadata, **extra)
             else:
@@ -303,3 +362,74 @@ async def create_summary_async(dataset, filename=None, *, all_variables=False, m
         completed.cancel()
         raise RuntimeError('Could not start Summary creation worker') from exc
     return await completed
+
+
+def save_upas_filter_summary_file(dataset, directory, *, overwrite=False):
+    """Save the UPAS filter CSV through Dataset's existing method.
+
+    The Dataset method writes a fixed ``filter_summary.csv`` filename.
+    Refuse accidental overwrites and reject empty or UPAS-free scans rather
+    than reporting success when Dataset merely prints a message.
+    """
+    from .classes import Dataset, Upas
+    if not isinstance(dataset, Dataset):
+        raise TypeError("UPAS filter summary requires a scanned Dataset")
+    if not any(isinstance(value, Upas) for value in dataset.values()):
+        raise ValueError("No UPAS monitors found in the scanned Dataset")
+    folder = Path(str(directory or '').strip()).expanduser().resolve()
+    if not folder.is_dir():
+        raise NotADirectoryError(f"Save directory does not exist: {folder}")
+    target = folder / 'filter_summary.csv'
+    if target.exists() and not overwrite:
+        raise FileExistsError(f"File already exists: {target}")
+    if target.exists() and not target.is_file():
+        raise ValueError(f"Destination is not a regular file: {target}")
+    dataset.save_upas_filter_summary(directory=str(folder) + os.sep)
+    if not target.is_file():
+        raise RuntimeError("Dataset did not create filter_summary.csv")
+    return target
+
+
+def load_upas_filter_summary_file(dataset, filename):
+    """Load an existing CSV into the scanned Dataset using its public API."""
+    from .classes import Dataset
+    if not isinstance(dataset, Dataset):
+        raise TypeError("UPAS filter summary requires a scanned Dataset")
+    value = str(filename or '').strip()
+    if not value:
+        raise ValueError("Choose a filter summary CSV file")
+    path = Path(value).expanduser().resolve()
+    if path.suffix.lower() != '.csv':
+        raise ValueError("Filter summary filename must end in .csv")
+    if not path.is_file():
+        raise FileNotFoundError(f"Filter summary file does not exist: {path}")
+    # Dataset.load_upas_filter_summary catches read errors internally, so
+    # validate the file before calling it to avoid false success messages.
+    header = pd.read_csv(path, nrows=0)
+    needed = {'identifier', 'filterid', 'pre_weight [mg]', 'pre_weightsd [mg]',
+              'post_weight [mg]', 'post_weightsd [mg]', 'blank weight [mg]',
+              'sampled volume [m3]'}
+    missing = needed.difference(header.columns)
+    if missing:
+        raise ValueError(f"Filter summary CSV is missing columns: {', '.join(sorted(missing))}")
+    frame = pd.read_csv(path)
+    if frame.empty:
+        raise ValueError("Filter summary CSV contains no monitor rows")
+    identifiers = set(dataset.keys())
+    missing_ids = [str(identifier) for identifier in frame['identifier'].tolist()
+                   if identifier not in identifiers]
+    if missing_ids:
+        raise ValueError(f"Filter summary references unknown monitor identifiers: {', '.join(missing_ids[:5])}")
+    numeric = ['pre_weight [mg]', 'pre_weightsd [mg]', 'post_weight [mg]',
+               'post_weightsd [mg]', 'blank weight [mg]', 'sampled volume [m3]']
+    for name in numeric:
+        try:
+            pd.to_numeric(frame[name], errors='raise')
+        except (ValueError, TypeError) as exc:
+            raise ValueError(f"Invalid numeric values in {name}") from exc
+    for identifier in frame['identifier']:
+        monitor = dataset[identifier]
+        if not hasattr(monitor, 'm') or not hasattr(monitor.m.get('filter'), 'filterid'):
+            raise ValueError(f"Monitor {identifier!r} has no UPAS filter metadata")
+    dataset.load_upas_filter_summary(directory=str(path.parent) + os.sep, filename=path.name)
+    return path

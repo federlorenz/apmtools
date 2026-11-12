@@ -9,6 +9,7 @@ from .data import _subset_choices, _apply_filters, _aggregate
 from .config import AGGREGATES, FREQUENCIES
 from .columns import _numeric_columns
 from .view_aggregation import normalize_statistics
+from .band_settings import line_band_uncertainty
 
 
 def _plot_columns(current, step):
@@ -51,7 +52,8 @@ def _plot_source(current, step):
             return pd.DataFrame()
         result = _aggregate(current, values, frequency, groups, aggregate,
                             only_complete=bool(step.get('only_complete', True)) if frequency is not None else True,
-                            flooring_timestamp=bool(step.get('flooring_timestamp', True)) if frequency is not None else True)
+                            flooring_timestamp=bool(step.get('flooring_timestamp', True)) if frequency is not None else True,
+                            uncertainty=line_band_uncertainty(step))
         if result is None or result.empty:
             return pd.DataFrame()
         # group_stat already emits the grouping and frequency columns.

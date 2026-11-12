@@ -1,3 +1,4 @@
+from .text_escapes import decode_plot_text
 """Legend identities based on original columns, not inferred name suffixes."""
 
 
@@ -38,7 +39,7 @@ def canonical_legend_map(mapping, preferred_suffix=None, aliases=None):
 
 def legend_label(mapping, key, aliases=None):
     key = str(key)
-    return mapping.get(canonical_legend_key(key, aliases), mapping.get(key, key))
+    return decode_plot_text(mapping.get(canonical_legend_key(key, aliases), mapping.get(key, key)))
 
 
 def original_legend_keys(displayed, mapping, known_keys=(), preferred_suffix=None, aliases=None):

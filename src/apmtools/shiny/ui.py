@@ -17,6 +17,9 @@ from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PA
 from .columns import _alphabetical, _categorical_columns, _datetime_columns, _default_group, _default_x, _normalise_y, _numeric_columns, _timedelta_columns
 from .data import _aggregate, _apply_filters, _composite_labels, _subset_choices, bar_box_category_choices, available_group_columns
 from .view_aggregation import normalize_statistics
+from .band_settings import line_bands_enabled, line_band_uncertainty
+from .reference_lines import parse_reference_lines, encode_reference_lines
+from .text_escapes import decode_plot_text
 from .quality_filters import filter_quality_data
 from .derived_views import prepare_table_source
 from .quality_source import prepare_quality_source
@@ -26,7 +29,9 @@ from .histogram_stats import effective_histogram_bin_mode
 from .elements import element_keys, filter_elements, default_visible_keys
 from .export import _safe_csv_filename, _standalone_matplotlib_script
 from .tab_initialization import TabInitializer
+from .plot_table_source import plot_source_context
 from .workspace_controller import WorkspaceController
+from .combined_figures import normalized_combination, combined_figure
 from .profiling import traced, marker
 from .state import SNAPSHOT_INPUT_KEYS, reconcile_visibility, snapshot_inputs, normalize_histogram_view, restore_dynamic_histogram_x
 from .text_editors import update_label_mapping
@@ -200,6 +205,15 @@ def _build_summary_ui_server(
     @module.ui
     def plot_tab_ui(initial_filters=None):
         initial_filters = normalize_histogram_view(initial_filters)
+        # A plot derived from a table needs selectors for the TABLE's columns,
+        # including renamed aggregation outputs, not the owning raw Summary.
+        locals_context = plot_source_context(summary, initial_filters)
+        columns = locals_context['columns']
+        numeric_columns = locals_context['numeric_columns']
+        categorical_columns = locals_context['categorical_columns']
+        group_columns = locals_context['group_columns']
+        subset_columns = locals_context['subset_columns']
+        max_subset_stages = locals_context['max_subset_stages']
         def initial(name, default):
             if name in initial_filters:
                 return initial_filters[name]
@@ -351,6 +365,7 @@ if (!window.__apmColorPickerInstalled) {
                             ui.input_select("palette", "Color palette", choices=["Default", "Plotly", "D3", "G10", "T10", "Set1", "Set2", "Pastel", "Dark24"], selected=initial("palette", "Default")),
                             ui.input_select("template", "Theme", choices={"plotly":"Light", "plotly_white":"White", "plotly_dark":"Dark", "simple_white":"Minimal", "ggplot2":"GGPlot"}, selected=initial("template", "plotly")),
                             ui.input_text("title", "Plot title", value=initial("title", "")),
+                            ui.help_text(r"Plot text accepts escapes such as \n (new line) and \t (tab)."),
                             ui.input_numeric("title_font_size", "Plot title font size", value=initial("title_font_size", 14), min=6, max=72),
                             (ui.div(
                                 ui.help_text("Adjust all plot font sizes together (1 point per click)."),
@@ -428,10 +443,42 @@ if (!window.__apmColorPickerInstalled) {
                         ui.nav_panel("Plot components",
                             ui.output_ui("element_visibility_ui"),
                             ui.output_ui("trace_colors_editor"),
+                            ui.panel_conditional("input.plot_type === 'line' || input.plot_type === 'scatter'",
+                                ui.hr(), ui.h5("Straight lines"),
+                                ui.help_text("Numeric X: y = intercept + slope × x. Datetime X: y = intercept + slope × elapsed time from the reference date, in the chosen unit. Leave the date empty to use the earliest plotted X."),
+                                ui.output_ui("reference_line_editor"),
+                                ui.input_action_button("add_reference_line", "+ Add straight line")),
                             ui.panel_conditional("input.plot_type === 'line'",
                                 ui.input_numeric("line_width", "Line width", value=initial("line_width", 2), min=0.5, max=15, step=0.5),
                                 ui.input_text_area("line_alpha", "Line alpha (name=0..1; ...)", value=initial("line_alpha", ""), rows=4),
-                                ui.input_text_area("line_style", "Line style (name=solid/dotted/dashed; ...)", value=initial("line_style", ""), rows=4)),
+                                ui.input_text_area("line_style", "Line style (name=solid/dotted/dashed; ...)", value=initial("line_style", ""), rows=4),
+                                ui.panel_conditional("input.aggregate && input.aggregate.length > 0",
+                                    ui.hr(),
+                                    ui.input_checkbox("error_bands", "Show error bands", value=initial("error_bands", False))),
+                                ui.panel_conditional("input.aggregate && input.aggregate.length > 0 && input.error_bands === true",
+                                    ui.input_select("error_band_method", "Band type", choices={
+                                        "ci":"Confidence interval (t)", "sd":"Standard deviation",
+                                        "se":"Standard error", "percentile":"Percentile interval",
+                                        "custom":"Custom lower / upper columns"},
+                                        selected=initial("error_band_method", "ci")),
+                                    ui.panel_conditional("input.error_band_method === 'ci' || input.error_band_method === 'percentile'",
+                                        ui.input_select("error_band_confidence", "Confidence / central interval (%)",
+                                            choices={"90":"90%", "95":"95%", "99":"99%"},
+                                            selected=str(initial("error_band_confidence", 95)))),
+                                    ui.panel_conditional("input.error_band_method === 'custom'",
+                                        ui.input_selectize("error_band_lower", "Lower bound column",
+                                            choices={"":"Choose column", **{c:c for c in numeric_columns}},
+                                            selected=initial("error_band_lower", "")),
+                                        ui.input_selectize("error_band_upper", "Upper bound column",
+                                            choices={"":"Choose column", **{c:c for c in numeric_columns}},
+                                            selected=initial("error_band_upper", ""))),
+                                    ui.input_slider("error_band_alpha", "Band opacity", min=0.05, max=0.8,
+                                        value=initial("error_band_alpha", 0.2), step=0.05),
+                                    ui.help_text("Calculated bands use observations at each X within each group. "
+                                        "CI, SD, SE and percentile bands require two or more observations per X and plotting group; "
+                                        "aggregated data or identifier grouping may leave only one. "
+                                        "For repeated measures, t confidence intervals do not account for clustering. "
+                                        "Use custom bounds for model-derived intervals."))),
                             ui.panel_conditional("input.plot_type === 'scatter'",
                                 ui.input_text_area("scatter_size", "Marker size (name=size; ...)", value=initial("scatter_size", ""), rows=4),
                                 ui.input_text_area("scatter_marker", "Marker type (name=dot/cross; ...)", value=initial("scatter_marker", ""), rows=4),
@@ -469,9 +516,30 @@ if (!window.__apmColorPickerInstalled) {
             class_="summary-plot-tab",
         )
 
+    base_summary = summary
+
     @module.server
     def plot_tab_server(input, output, session, initial_filters=None, config_tab_id=None, *, recovery_paused):
             initial_filters = normalize_histogram_view(initial_filters)
+            # Bind this module's data and selector metadata to its own view
+            # lineage. Other plot tabs continue to use their own sources.
+            ctx = plot_source_context(base_summary, initial_filters)
+            summary = ctx['summary']
+            columns = ctx['columns']
+            column_map = ctx['column_map']
+            numeric_columns = ctx['numeric_columns']
+            categorical_columns = ctx['categorical_columns']
+            datetime_columns = ctx['datetime_columns']
+            timedelta_columns = ctx['timedelta_columns']
+            time_group_columns = ctx['time_group_columns']
+            physical_group_columns = ctx['physical_group_columns']
+            group_columns = ctx['group_columns']
+            max_subset_stages = ctx['max_subset_stages']
+            subset_choice_cache = {}
+            def cached_subset_choices(name):
+                if name not in subset_choice_cache:
+                    subset_choice_cache[name] = _subset_choices(summary, column_map[name])
+                return subset_choice_cache[name]
             # One stable output per stage: changing a later stage does not
             # recreate the inputs belonging to earlier stages.
             def _make_subset_values_ui(stage):
@@ -707,6 +775,80 @@ if (!window.__apmColorPickerInstalled) {
                         values = values.loc[current.index]
                 return current
 
+            # Stable, repeatable straight-line controls. Adding a row never
+            # remounts earlier rows, preserving values already typed.
+            _initial_reference_lines = parse_reference_lines(initial_filters.get("reference_lines", []))
+            _reference_ids = reactive.value(tuple(row["id"] for row in _initial_reference_lines))
+            _next_reference_id = [max(_reference_ids.get(), default=0) + 1]
+            _initial_reference_by_id = {row["id"]: row for row in _initial_reference_lines}
+
+            @reactive.effect
+            @reactive.event(input.add_reference_line)
+            def _add_reference_line():
+                with reactive.isolate():
+                    existing = _reference_ids.get()
+                    new_id = _next_reference_id[0]
+                    _next_reference_id[0] += 1
+                    _reference_ids.set((*existing, new_id))
+
+            @render.ui
+            def reference_line_editor():
+                identifiers = _reference_ids.get()
+                # Shiny rebuilds output_ui when a row is added or removed.
+                # Read existing inputs without subscribing to keystrokes, then
+                # rehydrate them in the new DOM to avoid erasing user edits.
+                with reactive.isolate():
+                    rows = []
+                    for identifier in identifiers:
+                        previous = _initial_reference_by_id.get(identifier, {})
+                        rows.append((identifier,
+                            _optional_input(f"ref_label_{identifier}", previous.get("label", f"Straight line {identifier}")),
+                            _optional_input(f"ref_intercept_{identifier}", previous.get("intercept", 0)),
+                            _optional_input(f"ref_slope_{identifier}", previous.get("slope", 0)),
+                            _optional_input(f"ref_origin_{identifier}", previous.get("origin", "")),
+                            _optional_input(f"ref_time_unit_{identifier}", previous.get("time_unit", "day"))))
+                return ui.div(*[
+                    ui.div(
+                        ui.input_text(f"ref_label_{identifier}", "Legend label", value=label),
+                        ui.input_numeric(f"ref_intercept_{identifier}", "Intercept (y0)", value=intercept, step=0.5),
+                        ui.input_numeric(f"ref_slope_{identifier}", "Slope (m)", value=slope, step=0.1),
+                        ui.input_text(f"ref_origin_{identifier}", "Datetime intercept date (optional; YYYY-MM-DD or YYYY-MM-DD HH:MM:SS)", value=origin),
+                        ui.input_select(f"ref_time_unit_{identifier}", "Datetime slope unit", choices={
+                            "second":"Per second", "minute":"Per minute", "hour":"Per hour",
+                            "day":"Per day", "week":"Per week"}, selected=unit),
+                        ui.input_action_button(f"remove_reference_line_{identifier}", "Remove", class_="btn-outline-secondary btn-sm"),
+                        class_="border rounded p-2 mb-2")
+                    for identifier, label, intercept, slope, origin, unit in rows])
+
+            # Register row-removal observers once per newly allocated ID.
+            _reference_remove_watchers = set()
+            @reactive.effect
+            def _register_reference_removal():
+                for identifier in _reference_ids.get():
+                    if identifier in _reference_remove_watchers:
+                        continue
+                    _reference_remove_watchers.add(identifier)
+                    def watch_remove(identifier=identifier):
+                        @reactive.effect
+                        @reactive.event(getattr(input, f"remove_reference_line_{identifier}"), ignore_init=True)
+                        def remove():
+                            with reactive.isolate():
+                                _reference_ids.set(tuple(i for i in _reference_ids.get() if i != identifier))
+                    watch_remove()
+
+            @reactive.calc
+            def current_reference_lines():
+                lines = []
+                for identifier in _reference_ids.get():
+                    initial_line = _initial_reference_by_id.get(identifier, {})
+                    lines.append({"id": identifier,
+                        "label": _optional_input(f"ref_label_{identifier}", initial_line.get("label", f"Straight line {identifier}")),
+                        "intercept": _optional_input(f"ref_intercept_{identifier}", initial_line.get("intercept", 0)),
+                        "slope": _optional_input(f"ref_slope_{identifier}", initial_line.get("slope", 0)),
+                        "origin": _optional_input(f"ref_origin_{identifier}", initial_line.get("origin", "")),
+                        "time_unit": _optional_input(f"ref_time_unit_{identifier}", initial_line.get("time_unit", "day"))})
+                return parse_reference_lines(lines)
+
             # Individual editors: original labels are stable keys, never parsed
             # from user-entered text. Changes invalidate only figure styling.
             import hashlib
@@ -833,7 +975,13 @@ if (!window.__apmColorPickerInstalled) {
                 # The colour-key discovery effect can run after the first
                 # restored render.  Do not discard persisted overrides while
                 # the key list is empty (or temporarily incomplete).
-                values = _color_map(watch=True)
+                values = dict(_color_map(watch=True))
+                keys = _color_keys.get()
+                if keys and _optional_input("plot_type", "line") in ("line", "scatter"):
+                    defaults = color_defaults(prepared_plot(), keys,
+                        _optional_input("palette", "Default"))
+                    for row in current_reference_lines():
+                        values.setdefault(row["key"], defaults.get(row["key"], "#636efa"))
                 return "; ".join(f"{key}={value}" for key, value in values.items())
 
             # Each rendered colour key has a stable swatch button. The popup
@@ -943,6 +1091,8 @@ if (!window.__apmColorPickerInstalled) {
                     keys = active_color_keys(spec, mode=_optional_input("multi_y_color_by", "group"),
                                              panel_by=panel_by,
                                              bar_stacking=_optional_input("bar_stacking", []) if input.plot_type() == "bar" else ())
+                if _optional_input("plot_type", "line") in ("line", "scatter"):
+                    keys = tuple(dict.fromkeys((*keys, *(row["key"] for row in current_reference_lines()))))
                 with reactive.isolate():
                     previous = _color_keys.get()
                 if keys != previous:
@@ -1322,10 +1472,20 @@ if (!window.__apmColorPickerInstalled) {
                         return pd.DataFrame()
                     if current is None or current.empty:
                         return pd.DataFrame()
+                    # Preserve interval statistics while raw observations still
+                    # exist. Never attempt to infer them from one reduced row.
+                    band_uncertainty = line_band_uncertainty({
+                        "plot_type": kind,
+                        "aggregate": aggregate,
+                        "error_bands": _optional_input("error_bands", False),
+                        "error_band_method": _optional_input("error_band_method", "ci"),
+                        "error_band_confidence": _optional_input("error_band_confidence", 95),
+                    })
                     current = _aggregate(
                         current, value_columns, frequency, grouping_by, aggregate,
                         only_complete=(bool(input.only_complete()) if frequency is not None else True),
                         flooring_timestamp=(bool(input.flooring_timestamp()) if frequency is not None else True),
+                        uncertainty=band_uncertainty,
                     )
                     if current is None or current.empty:
                         return pd.DataFrame()
@@ -1547,7 +1707,10 @@ if (!window.__apmColorPickerInstalled) {
             @reactive.calc
             @traced('available_elements', kind='reactive_calc', trigger=None)
             def available_elements():
-                return element_keys(unfiltered_plot())
+                keys = element_keys(unfiltered_plot())
+                if _optional_input("plot_type", "line") in ("line", "scatter"):
+                    keys += [row["key"] for row in current_reference_lines()]
+                return keys
 
             # The live configuration is authoritative for component visibility.
             # Keep only the previous *available keys* locally: this is derived
@@ -1796,7 +1959,7 @@ if (!window.__apmColorPickerInstalled) {
                 # Remember these generated values before sending asynchronous
                 # updates to the browser. A stacked redraw may occur while the
                 # previous (unstacked) values are still mounted in the inputs.
-                if spec["kind"] in ("bar", "histogram"):
+                if spec["kind"] in ("bar", "histogram", "line"):
                     remember_auto_limits(_automatic_bar_y_limits, limits)
                 for field, value in limits.items():
                     # A restored plot's explicit axis bounds are authoritative.
@@ -2006,6 +2169,12 @@ if (!window.__apmColorPickerInstalled) {
                     ui.update_numeric("plot_dpi", value=100)
                     ui.update_numeric("plot_height_pct", value=100)
                 ui.update_numeric("line_width", value=2)
+                ui.update_checkbox("error_bands", value=False)
+                ui.update_select("error_band_method", selected="ci")
+                ui.update_select("error_band_confidence", selected="95")
+                ui.update_slider("error_band_alpha", value=0.2)
+                ui.update_selectize("error_band_lower", selected="")
+                ui.update_selectize("error_band_upper", selected="")
                 ui.update_checkbox("box_showfliers", value=True)
                 ui.update_select("box_orientation", selected="vertical")
                 ui.update_text_area("hist_alpha", value="")
@@ -2096,6 +2265,16 @@ if (!window.__apmColorPickerInstalled) {
                     # renaming must not force a second structural render.
                     options = dict(matplotlib_options())
                 options["legend_labels"] = ""
+                # Keep reference overlays in the structural render: an
+                # ungrouped plot only gains its base-series legend when a
+                # reference line is present.  Use private sentinel labels so
+                # only data-series entries reach the generic legend editor;
+                # reference-line names remain editable in Straight lines.
+                reference_rows = current_reference_lines()
+                options["reference_lines"] = [
+                    dict(line, label=f"__apm_ref_editor_probe_{line['id']}__")
+                    for line in reference_rows
+                ]
                 options["panel_by"] = panel_groups if multi_panel else None
                 import matplotlib.pyplot as plt
                 structure = _matplotlib_direct_figure(spec, **options)
@@ -2106,6 +2285,7 @@ if (!window.__apmColorPickerInstalled) {
                     return tuple(dict.fromkeys(
                         txt.get_text() for leg in legends for txt in leg.get_texts()
                         if txt.get_text().strip() and txt.get_text() not in excluded
+                        and not txt.get_text().startswith("__apm_ref_editor_probe_")
                     ))
                 finally:
                     plt.close(structure)
@@ -2172,7 +2352,7 @@ if (!window.__apmColorPickerInstalled) {
                         if len(positions) == len(labels):
                             axis.set_major_locator(FixedLocator(positions))
                             axis.set_major_formatter(FixedFormatter(
-                                [mapping.get(label, label) for label in labels]))
+                                [decode_plot_text(mapping.get(label, label)) for label in labels]))
 
             @reactive.calc
             @traced('matplotlib_options', kind='reactive_calc', trigger=None)
@@ -2205,6 +2385,14 @@ if (!window.__apmColorPickerInstalled) {
                     line_width=(_optional_input("line_width", 2) if input.plot_type() == "line" else 2),
                     line_alpha=(_optional_input("line_alpha", "") if input.plot_type() == "line" else ""),
                     line_style=(_optional_input("line_style", "") if input.plot_type() == "line" else ""),
+                    reference_lines=(current_reference_lines() if input.plot_type() in ("line", "scatter") else []),
+                    error_bands=line_bands_enabled(input.plot_type(), _optional_input("aggregate", []),
+                        _optional_input("error_bands", False)),
+                    error_band_method=_optional_input("error_band_method", "ci"),
+                    error_band_confidence=float(_optional_input("error_band_confidence", 95) or 95),
+                    error_band_alpha=float(_optional_input("error_band_alpha", 0.2) or 0.2),
+                    error_band_lower=_optional_input("error_band_lower", ""),
+                    error_band_upper=_optional_input("error_band_upper", ""),
                     scatter_size=(_optional_input("scatter_size", "") if input.plot_type() == "scatter" else ""),
                     scatter_marker=(_optional_input("scatter_marker", "") if input.plot_type() == "scatter" else ""),
                     scatter_alpha=(_optional_input("scatter_alpha", "") if input.plot_type() == "scatter" else ""),
@@ -2230,7 +2418,7 @@ if (!window.__apmColorPickerInstalled) {
                     panel_hspace=(float(_optional_input("panel_hspace", 0.90) or 0) if multi_panel else 0.90),
                     panel_wspace=(float(_optional_input("panel_wspace", 0.38) or 0) if multi_panel else 0.38),
                 )
-                if input.plot_type() in ("bar", "histogram"):
+                if input.plot_type() in ("bar", "histogram") or (input.plot_type() == "line" and options.get("error_bands")):
                     # The Y bounds controls contain auto-generated text, which
                     # must not clip bars when stack totals change. Only values
                     # not generated by the application are explicit overrides.
@@ -2254,6 +2442,14 @@ if (!window.__apmColorPickerInstalled) {
                 buffer = io.BytesIO()
                 with zipfile.ZipFile(buffer, "w", zipfile.ZIP_DEFLATED) as archive:
                     archive.writestr("plot_data.csv", frame.to_csv(index=False))
+                    if spec.get("kind") == "line" and matplotlib_options().get("error_bands"):
+                        from .line_bands import line_band_export
+                        opts = matplotlib_options()
+                        band_data = line_band_export(spec, method=opts["error_band_method"],
+                            confidence=opts["error_band_confidence"],
+                            lower_column=opts["error_band_lower"],
+                            upper_column=opts["error_band_upper"])
+                        archive.writestr("line_bands.csv", band_data.to_csv(index=False))
                     archive.writestr("plot_script.py", script)
                 yield buffer.getvalue()
 
@@ -2316,6 +2512,7 @@ if (!window.__apmColorPickerInstalled) {
                 if _optional_input("plot_type", initial_filters.get("plot_type")) == "histogram":
                     mounted["x"] = _plot_x_selection()
                 result = snapshot_inputs(result, mounted)
+                result["reference_lines"] = encode_reference_lines(current_reference_lines())
                 # Snapshot the same effective filter state used by the renderer,
                 # including saved values for controls not yet mounted.
                 with reactive.isolate():
@@ -2351,8 +2548,101 @@ if (!window.__apmColorPickerInstalled) {
             # Expose the same dataframe that feeds plot preparation/export.
             # The app-level New table action captures it as a static snapshot.
             snapshot.plot_dataframe = selected_data
+            snapshot.plot_render_source = lambda: (prepared_plot(), matplotlib_options())
             return snapshot
 
+
+    @module.ui
+    def combined_tab_ui(initial=None):
+        initial = initial or {}
+        return ui.layout_sidebar(
+            ui.sidebar(
+                ui.input_selectize('sources', 'Plot tabs (in display order)',
+                    choices=initial.get('choices', {}),
+                    selected=initial.get('sources', []), multiple=True),
+                ui.help_text('Select existing plot tabs. Selection order determines the grid order.'),
+                ui.input_numeric('columns', 'Number of columns',
+                    value=initial.get('columns', 2), min=1, max=6),
+                ui.input_numeric('hspace', 'Vertical spacing',
+                    value=initial.get('hspace', .55), min=0, max=3, step=.05),
+                ui.input_numeric('wspace', 'Horizontal spacing',
+                    value=initial.get('wspace', .35), min=0, max=3, step=.05),
+                ui.input_checkbox('sharex', 'Share X axis (compatible scales only)',
+                    value=initial.get('sharex', False)),
+                ui.input_checkbox('sharey', 'Share Y axis (compatible scales only)',
+                    value=initial.get('sharey', False)),
+                ui.input_numeric('dpi', 'Render/export DPI', value=initial.get('dpi', 120),
+                    min=30, max=600),
+                ui.download_button('download', 'Export combined PNG'),
+                ui.help_text('Each source plot retains its own appearance. Faceted source plots'
+                             ' retain their internal panel layout as an image inside one grid cell.'),
+                width='340px', open='open', title='Combined plot settings'),
+            ui.output_plot('figure', width='100%', height='800px'),
+        )
+
+    @module.server
+    def combined_tab_server(input, output, session, initial=None, *, workspace, active_tabs):
+        initial = initial or {}
+
+        source_choices_initialized = False
+
+        @reactive.effect
+        @reactive.event(active_tabs)
+        def update_sources():
+            nonlocal source_choices_initialized
+            choices = {tid: f'Plot {tid.split("_")[-1]}'
+                       for tid in workspace.active_tabs if workspace.kind(tid) == 'plot'}
+            with reactive.isolate():
+                current = list(input.sources() or [])
+            if not source_choices_initialized:
+                current = current or list(initial.get('sources', []))
+                source_choices_initialized = True
+            ui.update_selectize('sources', choices=choices,
+                                selected=[tid for tid in current if tid in choices], session=session)
+
+        def settings():
+            return normalized_combination(
+                list(input.sources() or []),
+                set(workspace.plot_snapshots),
+                columns=input.columns(), hspace=input.hspace(), wspace=input.wspace(),
+                sharex=input.sharex(), sharey=input.sharey()) | {'dpi': int(input.dpi() or 120)}
+
+        def render_combination():
+            settings_now = settings()
+            selections = []
+            for tid in settings_now['sources']:
+                snapshot = workspace.plot_snapshots[tid]
+                spec, options = snapshot.plot_render_source()
+                selections.append((f'Plot {tid.split("_")[-1]}', spec, options))
+            return combined_figure(selections, columns=settings_now['columns'],
+                hspace=settings_now['hspace'], wspace=settings_now['wspace'],
+                sharex=settings_now['sharex'], sharey=settings_now['sharey'],
+                dpi=settings_now['dpi'])
+
+        @render.plot
+        def figure():
+            import matplotlib.pyplot as plt
+            try:
+                fig = render_combination()
+            except (ValueError, KeyError) as exc:
+                from matplotlib.figure import Figure
+                fig = Figure(figsize=(8, 4))
+                fig.text(.5, .5, str(exc), ha='center', va='center')
+            return fig
+
+        @render.download(filename='combined_plot.png', media_type='image/png')
+        def download():
+            import matplotlib.pyplot as plt
+            import io
+            fig = render_combination()
+            try:
+                stream = io.BytesIO()
+                fig.savefig(stream, format='png', dpi=settings()['dpi'])
+                yield stream.getvalue()
+            finally:
+                plt.close(fig)
+
+        return settings
 
     # Quality dashboards have independent controls and do not modify plot data.
     @module.ui
@@ -3258,6 +3548,7 @@ if (!window.__apmColorPickerInstalled) {
             ),
             ui.div(
                 ui.input_action_button("add_tab", "New plot", class_="btn-primary"),
+                ui.input_action_button("add_combined", "Combine plots", class_="btn-outline-primary"),
                 ui.input_action_button("add_table", "New table", class_="btn-primary"),
                 ui.input_action_button("add_quality", "New quality", class_="btn-primary"),
                 ui.input_action_button("retain_plot", "Save", class_="btn-outline-primary"),
@@ -3425,7 +3716,7 @@ if (!window.__apmColorPickerInstalled) {
         @traced('retain_selected', kind='reactive_effect', trigger='@reactive.event(input.retain_plot)')
         def retain_selected():
             selected = input.plot_tabs()
-            if selected not in tab_filters and selected not in table_frames and selected not in workspace.quality_settings:
+            if selected not in tab_filters and selected not in table_frames and selected not in workspace.quality_settings and selected not in workspace.combined_settings:
                 ui.notification_show("Select a plot or table tab to save", type="warning")
                 return
             ui.modal_show(ui.modal(
@@ -3636,6 +3927,37 @@ if (!window.__apmColorPickerInstalled) {
                         ui.insert_nav_panel("plot_tabs", panel, select=True)
                         ui.modal_remove()
                         return
+                    if preset.get('type') == 'combined':
+                        stored = dict(preset.get('settings') or {})
+                        source_configs = stored.get('source_plots') or []
+                        if not source_configs:
+                            raise ValueError('Saved combined figure has no source plots')
+                        identifiers = []
+                        for source_settings in source_configs:
+                            number = next_tab.get() + 1
+                            next_tab.set(number)
+                            source_id = f'plot_{number}'
+                            source_panel = ui.nav_panel(f'Plot {number}',
+                                plot_tab_ui(source_id, source_settings), value=source_id)
+                            source_snapshot = plot_tab_server(source_id, source_settings,
+                                config_tab_id=source_id, recovery_paused=recovery_paused)
+                            workspace.add_plot(source_id, source_snapshot)
+                            begin_history(source_id, source_settings, restored=True)
+                            register_draft(source_id, source_snapshot)
+                            ui.insert_nav_panel('plot_tabs', source_panel, select=False)
+                            identifiers.append(source_id)
+                        number = next_combined.get() + 1
+                        next_combined.set(number)
+                        tab_id = f'combined_{number}'
+                        stored['sources'] = identifiers
+                        stored['choices'] = {tid: f'Plot {tid.split("_")[-1]}' for tid in identifiers}
+                        panel = ui.nav_panel(preset.get('name') or f'Combined {number}',
+                            combined_tab_ui(tab_id, stored), value=tab_id)
+                        workspace.add_combined(tab_id, combined_tab_server(tab_id, stored, workspace=workspace, active_tabs=active_tabs))
+                        active_tabs.set(workspace.active_tabs)
+                        ui.insert_nav_panel('plot_tabs', panel, select=True)
+                        ui.modal_remove()
+                        return
                     number = next_tab.get() + 1
                     tab_id = f"plot_{number}"
                     initialized = initializer.restored_plot(preset_id, tab_id, number)
@@ -3650,6 +3972,27 @@ if (!window.__apmColorPickerInstalled) {
                 ui.modal_remove()
             except Exception as exc:
                 ui.notification_show(f"Could not restore plot: {exc}", type="error")
+
+        next_combined = reactive.value(0)
+
+        @reactive.effect
+        @reactive.event(input.add_combined)
+        def add_combined():
+            source_ids = [tid for tid in workspace.active_tabs if workspace.kind(tid) == 'plot']
+            if not source_ids:
+                ui.notification_show('Open at least one plot before combining plots', type='warning')
+                return
+            number = next_combined.get() + 1
+            next_combined.set(number)
+            tab_id = f'combined_{number}'
+            chosen = source_ids[:4]
+            config = {'sources': chosen, 'columns': min(2, len(chosen)),
+                      'choices': {tid: f'Plot {tid.split("_")[-1]}' for tid in source_ids}}
+            panel = ui.nav_panel(f'Combined {number}', combined_tab_ui(tab_id, config), value=tab_id)
+            settings = combined_tab_server(tab_id, config, workspace=workspace, active_tabs=active_tabs)
+            workspace.add_combined(tab_id, settings)
+            active_tabs.set(workspace.active_tabs)
+            ui.insert_nav_panel('plot_tabs', panel, select=True)
 
         @reactive.effect
         @reactive.event(input.add_tab)
@@ -3709,7 +4052,7 @@ if (!window.__apmColorPickerInstalled) {
 
         def restore_history_state(direction):
             selected = input.plot_tabs()
-            if workspace.kind(selected) is None:
+            if workspace.kind(selected) not in ('plot', 'table', 'quality'):
                 ui.notification_show("Select a plot or table tab", type="warning")
                 return
             with reactive.isolate():

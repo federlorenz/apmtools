@@ -12,6 +12,7 @@ import pandas as pd
 
 from .derived_views import prepare_table_source
 from .quality_source import prepare_quality_source, quality_filter_settings
+from .plot_table_source import table_plot_settings
 
 
 @dataclass(frozen=True)
@@ -40,7 +41,11 @@ class TabInitializer:
         # A partially initialized input can fail during a snapshot; preserve
         # the existing 'start with defaults' behavior for this operation.
         inherited = {}
-        if self.workspace.kind(selected) == 'plot':
+        if self.workspace.kind(selected) == 'table':
+            inherited = table_plot_settings(
+                self.summary, self.workspace.table_lineage.get(selected, []),
+                self.workspace.table_settings[selected]())
+        elif self.workspace.kind(selected) == 'plot':
             try:
                 inherited = copy.deepcopy(self.workspace.plot_snapshots[selected]())
             except Exception:
@@ -62,6 +67,7 @@ class TabInitializer:
         elif kind == 'plot':
             frame, steps = prepare_table_source(
                 self.summary, parent_kind='plot',
+                parent_steps=self.workspace.plot_snapshots[selected]().get('source_steps', []),
                 parent_settings=self.workspace.plot_snapshots[selected]())
         else:
             frame, steps = prepare_table_source(self.summary)

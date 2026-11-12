@@ -182,7 +182,7 @@ def _apply_filters(data, subset_filters, datetime_start=None, datetime_end=None,
 
 @traced('_aggregate', kind="data" if 'shiny/data.py' not in ("plot_configs.py", "shiny/matplotlib_renderer.py") else "service")
 def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
-               only_complete=True, flooring_timestamp=True):
+               only_complete=True, flooring_timestamp=True, uncertainty=None):
     """Aggregate through ``Summary.group_stat``.
 
     Grouping by categorical columns is supported even when no time frequency
@@ -200,6 +200,7 @@ def _aggregate(data, value_columns, frequency, grouping_by, aggregate, *,
     result = aggregate_view(
         data, value_columns, frequency, grouping_by, aggregate,
         only_complete=only_complete, flooring_timestamp=flooring_timestamp,
+        uncertainty=uncertainty,
     )
     if result is None:
         # group_stat() may return None when no rows survive completeness

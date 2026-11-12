@@ -179,6 +179,25 @@ class PlotConfigManager:
         self.revision += 1
         return preset_id
 
+    def retain_combined(self, name, settings, *, preset_id=None):
+        """Persist a compound figure and source plot settings, not data frames."""
+        name = str(name).strip()
+        if not name:
+            raise ValueError('Configuration name must not be empty')
+        preset_id = preset_id or uuid.uuid4().hex
+        item = {'schema_version': 1, 'id': preset_id, 'name': name,
+                'type': 'combined', 'settings': _json_ready(settings)}
+        items = self.saved()
+        for index, previous in enumerate(items):
+            if previous.get('id') == preset_id:
+                items[index] = item
+                break
+        else:
+            items.append(item)
+        self.summary.views = items
+        self.revision += 1
+        return preset_id
+
     def restore_quality(self, preset_id):
         item = next((p for p in self.saved() if p.get('id') == preset_id), None)
         if item is None or item.get('type') != 'quality':
@@ -196,7 +215,7 @@ class PlotConfigManager:
     def delete_saved(self, preset_id):
         """Delete one explicitly saved plot by stable ID, not its open draft."""
         items = copy.deepcopy(self.summary.views or [])
-        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') in ('plot', 'table', 'quality'))]
+        remaining = [p for p in items if not (p.get('id') == preset_id and p.get('type') in ('plot', 'table', 'quality', 'combined'))]
         if len(remaining) == len(items):
             raise KeyError(f'Unknown saved plot: {preset_id}')
         self.summary.views = remaining

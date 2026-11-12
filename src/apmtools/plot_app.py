@@ -125,7 +125,7 @@ class PlotApp:
         from .shiny.ui import _build_summary_ui_server
         from .plot_configs import PlotConfigManager
         from .operation_log import OperationLog, stream_operation
-        from .dataset_creation import scan_folder_async, scan_results_frame, scan_parameters, scan_directory_choices, parse_scan_levels, create_summary_async, summary_destination
+        from .dataset_creation import scan_folder_async, scan_results_frame, scan_parameters, scan_directory_choices, parse_scan_levels, multiple_custom_monitor_signatures, create_summary_async, summary_destination
         from .shiny.ui import _table_preview_frame
         from . import dataset_editing as editing
         import shinyswatch
@@ -146,18 +146,44 @@ class PlotApp:
                 margin-top:.5rem; align-items:stretch;}
               .summary-empty-dataset-panels > div {border:1px solid var(--bs-border-color); border-radius:.5rem;
                 min-height:0; min-width:0; background:var(--bs-body-bg); overflow:auto;}
-              .summary-modify-sidebar-toolbar {display:flex; gap:.5rem; flex-wrap:wrap; margin-top:.5rem;}
-              .summary-modify-panels {margin-top:.5rem; height:max(420px, calc(100dvh - 210px));}
-              .summary-modify-panels.summary-modify-left-hidden {grid-template-columns:minmax(0,3fr) minmax(10rem,1fr);}
-              .summary-modify-panels.summary-modify-right-hidden {grid-template-columns:minmax(10rem,1fr) minmax(0,3fr);}
-              .summary-modify-panels.summary-modify-left-hidden.summary-modify-right-hidden {grid-template-columns:minmax(0,1fr);}
-              .summary-modify-left-hidden .summary-modify-left,
-              .summary-modify-right-hidden .summary-modify-right {display:none;}
+              /* Edge-toggle sidebars with draggable widths; resize affects only this workspace. */
+              .summary-modify-panels {display:grid;
+                grid-template-columns:var(--modify-left-width, 300px) minmax(0, 1fr) var(--modify-right-width, 320px);
+                gap:0; margin-top:.5rem; height:max(420px, calc(100dvh - 210px));
+                min-height:420px; align-items:stretch;}
+              .summary-modify-panels > div {min-width:0; min-height:0; background:var(--bs-body-bg);
+                border:1px solid var(--bs-border-color);}
+              .summary-modify-left, .summary-modify-right {position:relative; overflow:visible !important;}
+              .summary-modify-sidebar-body {height:100%; overflow:auto; padding:.75rem;}
+              .summary-modify-main {overflow:hidden !important;}
+              .summary-modify-edge-toggle {position:absolute; z-index:6; top:12px;
+                width:23px; height:35px; padding:0; line-height:1; display:flex;
+                align-items:center; justify-content:center; background:var(--bs-body-bg);
+                color:var(--bs-body-color); border:1px solid var(--bs-border-color);
+                border-radius:.35rem; box-shadow:0 1px 4px rgba(0,0,0,.12);}
+              .summary-modify-left .summary-modify-edge-toggle {right:-12px;}
+              .summary-modify-right .summary-modify-edge-toggle {left:-12px;}
+              .summary-modify-edge-toggle:hover, .summary-modify-edge-toggle:focus-visible {
+                background:var(--bs-secondary-bg); outline:2px solid var(--bs-primary); outline-offset:1px;}
+              .summary-modify-resize-grip {position:absolute; z-index:5; top:54px; bottom:0;
+                width:10px; cursor:col-resize; touch-action:none; user-select:none;}
+              .summary-modify-left .summary-modify-resize-grip {right:-5px;}
+              .summary-modify-right .summary-modify-resize-grip {left:-5px;}
+              .summary-modify-resize-grip::after {content:""; position:absolute; top:0; bottom:0;
+                left:4px; border-left:2px solid var(--bs-border-color);}
+              .summary-modify-resize-grip:hover::after {border-color:var(--bs-primary);}
+              .summary-modify-left-hidden {--modify-left-width:35px !important;}
+              .summary-modify-right-hidden {--modify-right-width:35px !important;}
+              .summary-modify-left-hidden .summary-modify-left .summary-modify-sidebar-body,
+              .summary-modify-right-hidden .summary-modify-right .summary-modify-sidebar-body,
+              .summary-modify-left-hidden .summary-modify-left .summary-modify-resize-grip,
+              .summary-modify-right-hidden .summary-modify-right .summary-modify-resize-grip {display:none;}
               @media(max-width:850px) {
-                .summary-modify-panels, .summary-modify-panels.summary-modify-left-hidden,
-                .summary-modify-panels.summary-modify-right-hidden,
-                .summary-modify-panels.summary-modify-left-hidden.summary-modify-right-hidden {
-                    grid-template-columns:minmax(0,1fr); height:auto; }
+                .summary-modify-panels {grid-template-columns:minmax(0,1fr) !important;
+                  height:auto; min-height:420px; gap:.5rem;}
+                .summary-modify-left-hidden .summary-modify-left,
+                .summary-modify-right-hidden .summary-modify-right {min-height:35px;}
+                .summary-modify-resize-grip {display:none;}
                 .summary-modify-main {min-height:400px;}
               }
               .summary-create-left {padding:.75rem; min-width:0;}
@@ -206,26 +232,77 @@ class PlotApp:
                 resize:none; overflow:auto; box-sizing:border-box;
                 margin:0; white-space:pre-wrap; overflow-wrap:anywhere; font-size:.78rem;
                 background:var(--bs-tertiary-bg); border-radius:.35rem; padding:.65rem;}
-              .summary-create-right {min-width:0;}
+              .summary-create-panels {grid-template-columns:minmax(10rem, 1fr) minmax(0, 3fr);}
               @media(max-width:850px){.summary-empty-dataset-panels {grid-template-columns:1fr;
                 height:auto; min-height:0;}
                 .summary-empty-dataset-panels > div {min-height:15vh;}
                 .summary-create-main {height:max(400px, calc(100dvh - 180px));}}
             """),
             ui.tags.script("""
-              // Delegate clicks because Modify dataset can be recreated on tab changes.
-              document.addEventListener('click', function(event) {
-                const button = event.target.closest && event.target.closest('.modify-sidebar-toggle');
-                if (!button) return;
-                const workspace = button.closest('.summary-modify-workspace');
-                const panels = workspace && workspace.querySelector('.summary-modify-panels');
+              // Delegated handlers work even if Shiny replaces the Modify tab.
+              const modifySidebarSizes = {left:300, right:320};
+              const modifySidebarClosed = {left:false, right:false};
+              function applyModifySidebarState(panels) {
                 if (!panels) return;
+                for (const side of ['left', 'right']) {
+                  panels.style.setProperty('--modify-' + side + '-width', modifySidebarSizes[side] + 'px');
+                  panels.classList.toggle('summary-modify-' + side + '-hidden', modifySidebarClosed[side]);
+                  const toggle = panels.querySelector('.summary-modify-' + side + ' .summary-modify-edge-toggle');
+                  if (!toggle) continue;
+                  const collapsed = modifySidebarClosed[side];
+                  toggle.textContent = side === 'left' ? (collapsed ? '›' : '‹') : (collapsed ? '‹' : '›');
+                  toggle.setAttribute('aria-expanded', String(!collapsed));
+                  toggle.setAttribute('aria-label', (collapsed ? 'Show ' : 'Collapse ') + side + ' sidebar');
+                  toggle.title = toggle.getAttribute('aria-label');
+                }
+              }
+              document.addEventListener('click', function(event) {
+                const button = event.target.closest && event.target.closest('.summary-modify-edge-toggle');
+                if (!button) return;
                 const side = button.getAttribute('data-side');
                 if (side !== 'left' && side !== 'right') return;
-                const hidden = panels.classList.toggle('summary-modify-' + side + '-hidden');
-                button.textContent = (hidden ? 'Show ' : 'Hide ') + side + ' sidebar';
-                button.setAttribute('aria-expanded', String(!hidden));
+                modifySidebarClosed[side] = !modifySidebarClosed[side];
+                applyModifySidebarState(button.closest('.summary-modify-panels'));
               });
+              // Keep sizes across Modify tab remounts, without rerunning Shiny inputs.
+              const observeModifyPanels = new MutationObserver(function() {
+                for (const panel of document.querySelectorAll('.summary-modify-panels')) {
+                  if (panel.dataset.modifyInitialized === 'true') continue;
+                  panel.dataset.modifyInitialized = 'true';
+                  applyModifySidebarState(panel);
+                }
+              });
+              observeModifyPanels.observe(document.documentElement, {childList:true, subtree:true});
+              let modifyDrag = null;
+              document.addEventListener('pointerdown', function(event) {
+                const grip = event.target.closest && event.target.closest('.summary-modify-resize-grip');
+                if (!grip || event.button !== 0) return;
+                const side = grip.getAttribute('data-side');
+                const panels = grip.closest('.summary-modify-panels');
+                if (!panels || modifySidebarClosed[side] || window.matchMedia('(max-width:850px)').matches) return;
+                modifyDrag = {side, grip, panels, pointerId:event.pointerId,
+                  startX:event.clientX, startWidth:modifySidebarSizes[side]};
+                grip.setPointerCapture(event.pointerId);
+                event.preventDefault();
+              });
+              document.addEventListener('pointermove', function(event) {
+                if (!modifyDrag || event.pointerId !== modifyDrag.pointerId) return;
+                const d = modifyDrag;
+                if (!d.panels.isConnected) {modifyDrag=null; return;}
+                const direction = d.side === 'left' ? 1 : -1;
+                const other = d.side === 'left' ? 'right' : 'left';
+                const otherWidth = modifySidebarClosed[other] ? 35 : modifySidebarSizes[other];
+                const maxWidth = Math.max(160, d.panels.clientWidth - otherWidth - 240);
+                modifySidebarSizes[d.side] = Math.min(maxWidth, Math.max(160,
+                  Math.round(d.startWidth + direction * (event.clientX - d.startX))));
+                applyModifySidebarState(d.panels);
+              });
+              function endModifyDrag(event) {
+                if (!modifyDrag || event.pointerId !== modifyDrag.pointerId) return;
+                modifyDrag=null;
+              }
+              document.addEventListener('pointerup', endModifyDrag);
+              document.addEventListener('pointercancel', endModifyDrag);
               // Full-width resize grip; no Shiny reactive values or polling needed.
               // Grabbing the top grip and moving upward makes the log taller.
               (function () {
@@ -291,11 +368,15 @@ class PlotApp:
             scan_folder_path = reactive.value("")
             scan_browse_path = reactive.value(Path.home().resolve())
             scan_metadata = reactive.value({})
+            scan_custom_count = reactive.value(1)
+            modify_map_condition_count = reactive.value(1)
+            modify_map_source_ref = [None]
             scan_busy = reactive.value(False)
             operation_messages = reactive.value(())
             scan_output = reactive.value(None)
             generated_summary = reactive.value(None)
             scan_completed = reactive.value(False)
+            upas_filter_busy = reactive.value(False)
             summary_filename = reactive.value("")
             summary_busy = reactive.value(False)
             create_epoch = reactive.value(0)
@@ -412,7 +493,9 @@ class PlotApp:
                 scan_output.set(None)
                 generated_summary.set(None)
                 scan_completed.set(False)
+                upas_filter_busy.set(False)
                 scan_metadata.set({})
+                scan_custom_count.set(1)
                 scan_folder_path.set("")
                 summary_filename.set("")
                 scan_busy.set(False)
@@ -491,7 +574,8 @@ class PlotApp:
             def create_summary_run_control():
                 ready = (scan_completed.get() and scanned_dataset is not None
                          and generated_summary.get() is None
-                         and not scan_busy.get() and not summary_busy.get())
+                         and not scan_busy.get() and not summary_busy.get()
+                         and not upas_filter_busy.get())
                 return ui.input_action_button(
                     "create_summary_run", "Run", disabled=not ready,
                     class_="btn-primary w-100" if ready else "btn-outline-secondary w-100",
@@ -501,7 +585,8 @@ class PlotApp:
             @reactive.event(input.create_summary_run)
             async def run_create_summary():
                 if (not scan_completed.get() or scanned_dataset is None or scan_busy.get()
-                        or summary_busy.get() or generated_summary.get() is not None
+                        or summary_busy.get() or upas_filter_busy.get()
+                        or generated_summary.get() is not None
                         or "create" not in blank_tabs.get()):
                     return
                 epoch = create_epoch.get()
@@ -634,6 +719,77 @@ class PlotApp:
                     placeholder="study, monitor, location",
                 )
 
+            @render.ui
+            def scan_custom_timestamp_format():
+                if input.scan_custom_use_format():
+                    return ui.input_text(
+                        "scan_custom_date_format", "Custom timestamp format",
+                        placeholder="%Y-%m-%d %H:%M:%S",
+                    )
+                return ui.div()
+
+            def scan_custom_field(index, field):
+                """The first row retains its original Shiny input IDs."""
+                suffix = "" if index == 0 else f"_{index}"
+                return input[f"scan_custom_{field}{suffix}"]()
+
+            def current_custom_monitor_signatures():
+                entries = []
+                for index in range(scan_custom_count.get()):
+                    use_format = bool(scan_custom_field(index, "use_format"))
+                    entries.append({
+                        "name": scan_custom_field(index, "name"),
+                        "signature": scan_custom_field(index, "signature"),
+                        "time_column": scan_custom_field(index, "time_column"),
+                        "custom_format": use_format,
+                        "date_format": (scan_custom_field(index, "date_format")
+                                        if use_format else None),
+                    })
+                return multiple_custom_monitor_signatures(entries)
+
+            def extra_custom_monitor_row(index):
+                suffix = f"_{index}"
+                return ui.div(
+                    ui.hr(),
+                    ui.input_text(f"scan_custom_name{suffix}", "Monitor name"),
+                    ui.input_text(f"scan_custom_signature{suffix}",
+                                  "Monitor signature (comma separated)",
+                                  placeholder="timestamp, temperature, humidity"),
+                    ui.input_text(f"scan_custom_time_column{suffix}", "Monitor timestamp column"),
+                    ui.input_checkbox(f"scan_custom_use_format{suffix}",
+                                      "Specify monitor custom timestamp format", value=False),
+                    ui.panel_conditional(
+                        f"input.scan_custom_use_format{suffix}",
+                        ui.input_text(f"scan_custom_date_format{suffix}",
+                                      "Custom timestamp format",
+                                      placeholder="%Y-%m-%d %H:%M:%S"),
+                    ),
+                    class_="summary-custom-monitor-entry",
+                )
+
+            @reactive.effect
+            def append_custom_monitor_editor():
+                """Append one blank editor when the last row has user content.
+
+                insert_ui appends without rebuilding preceding rows, retaining
+                input values and focus across additions.
+                """
+                if "create" not in blank_tabs.get() or generated_summary.get() is not None:
+                    return
+                index = scan_custom_count.get() - 1
+                name = scan_custom_field(index, "name")
+                signature = scan_custom_field(index, "signature")
+                time_column = scan_custom_field(index, "time_column")
+                use_format = scan_custom_field(index, "use_format")
+                if not any((str(value or "").strip() for value in
+                            (name, signature, time_column))) and not use_format:
+                    return
+                # Don't append another entry until the latest row has been
+                # mounted. Counts are session-local and reset on tab close.
+                scan_custom_count.set(index + 2)
+                ui.insert_ui(extra_custom_monitor_row(index + 1),
+                             selector="#scan-custom-monitor-entries", where="beforeEnd")
+
             @reactive.effect
             @reactive.event(input.scan_add_metadata_dialog)
             def add_scan_metadata_dialog():
@@ -676,7 +832,8 @@ class PlotApp:
             def scan_start_control():
                 levels = current_scan_levels()
                 ready = (bool(scan_folder_path.get()) and bool(levels)
-                         and all(levels) and not scan_busy.get())
+                         and all(levels) and not scan_busy.get()
+                         and not summary_busy.get() and not upas_filter_busy.get())
                 return ui.input_action_button("scan_start", "Start scanning",
                                               class_="btn-primary w-100" if ready else "btn-outline-secondary w-100",
                                               disabled=not ready)
@@ -686,14 +843,15 @@ class PlotApp:
             async def start_scan():
                 nonlocal scanned_dataset
                 if (dataset.get() is not None or scan_busy.get() or summary_busy.get()
-                        or "create" not in blank_tabs.get()):
+                        or upas_filter_busy.get() or "create" not in blank_tabs.get()):
                     return
                 epoch = create_epoch.get()
                 levels = current_scan_levels()
                 try:
                     # Fail quickly before scheduling the potentially slow scan.
                     params = scan_parameters(scan_folder_path.get(), levels,
-                                             input.scan_timezone(), scan_metadata.get())
+                                             input.scan_timezone(), scan_metadata.get(),
+                                             signatures=current_custom_monitor_signatures())
                 except Exception as exc:
                     ui.notification_show(f"Cannot start scan: {exc}", type="error", duration=10)
                     return
@@ -705,6 +863,8 @@ class PlotApp:
                     log = OperationLog()
                     log.emit(f"Scanning folder: {params['directory']}")
                     scan_options = {"message_callback": log.emit}
+                    if params.get("signatures"):
+                        scan_options["signatures"] = params["signatures"]
                     if scanned_dataset is not None:
                         scan_options["dataset"] = scanned_dataset
                     result = await stream_operation(
@@ -737,6 +897,121 @@ class PlotApp:
                 finally:
                     if epoch == create_epoch.get():
                         scan_busy.set(False)
+
+            @render.ui
+            def upas_filter_controls():
+                """Filter-summary operations act on the scanned Dataset, not Summary."""
+                ready = (scan_completed.get() and scanned_dataset is not None
+                         and generated_summary.get() is None
+                         and not scan_busy.get() and not summary_busy.get()
+                         and not upas_filter_busy.get())
+                return ui.div(
+                    ui.h6("UPAS filter summary"),
+                    ui.input_action_button("save_upas_filter_summary", "Save upas filter summary",
+                                           disabled=not ready, class_="btn-outline-primary w-100 mb-2"),
+                    ui.input_action_button("load_upas_filter_summary", "Load upas filter summary",
+                                           disabled=not ready, class_="btn-outline-primary w-100"),
+                    ui.p("Use these controls after scanning UPAS monitors and before creating the Summary.",
+                         class_="form-text"),
+                )
+
+            @reactive.effect
+            @reactive.event(input.save_upas_filter_summary)
+            def open_save_upas_filter_dialog():
+                if scanned_dataset is None or not scan_completed.get() or upas_filter_busy.get():
+                    return
+                folder = scan_folder_path.get() or str(Path.home())
+                ui.modal_show(ui.modal(
+                    ui.p("Download the current filter summary as filter_summary.csv. "
+                         "Your browser will choose where to save it according to its download settings."),
+                    ui.download_button("upas_save_download", "Save filter_summary.csv",
+                                       class_="btn-primary"),
+                    title="Save upas filter summary", easy_close=True,
+                    footer=ui.modal_button("Cancel"),
+                ))
+
+            @reactive.effect
+            @reactive.event(input.load_upas_filter_summary)
+            def open_load_upas_filter_dialog():
+                if scanned_dataset is None or not scan_completed.get() or upas_filter_busy.get():
+                    return
+                ui.modal_show(ui.modal(
+                    ui.input_file("upas_load_upload", "Choose filter summary CSV",
+                                  accept=[".csv"], multiple=False),
+                    ui.p("Select a CSV file from your computer. Its values will be applied "
+                         "to the currently scanned Dataset.", class_="form-text"),
+                    title="Load upas filter summary", easy_close=True,
+                    footer=ui.modal_button("Cancel"),
+                ))
+
+            @render.download(filename="filter_summary.csv")
+            def upas_save_download():
+                """Generate the existing Dataset CSV, then serve it to the browser."""
+                from .dataset_creation import save_upas_filter_summary_file
+                if (scanned_dataset is None or not scan_completed.get()
+                        or generated_summary.get() is not None or scan_busy.get()
+                        or summary_busy.get() or upas_filter_busy.get()):
+                    raise ValueError("Scan UPAS monitors before saving their filter summary")
+                epoch = create_epoch.get()
+                upas_filter_busy.set(True)
+                try:
+                    with tempfile.TemporaryDirectory(prefix="apmtools-upas-") as directory:
+                        target = save_upas_filter_summary_file(scanned_dataset, directory)
+                        content = target.read_bytes()
+                    if epoch == create_epoch.get():
+                        append_operation_messages(["UPAS filter summary prepared for download: filter_summary.csv"], epoch)
+                        status.set("UPAS filter summary prepared for download")
+                    yield content
+                except Exception as exc:
+                    if epoch == create_epoch.get():
+                        append_operation_messages([f"UPAS filter summary save failed: {exc}"], epoch)
+                        ui.notification_show(f"Could not save UPAS filter summary: {exc}",
+                                             type="error", duration=10)
+                    raise
+                finally:
+                    if epoch == create_epoch.get():
+                        upas_filter_busy.set(False)
+
+            @reactive.effect
+            @reactive.event(input.upas_load_upload)
+            def run_load_upas_filter_summary():
+                from .dataset_creation import load_upas_filter_summary_file
+                if (scanned_dataset is None or not scan_completed.get()
+                        or generated_summary.get() is not None or scan_busy.get()
+                        or summary_busy.get() or upas_filter_busy.get()):
+                    return
+                selected = input.upas_load_upload()
+                if not selected:
+                    return
+                epoch = create_epoch.get()
+                upas_filter_busy.set(True)
+                try:
+                    upload = selected[0]
+                    if Path(upload["name"]).suffix.lower() != ".csv":
+                        raise ValueError("Select a .csv filter summary file")
+                    # Shiny stores the uploaded CSV in a temporary server-side file.
+                    # It may lack a .csv extension; retain its name for validation.
+                    with tempfile.TemporaryDirectory(prefix="apmtools-upas-load-") as directory:
+                        copied = Path(directory) / "filter_summary.csv"
+                        import shutil
+                        shutil.copyfile(upload["datapath"], copied)
+                        source = load_upas_filter_summary_file(scanned_dataset, copied)
+                    if epoch != create_epoch.get():
+                        return
+                    scan_output.set(scan_results_frame(scanned_dataset))
+                    append_operation_messages([f"UPAS filter summary loaded: {upload['name']}"], epoch)
+                    status.set(f"UPAS filter summary loaded: {upload['name']}")
+                    ui.modal_remove()
+                    ui.notification_show(f"UPAS filter summary loaded: {upload['name']}",
+                                         type="message", duration=8)
+                except Exception as exc:
+                    if epoch == create_epoch.get():
+                        append_operation_messages([f"UPAS filter summary load failed: {exc}"], epoch)
+                        ui.notification_show(f"Could not load UPAS filter summary: {exc}",
+                                             type="error", duration=10)
+                finally:
+                    if epoch == create_epoch.get():
+                        upas_filter_busy.set(False)
 
             def _modify_source():
                 source = dataset.get()
@@ -799,10 +1074,54 @@ class PlotApp:
             def modify_editor_sidebar():
                 """Structural column edits in the left Modify dataset sidebar."""
                 summary = _modify_source()
+                # A committed edit reconstructs this sidebar. The previously
+                # inserted condition inputs disappear, so reset their count.
+                if summary is not modify_map_source_ref[0]:
+                    modify_map_source_ref[0] = summary
+                    if modify_map_condition_count.get() != 1:
+                        modify_map_condition_count.set(1)
                 if summary is None:
                     return ui.p("Open or create a Summary first.")
                 if not len(summary.columns):
                     return ui.p("No columns available")
+                import pandas as pd
+                from .shiny.datetime_intervals import MAX_DATETIME_INTERVALS
+                columns = list(map(str, summary.columns))
+                numeric_columns = [c for c in columns if pd.api.types.is_numeric_dtype(summary[c])]
+                filter_stages = min(MAX_DATETIME_INTERVALS, max(2, len(columns) + 1))
+                subset_fields = []
+                for stage in range(filter_stages):
+                    control = ui.div(
+                        ui.input_select(f"modify_filter_column_{stage}", f"Subset column {stage + 1}",
+                            choices={"": "Select a column", **{c: c for c in columns}}),
+                        ui.output_ui(f"modify_filter_values_ui_{stage}"),
+                        ui.input_select(f"modify_filter_style_{stage}", "Filter style",
+                            choices={k: k for k in ("all", "any", "negative all", "negative any")}),
+                        class_="mb-3")
+                    if stage:
+                        control = ui.panel_conditional(
+                            " && ".join(f"input.modify_filter_column_{i} !== ''" for i in range(stage)), control)
+                    subset_fields.append(control)
+                datetime_fields = []
+                for stage in range(MAX_DATETIME_INTERVALS):
+                    start_id = f"modify_filter_datetime_start_{stage}"
+                    end_id = f"modify_filter_datetime_end_{stage}"
+                    control = ui.div(
+                        ui.tags.strong(f"Datetime interval {stage + 1}"),
+                        ui.input_select(f"modify_filter_datetime_mode_{stage}", "Filter type",
+                            choices={"positive": "Positive (keep)", "negative": "Negative (exclude)"}),
+                        ui.input_text(start_id, "Start datetime",
+                            placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                        ui.input_text(end_id, "End datetime",
+                            placeholder="YYYY-MM-DD, HH:MM:SS, or YYYY-MM-DD HH:MM:SS"),
+                        class_="mb-3")
+                    if stage:
+                        prev = stage - 1
+                        control = ui.panel_conditional(
+                            f"(input.modify_filter_datetime_start_{prev} && input.modify_filter_datetime_start_{prev}.trim() !== '') || "
+                            f"(input.modify_filter_datetime_end_{prev} && input.modify_filter_datetime_end_{prev}.trim() !== '')",
+                            control)
+                    datetime_fields.append(control)
                 return ui.navset_tab(
                     ui.nav_panel("Edit columns",
                         ui.h6("Edit column names"),
@@ -820,8 +1139,120 @@ class PlotApp:
                         ui.input_text("modify_new_fill", "Initial value (optional)"),
                         ui.input_action_button("modify_apply_create", "Create column", class_="btn-outline-primary w-100"),
                     ),
+                    ui.nav_panel("Filter dataset",
+                        ui.h6("Subset"),
+                        *subset_fields,
+                        ui.hr(),
+                        ui.input_selectize("modify_filter_numeric_columns", "Numerical subset",
+                            choices={c: c for c in numeric_columns}, multiple=True),
+                        ui.output_ui("modify_filter_numeric_bounds"),
+                        ui.hr(),
+                        ui.h6("Datetime filters"),
+                        *datetime_fields,
+                        ui.help_text("Positive intervals are combined (keep any matching interval); negative intervals exclude matching observations."),
+                        ui.input_action_button("modify_apply_filter", "Apply filters", class_="btn-outline-primary w-100"),
+                    ),
                     id="modify_editor_tabs",
                 )
+
+            from .shiny.data import _subset_choices
+            from .shiny.datetime_intervals import MAX_DATETIME_INTERVALS, normalize_datetime_intervals
+
+            def _modify_filter_values_ui(stage):
+                summary = _modify_source()
+                if summary is None:
+                    return ui.div()
+                try:
+                    column = input[f"modify_filter_column_{stage}"]()
+                except Exception:
+                    return ui.div()
+                if column not in summary.columns:
+                    return ui.div()
+                choices, _ = _subset_choices(summary, column)
+                return ui.input_selectize(f"modify_filter_values_{stage}", f"{column} values",
+                    choices=choices, multiple=True)
+
+            for _filter_stage in range(MAX_DATETIME_INTERVALS):
+                def _make_filter_values(stage):
+                    def result():
+                        return _modify_filter_values_ui(stage)
+                    result.__name__ = f"modify_filter_values_ui_{stage}"
+                    renderer = render.ui(result)
+                    if output is not None:
+                        output(renderer)
+                    return renderer
+                _make_filter_values(_filter_stage)
+
+            @render.ui
+            def modify_filter_numeric_bounds():
+                summary = _modify_source()
+                if summary is None:
+                    return ui.div()
+                try:
+                    selected = list(input.modify_filter_numeric_columns() or [])
+                except Exception:
+                    selected = []
+                fields = []
+                for column in selected:
+                    if column not in summary.columns:
+                        continue
+                    fields.append(ui.div(
+                        ui.tags.strong(column),
+                        ui.input_text(f"modify_filter_numeric_gt_{list(summary.columns).index(column)}", "Greater than"),
+                        ui.input_text(f"modify_filter_numeric_lt_{list(summary.columns).index(column)}", "Less than"),
+                        class_="mb-3"))
+                return ui.div(*fields)
+
+            def _read_modify_filter_spec():
+                summary = _modify_source()
+                if summary is None:
+                    raise ValueError("No Summary loaded")
+                stages = min(MAX_DATETIME_INTERVALS, max(2, len(summary.columns) + 1))
+                chain = []
+                for stage in range(stages):
+                    column = input[f"modify_filter_column_{stage}"]()
+                    if column not in summary.columns:
+                        break
+                    choices, mapping = _subset_choices(summary, column)
+                    keys = list(input[f"modify_filter_values_{stage}"]() or [])
+                    values = [mapping[key] for key in keys if key in mapping]
+                    if values:
+                        chain.append({"column": column, "values": values,
+                            "style": input[f"modify_filter_style_{stage}"]() or "all"})
+                intervals = []
+                for stage in range(MAX_DATETIME_INTERVALS):
+                    start = input[f"modify_filter_datetime_start_{stage}"]() or ''
+                    end = input[f"modify_filter_datetime_end_{stage}"]() or ''
+                    if not str(start).strip() and not str(end).strip():
+                        break
+                    intervals.append({"start": start, "end": end,
+                        "type": input[f"modify_filter_datetime_mode_{stage}"]() or "positive"})
+                bounds = {}
+                for column in list(input.modify_filter_numeric_columns() or []):
+                    if column not in summary.columns:
+                        continue
+                    index = list(summary.columns).index(column)
+                    selected_bounds = {}
+                    for key in ('gt', 'lt'):
+                        raw = input[f"modify_filter_numeric_{key}_{index}"]()
+                        if str(raw or '').strip():
+                            selected_bounds[key] = raw.strip()
+                    if selected_bounds:
+                        bounds[column] = selected_bounds
+                return chain, normalize_datetime_intervals(intervals), bounds
+
+            @reactive.effect
+            @reactive.event(input.modify_apply_filter)
+            def modify_apply_filter():
+                try:
+                    chain, intervals, bounds = _read_modify_filter_spec()
+                except Exception as exc:
+                    ui.notification_show(f"Invalid dataset filters: {exc}", type="error", duration=10)
+                    return
+                if not (chain or intervals or bounds):
+                    ui.notification_show("Select at least one filter", type="warning")
+                    return
+                _run_modify(lambda data: data.filter_dataset(chain, intervals, bounds))
 
             @render.ui
             def modify_editor_right_sidebar():
@@ -847,6 +1278,9 @@ class PlotApp:
                         ui.input_select("modify_map_operator", "Condition",
                                         choices={op: op for op in ('==', '!=', '>', '>=', '<', '<=', 'isin', 'isna', 'notna')}),
                         ui.input_text("modify_map_value", "Compare with (comma-separated for isin)"),
+                        ui.div(id="modify-map-extra-conditions"),
+                        ui.input_action_button("modify_map_add_condition", "+ Add condition", class_="btn-outline-secondary btn-sm"),
+                        ui.p("Conditions are combined from top to bottom (left to right).", class_="form-text"),
                         ui.input_text("modify_map_true", "Value when True"),
                         ui.input_checkbox("modify_map_has_false", "Set value when False", value=False),
                         ui.input_text("modify_map_false", "Value when False (optional)"),
@@ -969,11 +1403,39 @@ class PlotApp:
                 _run_modify(lambda data: editing.create_column(data, input.modify_new_name(), input.modify_new_fill()))
 
             @reactive.effect
+            @reactive.event(input.modify_map_add_condition)
+            def modify_map_add_condition():
+                """Append rather than rerender existing inputs to preserve edited values."""
+                index = modify_map_condition_count.get()
+                modify_map_condition_count.set(index + 1)
+                summary = _modify_source()
+                if summary is None:
+                    return
+                choices = {str(name): str(name) for name in summary.columns}
+                operators = {op: op for op in ('==', '!=', '>', '>=', '<', '<=', 'isin', 'isna', 'notna')}
+                ui.insert_ui(ui.div(
+                    ui.hr(),
+                    ui.input_select(f"modify_map_join_{index}", "Combine with previous", choices={'and': 'AND', 'or': 'OR'}),
+                    ui.input_select(f"modify_map_condition_{index}", "Condition column", choices=choices),
+                    ui.input_select(f"modify_map_operator_{index}", "Condition", choices=operators),
+                    ui.input_text(f"modify_map_value_{index}", "Compare with (comma-separated for isin)"),
+                    class_="summary-map-condition-entry"),
+                    selector="#modify-map-extra-conditions", where="beforeEnd")
+
+            @reactive.effect
             @reactive.event(input.modify_apply_map)
             def modify_apply_map():
-                _run_modify(lambda data: editing.map_column(
-                    data, input.modify_map_target(), input.modify_map_condition(),
-                    input.modify_map_operator(), input.modify_map_value(),
+                conditions = [{'column': input.modify_map_condition(),
+                               'op': input.modify_map_operator(),
+                               'value': input.modify_map_value()}]
+                for index in range(1, modify_map_condition_count.get()):
+                    conditions.append({
+                        'join': input[f"modify_map_join_{index}"](),
+                        'column': input[f"modify_map_condition_{index}"](),
+                        'op': input[f"modify_map_operator_{index}"](),
+                        'value': input[f"modify_map_value_{index}"]()})
+                _run_modify(lambda data: editing.map_column_conditions(
+                    data, input.modify_map_target(), conditions,
                     input.modify_map_true(), input.modify_map_false(),
                     bool(input.modify_map_has_false())))
 
@@ -983,25 +1445,27 @@ class PlotApp:
                 _run_modify(lambda data: editing.calculate_column(data, input.modify_calc_name(), input.modify_calc_expression()))
 
             def modify_workspace():
-                """Editable Summary with independently collapsible sidebars."""
+                """Editable Summary with edge-collapse controls and draggable sidebars."""
+                def side_panel(side, output):
+                    return ui.div(
+                        ui.div(ui.output_ui(output), class_="summary-modify-sidebar-body"),
+                        ui.tags.button("‹" if side == "left" else "›", type="button",
+                            class_="summary-modify-edge-toggle", **{
+                                "data-side": side, "aria-label": f"Collapse {side} sidebar",
+                                "aria-expanded": "true", "title": f"Collapse {side} sidebar"}),
+                        ui.tags.div(class_="summary-modify-resize-grip",
+                            **{"data-side":side, "role":"separator",
+                               "aria-label":f"Drag to resize {side} sidebar",
+                               "title":f"Drag to resize {side} sidebar"}),
+                        class_=f"summary-modify-{side}",
+                    )
                 return ui.div(
                     ui.div(
-                        ui.tags.button("Hide left sidebar", type="button",
-                                       class_="btn btn-outline-secondary btn-sm modify-sidebar-toggle",
-                                       **{"data-side": "left", "aria-expanded": "true"}),
-                        ui.tags.button("Hide right sidebar", type="button",
-                                       class_="btn btn-outline-secondary btn-sm modify-sidebar-toggle",
-                                       **{"data-side": "right", "aria-expanded": "true"}),
-                        class_="summary-modify-sidebar-toolbar",
-                    ),
-                    ui.div(
-                        ui.div(ui.output_ui("modify_editor_sidebar"),
-                               class_="summary-empty-dataset-left summary-create-left summary-modify-left"),
+                        side_panel("left", "modify_editor_sidebar"),
                         ui.div(ui.output_ui("modify_result_content"),
                                class_="summary-empty-dataset-main summary-create-main summary-modify-main"),
-                        ui.div(ui.output_ui("modify_editor_right_sidebar"),
-                               class_="summary-empty-dataset-right summary-create-left summary-modify-right"),
-                        class_="summary-empty-dataset-panels summary-modify-panels",
+                        side_panel("right", "modify_editor_right_sidebar"),
+                        class_="summary-modify-panels",
                     ),
                     class_="summary-modify-workspace",
                 )
@@ -1234,7 +1698,18 @@ class PlotApp:
                                             ui.input_action_button("scan_add_metadata_dialog", "Add metadata",
                                                                    class_="btn-outline-secondary w-100"),
                                             ui.output_ui("scan_metadata_list"),
+                                            ui.hr(),
+                                            ui.h5("Scan custom monitors"),
+                                            ui.input_text("scan_custom_name", "Monitor name"),
+                                            ui.input_text("scan_custom_signature", "Monitor signature (comma separated)",
+                                                          placeholder="timestamp, temperature, humidity"),
+                                            ui.input_text("scan_custom_time_column", "Monitor timestamp column"),
+                                            ui.input_checkbox("scan_custom_use_format", "Specify monitor custom timestamp format", value=False),
+                                            ui.output_ui("scan_custom_timestamp_format"),
+                                            ui.div(id="scan-custom-monitor-entries"),
                                             ui.output_ui("scan_start_control"),
+                                            ui.hr(),
+                                            ui.output_ui("upas_filter_controls"),
                                         )] if generated_summary.get() is None else [] ),
                                         *( [ui.nav_panel("Create summary", ui.output_ui("create_summary_tab_content"))]
                                            if scan_completed.get() else [] ),
@@ -1260,8 +1735,7 @@ class PlotApp:
                                         ), open=False), class_="summary-operation-log"),
                                     class_="summary-empty-dataset-main summary-create-main")
                                  if mode == "create" else ui.div(class_="summary-empty-dataset-main")),
-                                ui.div(class_="summary-empty-dataset-right summary-create-right" if mode == "create" else "summary-empty-dataset-right"),
-                                class_="summary-empty-dataset-panels",
+                                class_="summary-empty-dataset-panels summary-create-panels",
                             ) if mode == "create" else modify_workspace()),
                             value=mode,
                         ) for mode in tabs),

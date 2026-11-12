@@ -175,20 +175,60 @@ def calculate_column(summary, name, expression):
     return summary.calculate_column((name or '').strip(), (expression or '').strip())
 
 
-def map_column(summary, target_column, condition_column, operator, value,
-               when_true, when_false='', has_false=False):
-    _columns(summary, [target_column, condition_column])
+def _map_condition(summary, column, operator, value):
+    """Validate and parse one user-entered mapping predicate."""
+    _columns(summary, [column])
     allowed = {'==', '!=', '>', '>=', '<', '<=', 'isin', 'isna', 'notna'}
     if operator not in allowed:
         raise ValueError(f'Unsupported condition: {operator}')
-    dtype = summary[condition_column].dtype
-    condition = {'column': condition_column, 'op': operator}
+    condition = {'column': column, 'op': operator}
     if operator == 'isin':
-        condition['value'] = [_value(item.strip(), dtype) for item in value.split(',') if item.strip()]
+        condition['value'] = [_value(item.strip(), summary[column].dtype)
+                              for item in str(value or '').split(',') if item.strip()]
         if not condition['value']:
             raise ValueError('Enter one or more values for isin')
     elif operator not in ('isna', 'notna'):
-        condition['value'] = _value(value, dtype)
+        if value is None or not str(value).strip():
+            raise ValueError(f'Enter a comparison value for {column}')
+        condition['value'] = _value(value, summary[column].dtype)
+    return condition
+
+
+def map_column_conditions(summary, target_column, conditions, when_true,
+                          when_false='', has_false=False):
+    """Map values using multiple predicates joined by AND/OR, left to right.
+
+    ``conditions`` is a list of dictionaries with ``column``, ``op``,
+    ``value`` and, after the first entry, ``join`` (``and`` or ``or``).
+    The resulting expression is fully nested and JSON-history replayable.
+    Example: (A AND B) OR C, rather than A AND (B OR C).
+    """
+    _columns(summary, [target_column])
+    if not isinstance(conditions, (list, tuple)) or not conditions:
+        raise ValueError('Enter at least one mapping condition')
+    if not all(isinstance(entry, dict) for entry in conditions):
+        raise ValueError('Each mapping condition must be a dictionary')
+    combined = None
+    for index, entry in enumerate(conditions):
+        condition = _map_condition(summary, entry.get('column'), entry.get('op'),
+                                   entry.get('value'))
+        if index == 0:
+            combined = condition
+        else:
+            connector = str(entry.get('join', 'and')).lower()
+            if connector not in ('and', 'or'):
+                raise ValueError(f'Unsupported logical connector: {connector}')
+            combined = {connector: [combined, condition]}
     true_value = _value(when_true, summary[target_column].dtype)
-    false_value = (_value(when_false, summary[target_column].dtype) if has_false else None)
-    return summary.map_values(target_column, condition, true_value, false_value)
+    false_value = (_value(when_false, summary[target_column].dtype)
+                   if has_false else None)
+    return summary.map_values(target_column, combined, true_value, false_value)
+
+
+def map_column(summary, target_column, condition_column, operator, value,
+               when_true, when_false='', has_false=False):
+    """Backward-compatible single-condition mapping interface."""
+    return map_column_conditions(
+        summary, target_column,
+        [{'column': condition_column, 'op': operator, 'value': value}],
+        when_true, when_false, has_false)

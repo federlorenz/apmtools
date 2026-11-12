@@ -23,7 +23,7 @@ def prepare_table_source(summary, *, parent_kind=None, parent_settings=None,
     elif parent_kind in ('plot', 'table'):
         if parent_settings is None:
             raise ValueError('Parent view settings must be supplied')
-        steps = source_steps(parent_steps if parent_kind == 'table' else [],
+        steps = source_steps(parent_steps or [],
                              parent_settings, parent_kind)
     elif parent_kind is None:
         steps = []

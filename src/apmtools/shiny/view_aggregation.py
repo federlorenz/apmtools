@@ -38,7 +38,7 @@ def normalize_statistics(value):
 
 def aggregate_view(data, value_columns, frequency=None, grouping_by=None,
                    aggregate='mean', *, only_complete=False,
-                   flooring_timestamp=True, time_column=None):
+                   flooring_timestamp=True, time_column=None, uncertainty=None):
     """Aggregate a raw Summary or an already materialized table/plot view.
 
     For raw timestamped data, defer to Summary.group_stat to retain its
@@ -77,7 +77,7 @@ def aggregate_view(data, value_columns, frequency=None, grouping_by=None,
             for value in values:
                 part = data.group_stat(value_cols=[value], frequency=frequency,
                                        grouping_by=groups, aggregate=statistics,
-                                       **kwargs)
+                                       uncertainty=uncertainty, **kwargs)
                 if part is not None and not part.empty:
                     parts.append(pd.DataFrame(part).reset_index(drop=True))
             if not parts:
@@ -91,7 +91,7 @@ def aggregate_view(data, value_columns, frequency=None, grouping_by=None,
             return data._constructor(result)
         result = data.group_stat(value_cols=values, frequency=frequency,
                                  grouping_by=groups, aggregate=statistics,
-                                 **kwargs)
+                                 uncertainty=uncertainty, **kwargs)
         return pd.DataFrame() if result is None else result
 
     if frequency is not None and only_complete:
@@ -118,7 +118,13 @@ def aggregate_view(data, value_columns, frequency=None, grouping_by=None,
             {'day': 'D', 'hour': 'h', 'minute': 'min', 'second': 's'}[frequency])
         if frequency not in keys:
             keys.append(frequency)
+    if uncertainty is not None:
+        from ..uncertainty import grouped_uncertainty
+        uncertainty_frame = grouped_uncertainty(work, keys, values, uncertainty)
     result = work.groupby(keys, dropna=False, sort=True)[values].agg(statistics)
     result.columns = [f'{column}_{stat}' for column, stat in result.columns]
     result = result.reset_index()
+    if uncertainty is not None:
+        result = result.merge(uncertainty_frame, on=keys, how='left',
+                              sort=False, validate='one_to_one')
     return data._constructor(result) if hasattr(data, '_constructor') else result

@@ -42,11 +42,11 @@ class ViewController:
 
     def saved(self):
         """Return independently mutable copies of both saved view types."""
-        return [p for p in self.manager.saved() if p.get('type', 'plot') in ('plot', 'table', 'quality')]
+        return [p for p in self.manager.saved() if p.get('type', 'plot') in ('plot', 'table', 'quality', 'combined')]
 
     def choices(self):
         """Stable ID -> human-readable label, independent of the active tab."""
-        return {p['id']: f"{ {'table': 'Table', 'plot': 'Plot', 'quality': 'Quality'}.get(p.get('type', 'plot'), 'Plot')}: {p.get('name', p['id'])}"
+        return {p['id']: f"{ {'table': 'Table', 'plot': 'Plot', 'quality': 'Quality', 'combined': 'Combined'}.get(p.get('type', 'plot'), 'Plot')}: {p.get('name', p['id'])}"
                 for p in self.saved()}
 
     def preset(self, preset_id):
@@ -72,6 +72,14 @@ class ViewController:
             if tab_id in self.history._tabs:
                 self.history.mark_saved(tab_id, settings)
             return preset_id
+        if kind == 'combined':
+            settings = copy.deepcopy(self.workspace.combined_settings[tab_id]())
+            sources = settings.get('sources', [])
+            settings['source_plots'] = [copy.deepcopy(self.workspace.plot_snapshots[tid]())
+                                        for tid in sources if tid in self.workspace.plot_snapshots]
+            if len(sources) != len(settings['source_plots']):
+                raise ValueError('A source plot was closed; select available plots before saving')
+            return self.manager.retain_combined(name, settings)
         if kind == 'quality':
             settings = copy.deepcopy(self.workspace.quality_settings[tab_id]())
             preset_id = self.manager.retain_quality(name, settings)

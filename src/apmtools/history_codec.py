@@ -14,7 +14,7 @@ import numpy as np
 import pandas as pd
 
 HISTORY_VERSION = 1
-HISTORY_METHODS = frozenset({'change_values', 'map_values', 'edit_columns', 'subset', 'dtfilter', 'get_monitor', 'calculate_column'})
+HISTORY_METHODS = frozenset({'change_values', 'map_values', 'edit_columns', 'subset', 'dtfilter', 'get_monitor', 'calculate_column', 'filter_dataset'})
 _TAG = '__apmtools_history_type__'
 
 

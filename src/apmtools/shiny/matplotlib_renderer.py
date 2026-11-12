@@ -9,9 +9,11 @@ import pandas as pd
 from ..units import upas_units, lascar_units, purple_units
 
 from .config import VARIABLE_UNITS, PLOT_TYPES, FREQUENCIES, AGGREGATES, _MPL_PALETTES
+from .text_escapes import decode_plot_text
 from .appearance import _axis_label, _bounded_float, _line_style, _matplotlib_tick_controls, _parse_axis_limit, _parse_label_map, _scatter_marker, _series_style_maps
 from .histogram_stats import histogram_heights, histogram_bin_edges, histogram_kde, effective_histogram_bin_mode
 from .data import _add_gap_sections, _add_source_sections, _composite_labels
+from .line_bands import calculate_line_band
 
 
 def _matplotlib_defaults(spec, *, palette="Default"):
@@ -383,7 +385,7 @@ def _place_outside_legend(fig, axes, position="right", font_size=12, ncol=1,
     ncol = max(1, min(int(ncol or 1), len(labels)))
     legend = fig.legend(handles, labels, ncol=ncol, loc="center",
                         bbox_to_anchor=(.5, .5), bbox_transform=fig.transFigure,
-                        fontsize=font_size, title="Legend", title_fontsize=font_size,
+                        fontsize=font_size, title=None, title_fontsize=font_size,
                         frameon=False, borderaxespad=0, labelspacing=.2,
                         handletextpad=.3, columnspacing=.6, handlelength=1.1)
     legend.set_in_layout(False)
@@ -420,7 +422,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                               x_min="", x_max="", y_min="", y_max="",
                               template="plotly", legend_position="right",
                               legend_inside=False, legend_columns=1, multi_y_color_by="group", show_grid=True, font_size=12,
-                              line_width=2, marker_size=7, line_alpha="", line_style="",
+                              line_width=2, marker_size=7, line_alpha="", line_style="", reference_lines=None,
+                              error_bands=False, error_band_method="ci", error_band_confidence=95,
+                              error_band_alpha=0.2, error_band_lower="", error_band_upper="",
                               scatter_size="", scatter_marker="", scatter_alpha="", hist_alpha="",
                               box_showfliers=True, box_orientation="vertical", bar_box_width=1.0, bar_stacking=None,
                               title_font_size=14, axis_font_size=12, tick_font_size=10,
@@ -461,6 +465,19 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     if kind == "scatter" and "__axis_y_value" in df.columns and any(y not in df.columns for y in ys):
         ys = ["__axis_y_value"]
         spec = {**spec, "ys": ys}
+
+    # Resolve an automatic datetime intercept ONCE, from the full dataset,
+    # before splitting into panels; otherwise each facet gets a different
+    # intercept date and identical user settings yield different lines.
+    if (kind == "line" and reference_lines and x in df.columns
+            and pd.api.types.is_datetime64_any_dtype(df[x]) and _axes is None):
+        from .reference_lines import parse_reference_lines
+        reference_lines = parse_reference_lines(reference_lines)
+        origin_candidates = pd.to_datetime(df[x], errors="coerce").dropna()
+        if not origin_candidates.empty:
+            default_origin = origin_candidates.min().isoformat()
+            reference_lines = [dict(line, origin=line.get("origin") or default_origin)
+                               for line in reference_lines]
 
     # Facet only the native Matplotlib renderer.  Each panel receives the
     # same filtered/aggregated data subset and the same appearance settings.
@@ -526,7 +543,10 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                     y_min=_panel_limit_value(y_min, panel_title), y_max=_panel_limit_value(y_max, panel_title),
                     template=template, legend_position=legend_position,
                     legend_inside=legend_inside, legend_columns=legend_columns, multi_y_color_by=multi_y_color_by, show_grid=show_grid, font_size=font_size,
-                    line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style,
+                    line_width=line_width, marker_size=marker_size, line_alpha=line_alpha, line_style=line_style, reference_lines=reference_lines,
+                    error_bands=error_bands, error_band_method=error_band_method,
+                    error_band_confidence=error_band_confidence, error_band_alpha=error_band_alpha,
+                    error_band_lower=error_band_lower, error_band_upper=error_band_upper,
                     scatter_size=scatter_size, scatter_marker=scatter_marker, scatter_alpha=scatter_alpha,
                     hist_alpha=hist_alpha, box_showfliers=box_showfliers, box_orientation=box_orientation,
                     bar_box_width=bar_box_width, bar_stacking=bar_stacking,
@@ -649,7 +669,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         if legend_keys and not spec.get("_hide_ungrouped_legend", False):
             stack_legend = ax.legend(handles=[Patch(facecolor=stack_colors[name],
                                      label=legend_label(rename, name, aliases))
-                               for name in legend_keys], title="Legend")
+                               for name in legend_keys], title=None)
             stack_legend._apmtools_stack_keys = tuple(legend_keys)
     elif spec.get("multi_axis"):
         from .multi_axis import records, style_maps
@@ -867,6 +887,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         # not the individual trace.  Collect only groups actually drawn so the
         # legend and the editable label keys have one entry per group value.
         plotted_line_groups = set()
+        band_has_visible_interval = False
+        band_max_n = 0
+        band_nonempty_points = 0
         for y in ys:
             sets = (grouped_line_rows if grouped_line_rows is not None else
                     [(str(y) if len(ys) > 1 else "All observations", line_df)])
@@ -875,20 +898,84 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 if rows.empty:
                     continue
                 plotted_line_groups.add(str(name))
-                segment_col = section_col or id_col
-                parts = (rows.groupby(segment_col, dropna=False, sort=False) if segment_col else [(None, rows)])
-                for _, part in parts:
-                    part = part.sort_values(x)
-                    key = (str(y), str(name) if group_col else None)
-                    ax.plot(part[x], part[y], color=(multi_colors[key] if multi_y else colors.get(name, palette_values[0])),
-                            linewidth=float(line_width),
-                            linestyle=(_line_style(styles, name) if not multi_y else
-                                       _line_style(styles, name) if name in styles and len(ys) == 1 else
-                                       multi_dashes[key]),
-                            alpha=_bounded_float(alphas, name, 1, 0, 1),
-                            # Repeated identifier/section traces must not
-                            # create repeated legend entries for one group.
-                            label="_nolegend_")
+                key = (str(y), str(name) if group_col else None)
+                color = multi_colors[key] if multi_y else colors.get(name, palette_values[0])
+                line_style_value = (_line_style(styles, name) if not multi_y else
+                                    _line_style(styles, name) if name in styles and len(ys) == 1 else
+                                    multi_dashes[key])
+                if error_bands:
+                    # Bands are computed over observations at identical X values
+                    # inside this plotted group, not on each individual ID trace.
+                    # Use the unsegmented prepared dataframe to retain all rows.
+                    source = (df.loc[df[group_col].astype(str) == str(name)]
+                              if group_col else df)
+                    from .line_bands import calculate_resolved_line_band
+                    band = calculate_resolved_line_band(
+                        source, x, y, method=error_band_method,
+                        confidence=error_band_confidence,
+                        lower_column=error_band_lower, upper_column=error_band_upper)
+                    if band.empty:
+                        continue
+                    band_max_n = max(band_max_n, int(band["n"].max()))
+                    band_nonempty_points += len(band)
+                    # When a frequency is selected, split missing X intervals.
+                    if spec.get("frequency") is not None:
+                        band = _add_gap_sections(band, x_column=x, group_columns=[],
+                                                 frequency=spec["frequency"])
+                        sections = band.groupby("__line_section", sort=False, dropna=False)
+                    else:
+                        sections = [(None, band)]
+                    for _, part in sections:
+                        ax.plot(part[x], part["center"], color=color,
+                                linewidth=float(line_width), linestyle=line_style_value,
+                                alpha=_bounded_float(alphas, name, 1, 0, 1), label="_nolegend_")
+                        # A shaded polygon needs at least two consecutive
+                        # finite interval points.  For isolated valid points,
+                        # draw a vertical interval instead of an invisible
+                        # zero-area fill_between polygon.
+                        lo = part["lower"].to_numpy(dtype=float)
+                        hi = part["upper"].to_numpy(dtype=float)
+                        center = part["center"].to_numpy(dtype=float)
+                        finite = np.isfinite(lo) & np.isfinite(hi) & np.isfinite(center)
+                        band_has_visible_interval |= bool(np.any(finite))
+                        if finite.sum() >= 2:
+                            ax.fill_between(part[x], lo, hi, where=finite,
+                                            color=color, alpha=float(np.clip(error_band_alpha, 0, 1)),
+                                            linewidth=0, label="_nolegend_")
+                        # Standalone points (or holes within a band) need
+                        # whiskers to make their genuine intervals visible.
+                        isolated = finite.copy()
+                        if len(finite) > 1:
+                            isolated[1:] &= ~finite[:-1]
+                            isolated[:-1] &= ~finite[1:]
+                        if isolated.any():
+                            ax.vlines(part.loc[isolated, x], lo[isolated], hi[isolated],
+                                      color=color, linewidth=max(1.0, float(line_width)),
+                                      alpha=float(np.clip(error_band_alpha, 0.1, 1)),
+                                      label="_nolegend_")
+                else:
+                    segment_col = section_col or id_col
+                    parts = (rows.groupby(segment_col, dropna=False, sort=False)
+                             if segment_col else [(None, rows)])
+                    for _, part in parts:
+                        part = part.sort_values(x)
+                        ax.plot(part[x], part[y], color=color,
+                                linewidth=float(line_width), linestyle=line_style_value,
+                                alpha=_bounded_float(alphas, name, 1, 0, 1), label="_nolegend_")
+        if error_bands and not band_has_visible_interval and band_nonempty_points:
+            if error_band_method == "custom":
+                reason = "No finite lower/upper bound pairs in the selected data."
+            else:
+                reason = ("Each X value has fewer than two observations within its plotted group "
+                          f"(maximum n={band_max_n}).")
+            ax.text(0.5, 0.02,
+                    "No estimable error bands. " + reason +
+                    "\nTry removing identifier from Group by, using unaggregated data, "
+                    "or providing custom bounds.",
+                    transform=ax.transAxes, ha="center", va="bottom",
+                    fontsize=9, color="darkred", wrap=True,
+                    bbox={"boxstyle": "round,pad=0.3", "facecolor": "white", "alpha": 0.9,
+                          "edgecolor": "#cc8888"}, zorder=20)
         if group_col and not multi_y and not spec.get("_hide_ungrouped_legend", False):
             from matplotlib.lines import Line2D
             visible_groups = [name for name in labels if name in plotted_line_groups]
@@ -900,7 +987,7 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                            for name in visible_groups]
                 ax.legend(handles,
                           [legend_label(rename, name, aliases) for name in visible_groups],
-                          title="Legend")
+                          title=None)
     elif kind in ("box", "bar"):
         # Build categorical groups in a single pass. The former implementation
         # repeatedly scanned the full DataFrame for every category × group,
@@ -1012,14 +1099,14 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
         )
         if len(group_names) <= 40 and show_category_legend and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
             ax.legend(handles=[Patch(facecolor=colors[name], label=legend_label(rename, name, aliases))
-                               for name in group_names], title="Legend")
+                               for name in group_names], title=None)
     else:
         raise ValueError(f"Unknown plot type: {kind}")
 
     if kind not in ("box", "bar") and not spec.get("multi_axis"):
         handles, texts = ax.get_legend_handles_labels()
         if handles and not spec.get("_hide_ungrouped_legend", not bool(spec["groups"])):
-            ax.legend(handles, texts, title="Legend")
+            ax.legend(handles, texts, title=None)
     if multi_y:
         from matplotlib.lines import Line2D
         # Independent legend keys for the two dimensions, with explicit headings.
@@ -1066,6 +1153,78 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
                 legend_labels_out.append(legend_label(rename, value, aliases))
         if legend_handles:
             ax.legend(legend_handles, legend_labels_out, title=None)
+    # Overlays do not participate in statistical aggregation or alter axis
+    # limits. They span the current horizontal plot region, including facets.
+    if kind in ("line", "scatter") and reference_lines:
+        from .reference_lines import parse_reference_lines
+        from matplotlib.lines import Line2D
+        from matplotlib import colors as mpl_colors
+        displayed = spec.get("_visible_elements")
+        legend = ax.get_legend()
+        old_handles = list(getattr(legend, "legend_handles", [])) if legend else []
+        old_labels = [text.get_text() for text in legend.get_texts()] if legend else []
+        # Raw ungrouped line segments intentionally have _nolegend_ labels.
+        # When an overlay introduces a legend, include their actual plotted
+        # series too, without exposing every identifier/segment as a trace.
+        if not old_handles and not group_col and not multi_y and ys:
+            if kind == "line" and plotted_line_groups:
+                base_name = "All observations"
+                old_handles.append(Line2D([], [], color=colors.get(base_name, palette_values[0]),
+                                          linewidth=float(line_width),
+                                          linestyle=_line_style(styles, base_name),
+                                          alpha=_bounded_float(alphas, base_name, 1, 0, 1)))
+                old_labels.append(legend_label(rename, str(ys[0]), aliases))
+            elif kind == "scatter" and len(df) and df[ys[0]].notna().any():
+                base_name = "All observations"
+                old_handles.append(Line2D([], [], color=colors.get(base_name, palette_values[0]),
+                                          linestyle="None", marker=_scatter_marker(markers, base_name),
+                                          markersize=_bounded_float(sizes, base_name, marker_size, 0.1, 100)))
+                old_labels.append(legend_label(rename, str(ys[0]), aliases))
+        base_count = len(old_handles)
+        for index, line in enumerate(parse_reference_lines(reference_lines)):
+            if displayed is not None and line["key"] not in displayed:
+                continue
+            is_numeric = pd.api.types.is_numeric_dtype(df[x])
+            is_datetime = (kind == "line" and pd.api.types.is_datetime64_any_dtype(df[x]))
+            if not (is_numeric or is_datetime):
+                continue
+            color = overrides.get(line["key"], palette_values[index % len(palette_values)])
+            if not mpl_colors.is_color_like(color):
+                color = palette_values[index % len(palette_values)]
+            # The reference-line editor owns this label; do not apply the
+            # generic legend-label mapping (which would create two editors).
+            label = decode_plot_text(line["label"])
+            # Matplotlib dates are measured in days. A dated intercept anchors
+            # y0 to a real timestamp; the selected unit converts m into y/day.
+            if is_datetime:
+                import matplotlib.dates as mdates
+                origin = line.get("origin", "")
+                if not origin:
+                    valid = pd.to_datetime(df[x], errors="coerce").dropna()
+                    if valid.empty:
+                        continue
+                    origin = valid.min()
+                try:
+                    origin = pd.Timestamp(origin)
+                    if pd.isna(origin):
+                        continue
+                    anchor = float(mdates.date2num(origin.to_pydatetime()))
+                except (ValueError, TypeError, OverflowError):
+                    continue
+                per_day = {"second": 86400., "minute": 1440., "hour": 24.,
+                           "day": 1., "week": 1. / 7.}
+                slope = line["slope"] * per_day[line["time_unit"]]
+            else:
+                anchor, slope = 0., line["slope"]
+            # axline spans the axes without extending data limits and stays
+            # clipped when a panel/axis is resized.
+            ax.axline((anchor, line["intercept"]), slope=slope,
+                      color=color, linewidth=float(line_width), linestyle="--",
+                      label="_nolegend_", clip_on=True)
+            old_handles.append(Line2D([], [], color=color, linewidth=float(line_width), linestyle="--"))
+            old_labels.append(label)
+        if old_handles and (legend is not None or len(old_handles) > base_count):
+            ax.legend(old_handles, old_labels, title=None)
     legend = ax.get_legend()
     if legend is not None:
         locs = {"right":"upper right", "left":"upper left", "top":"upper center", "bottom":"lower center"}
@@ -1091,9 +1250,9 @@ def _matplotlib_direct_figure(spec, *, title="", x_label="", y_label="",
     ylabel = y_label.strip() or defaults["y_label"]
     if kind == "box" and box_orientation == "horizontal":
         xlabel, ylabel = ylabel, xlabel
-    ax.set_xlabel(xlabel, fontsize=axis_font_size)
-    ax.set_ylabel(ylabel, fontsize=axis_font_size)
-    ax.set_title(title, fontsize=title_font_size)
+    ax.set_xlabel(decode_plot_text(xlabel), fontsize=axis_font_size)
+    ax.set_ylabel(decode_plot_text(ylabel), fontsize=axis_font_size)
+    ax.set_title(decode_plot_text(title), fontsize=title_font_size)
     ax.tick_params(labelsize=tick_font_size)
     if legend is not None:
         for text in legend.get_texts():
@@ -1253,7 +1412,7 @@ def _matplotlib_figure(plotly_figure):
         inside = (0 <= float(getattr(legend, "x", 1.02)) <= 1 and
                   0 <= float(getattr(legend, "y", 1)) <= 1)
         loc = "upper right" if inside else "upper left"
-        kwargs = {"loc": loc, "title": "Legend", "ncol": max(1, len(labels)) if orientation == "h" else 1}
+        kwargs = {"loc": loc, "title": None, "ncol": max(1, len(labels)) if orientation == "h" else 1}
         if not inside:
             kwargs["bbox_to_anchor"] = (1.01, 1)
         ax.legend(handles, labels, **kwargs)
